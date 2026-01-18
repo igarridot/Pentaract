@@ -3,6 +3,8 @@ version: "3.9"
 volumes:
   pentaract-db-volume:
     name: pentaract-db-volume
+  pentaract-temp-volume:
+    name: pentaract-temp-volume
 
 networks:
   pentaract-network:
@@ -22,6 +24,8 @@ services:
       - db
     networks:
       - pentaract-network
+    volumes:
+      - pentaract-temp-volume:/tmp/pentaract
 
   db:
     container_name: pentaract_db

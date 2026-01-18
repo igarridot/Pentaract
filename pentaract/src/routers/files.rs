@@ -1,4 +1,4 @@
-use std::{collections::HashMap, path::Path, sync::Arc};
+use std::{path::Path, sync::Arc};
 
 use axum::{
     body::Full,
@@ -10,6 +10,7 @@ use axum::{
     Extension, Json, Router,
 };
 use reqwest::header;
+use tokio::io::AsyncWriteExt;
 use tokio_util::bytes::Bytes;
 use uuid::Uuid;
 
@@ -20,9 +21,7 @@ use crate::{
     },
     errors::{PentaractError, PentaractResult},
     models::files::InFile,
-    schemas::files::{
-        InFileSchema, InFolderSchema, SearchQuery, UploadParams, IN_FILE_SCHEMA_FIELDS_AMOUNT,
-    },
+    schemas::files::{InFileSchema, InFolderSchema, SearchQuery, UploadParams},
     services::files::FilesService,
 };
 
@@ -85,39 +84,91 @@ impl FilesRouter {
         RoutePath(storage_id): RoutePath<Uuid>,
         mut multipart: Multipart,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        // parsing
-        let (file, path) = {
-            let (mut file, mut filename, mut path) = (None, None, None);
+        // Ensure temp directory exists
+        let temp_dir = &state.config.temp_dir;
+        tokio::fs::create_dir_all(temp_dir).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to create temp directory: {}", e),
+            )
+        })?;
 
-            // parsing
-            while let Some(field) = multipart.next_field().await.unwrap() {
-                let name = field.name().unwrap().to_owned();
+        // Generate unique temp file path
+        let temp_file_path = temp_dir.join(format!("upload_{}.tmp", Uuid::new_v4()));
+
+        // parsing - stream file to disk instead of loading into memory
+        let (path, size) = {
+            let (mut filename, mut path, mut size) = (None, None, 0i64);
+
+            while let Some(mut field) = multipart.next_field().await.map_err(|e| {
+                (StatusCode::BAD_REQUEST, format!("Multipart error: {}", e))
+            })? {
+                let name = field.name().unwrap_or("").to_owned();
                 let field_filename = field.file_name().unwrap_or("unnamed").to_owned();
-                let data = field.bytes().await.unwrap();
 
                 match name.as_str() {
                     "file" => {
-                        file = Some(data);
                         filename = Some(field_filename);
+                        // Stream file data to disk
+                        let mut temp_file =
+                            tokio::fs::File::create(&temp_file_path).await.map_err(|e| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Failed to create temp file: {}", e),
+                                )
+                            })?;
+
+                        while let Some(chunk) = field.chunk().await.map_err(|e| {
+                            (StatusCode::BAD_REQUEST, format!("Failed to read chunk: {}", e))
+                        })? {
+                            size += chunk.len() as i64;
+                            temp_file.write_all(&chunk).await.map_err(|e| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Failed to write to temp file: {}", e),
+                                )
+                            })?;
+                        }
+
+                        temp_file.flush().await.map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Failed to flush temp file: {}", e),
+                            )
+                        })?;
                     }
-                    "path" => path = Some(String::from_utf8(data.to_vec()).unwrap()),
-                    // don't give a fuck about other fields
+                    "path" => {
+                        let data = field.bytes().await.map_err(|e| {
+                            (StatusCode::BAD_REQUEST, format!("Failed to read path: {}", e))
+                        })?;
+                        path = Some(String::from_utf8(data.to_vec()).map_err(|_| {
+                            (StatusCode::BAD_REQUEST, "Path is not valid UTF-8".to_owned())
+                        })?);
+                    }
                     _ => (),
                 }
             }
 
-            let file = file.ok_or((StatusCode::BAD_REQUEST, "file file is required".to_owned()))?;
+            let filename =
+                filename.ok_or((StatusCode::BAD_REQUEST, "file field is required".to_owned()))?;
             let path = path
-                .ok_or((StatusCode::BAD_REQUEST, "path file is required".to_owned()))
-                .map(|path| Self::construct_path(&path, &filename.unwrap()))??;
-            (file, path)
+                .ok_or((StatusCode::BAD_REQUEST, "path field is required".to_owned()))
+                .map(|path| Self::construct_path(&path, &filename))??;
+            (path, size)
         };
-        let size = file.len() as i64;
+
         let in_file = InFile::new(path, size, storage_id);
 
-        FilesService::new(&state.db, state.tx.clone())
-            .upload_anyway(in_file, file, &user)
-            .await?;
+        let result = FilesService::new(&state.db, state.tx.clone())
+            .upload_anyway(in_file, temp_file_path.clone(), &user)
+            .await;
+
+        // Clean up temp file on error (success cleanup is handled by storage manager)
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(&temp_file_path).await;
+        }
+
+        result?;
         Ok(StatusCode::CREATED)
     }
 
@@ -127,36 +178,90 @@ impl FilesRouter {
         RoutePath(storage_id): RoutePath<Uuid>,
         mut multipart: Multipart,
     ) -> Result<StatusCode, (StatusCode, String)> {
-        // parsing and validating schema
-        let in_schema = {
-            let mut body_parts = HashMap::with_capacity(IN_FILE_SCHEMA_FIELDS_AMOUNT);
+        // Ensure temp directory exists
+        let temp_dir = &state.config.temp_dir;
+        tokio::fs::create_dir_all(temp_dir).await.map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                format!("Failed to create temp directory: {}", e),
+            )
+        })?;
 
-            // parsing
-            while let Some(field) = multipart.next_field().await.unwrap() {
-                let name = field.name().unwrap().to_string();
-                let data = field.bytes().await.unwrap();
-                body_parts.insert(name, data);
+        // Generate unique temp file path
+        let temp_file_path = temp_dir.join(format!("upload_{}.tmp", Uuid::new_v4()));
+
+        // parsing and validating schema - stream file to disk
+        let in_schema = {
+            let (mut path, mut size) = (None, 0i64);
+
+            while let Some(mut field) = multipart.next_field().await.map_err(|e| {
+                (StatusCode::BAD_REQUEST, format!("Multipart error: {}", e))
+            })? {
+                let name = field.name().unwrap_or("").to_owned();
+
+                match name.as_str() {
+                    "file" => {
+                        // Stream file data to disk
+                        let mut temp_file =
+                            tokio::fs::File::create(&temp_file_path).await.map_err(|e| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Failed to create temp file: {}", e),
+                                )
+                            })?;
+
+                        while let Some(chunk) = field.chunk().await.map_err(|e| {
+                            (StatusCode::BAD_REQUEST, format!("Failed to read chunk: {}", e))
+                        })? {
+                            size += chunk.len() as i64;
+                            temp_file.write_all(&chunk).await.map_err(|e| {
+                                (
+                                    StatusCode::INTERNAL_SERVER_ERROR,
+                                    format!("Failed to write to temp file: {}", e),
+                                )
+                            })?;
+                        }
+
+                        temp_file.flush().await.map_err(|e| {
+                            (
+                                StatusCode::INTERNAL_SERVER_ERROR,
+                                format!("Failed to flush temp file: {}", e),
+                            )
+                        })?;
+                    }
+                    "path" => {
+                        let data = field.bytes().await.map_err(|e| {
+                            (StatusCode::BAD_REQUEST, format!("Failed to read path: {}", e))
+                        })?;
+                        path = Some(String::from_utf8(data.to_vec()).map_err(|_| {
+                            (StatusCode::BAD_REQUEST, "Path is not valid UTF-8".to_owned())
+                        })?);
+                    }
+                    _ => (),
+                }
             }
 
-            // validating
-            let path = body_parts
-                .get("path")
-                .map(|path| String::from_utf8(path.to_vec()).map_err(|_| "Path cannot be parsed"))
-                .unwrap_or(Err("Path is required"))
-                .map_err(|e| (StatusCode::BAD_REQUEST, e.to_owned()))?;
+            let path =
+                path.ok_or((StatusCode::BAD_REQUEST, "path field is required".to_owned()))?;
 
-            let file = body_parts
-                .get("file")
-                .ok_or((StatusCode::BAD_REQUEST, "File is required".to_owned()))?;
+            if size == 0 {
+                return Err((StatusCode::BAD_REQUEST, "file field is required".to_owned()));
+            }
 
-            InFileSchema::new(storage_id, path, file.clone())
+            InFileSchema::new(storage_id, path, size, temp_file_path.clone())
         };
 
         // do all other stuff
-        FilesService::new(&state.db, state.tx.clone())
+        let result = FilesService::new(&state.db, state.tx.clone())
             .upload_to(in_schema, &user)
-            .await?;
+            .await;
 
+        // Clean up temp file on error (success cleanup is handled by storage manager)
+        if result.is_err() {
+            let _ = tokio::fs::remove_file(&temp_file_path).await;
+        }
+
+        result?;
         Ok(StatusCode::CREATED)
     }
 

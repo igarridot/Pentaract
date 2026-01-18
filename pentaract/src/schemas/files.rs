@@ -1,4 +1,5 @@
-use axum::body::Bytes;
+use std::path::PathBuf;
+
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
@@ -14,17 +15,16 @@ pub struct InFileSchema {
     pub storage_id: Uuid,
     pub path: String,
     pub size: i64,
-    pub file: Bytes,
+    pub temp_file_path: PathBuf,
 }
 
 impl InFileSchema {
-    pub fn new(storage_id: Uuid, path: String, file: Bytes) -> Self {
-        let size = file.len() as i64;
+    pub fn new(storage_id: Uuid, path: String, size: i64, temp_file_path: PathBuf) -> Self {
         Self {
             storage_id,
             path,
             size,
-            file,
+            temp_file_path,
         }
     }
 }

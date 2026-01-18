@@ -1,4 +1,4 @@
-use std::{env, str::FromStr};
+use std::{env, path::PathBuf, str::FromStr};
 
 use super::errors::{PentaractError, PentaractResult};
 
@@ -19,6 +19,8 @@ pub struct Config {
 
     pub telegram_api_base_url: String,
     pub telegram_rate_limit: u8,
+
+    pub temp_dir: PathBuf,
 }
 
 impl Config {
@@ -42,6 +44,9 @@ impl Config {
         let secret_key = Self::get_env_var("SECRET_KEY")?;
         let telegram_api_base_url = Self::get_env_var("TELEGRAM_API_BASE_URL")?;
         let telegram_rate_limit = Self::get_env_var_with_default("TELEGRAM_RATE_LIMIT", 18)?;
+        let temp_dir: String =
+            Self::get_env_var_with_default("TEMP_DIR", "/tmp/pentaract".to_string())?;
+        let temp_dir = PathBuf::from(temp_dir);
 
         Ok(Self {
             db_uri,
@@ -57,6 +62,7 @@ impl Config {
             secret_key,
             telegram_api_base_url,
             telegram_rate_limit,
+            temp_dir,
         })
     }
 

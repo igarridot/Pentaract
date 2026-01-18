@@ -1,4 +1,5 @@
-use axum::body::Bytes;
+use std::path::PathBuf;
+
 use sqlx::PgPool;
 use tokio::sync::oneshot;
 use uuid::Uuid;
@@ -100,13 +101,13 @@ impl<'d> FilesService<'d> {
         // 3. saving file to db
         let file = self.repo.create_file(in_file).await?;
 
-        self._upload(file, in_schema.file, user).await
+        self._upload(file, in_schema.temp_file_path, user).await
     }
 
     pub async fn upload_anyway(
         &self,
         in_file: InFile,
-        file_data: Bytes,
+        temp_file_path: PathBuf,
         user: &AuthUser,
     ) -> PentaractResult<()> {
         // 0. checking access
@@ -124,10 +125,15 @@ impl<'d> FilesService<'d> {
         // 2. saving file in db
         let file = self.repo.create_file_anyway(in_file).await?;
 
-        self._upload(file, file_data, user).await
+        self._upload(file, temp_file_path, user).await
     }
 
-    async fn _upload(&self, file: File, file_data: Bytes, user: &AuthUser) -> PentaractResult<()> {
+    async fn _upload(
+        &self,
+        file: File,
+        temp_file_path: PathBuf,
+        user: &AuthUser,
+    ) -> PentaractResult<()> {
         // 2. sending file to storage manager
         let (resp_tx, resp_rx) = oneshot::channel();
 
@@ -135,7 +141,7 @@ impl<'d> FilesService<'d> {
             let upload_file_data = UploadFileData {
                 file_id: file.id,
                 user_id: user.id,
-                file_data: file_data.as_ref().into(),
+                temp_file_path,
             };
             ClientMessage {
                 data: ClientData::UploadFile(upload_file_data),

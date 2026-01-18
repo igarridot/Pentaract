@@ -6,6 +6,7 @@ import BasicLayout from './layouts/Basic'
 import Storages from './pages/Storages'
 import StorageCreateForm from './pages/Storages/StorageCreateForm'
 import AlertStack from './components/AlertStack'
+import UploadProgress from './components/UploadProgress'
 import StorageWorkers from './pages/StorageWorkers'
 import StorageWorkerCreateForm from './pages/StorageWorkers/StorageWorkerCreateForm'
 import Files from './pages/Files'
@@ -47,6 +48,7 @@ const App = () => {
 			</Routes>
 
 			<AlertStack />
+			<UploadProgress />
 		</ThemeProvider>
 	)
 }

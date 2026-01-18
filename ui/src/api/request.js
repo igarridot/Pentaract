@@ -1,4 +1,5 @@
 import { alertStore } from '../components/AlertStack'
+import { uploadStore } from '../stores/uploadStore'
 
 const API_BASE = import.meta.env.VITE_API_BASE || 'http://localhost:8000/api'
 
@@ -94,6 +95,77 @@ export const apiMultipartRequest = async (path, auth_token, form) => {
 
 		throw err
 	}
+}
+
+/**
+ * Upload a file with progress tracking using XMLHttpRequest
+ * @param {string} path
+ * @param {string | null | undefined} auth_token
+ * @param {FormData} form
+ * @param {string} fileName
+ * @param {number} fileSize
+ * @returns {Promise<any>}
+ */
+export const apiMultipartRequestWithProgress = (path, auth_token, form, fileName, fileSize) => {
+	const { addAlert } = alertStore
+	const { startUpload, updateProgress, setProcessing, completeUpload, failUpload } = uploadStore
+
+	const fullpath = `${API_BASE}${path}`
+	const uploadId = startUpload(fileName, fileSize)
+
+	return new Promise((resolve, reject) => {
+		const xhr = new XMLHttpRequest()
+
+		xhr.upload.addEventListener('progress', (event) => {
+			if (event.lengthComputable) {
+				const percentComplete = Math.round((event.loaded / event.total) * 100)
+				updateProgress(uploadId, percentComplete)
+			}
+		})
+
+		xhr.upload.addEventListener('load', () => {
+			// Upload to server complete, now server is processing (uploading to Telegram)
+			setProcessing(uploadId)
+		})
+
+		xhr.addEventListener('load', () => {
+			if (xhr.status >= 200 && xhr.status < 300) {
+				completeUpload(uploadId)
+				try {
+					const response = JSON.parse(xhr.responseText)
+					resolve(response)
+				} catch {
+					resolve(undefined)
+				}
+			} else {
+				const errorMsg = xhr.responseText || `Upload failed with status ${xhr.status}`
+				failUpload(uploadId, errorMsg)
+				addAlert(errorMsg, 'error')
+				reject(new Error(errorMsg))
+			}
+		})
+
+		xhr.addEventListener('error', () => {
+			const errorMsg = 'Network error during upload'
+			failUpload(uploadId, errorMsg)
+			addAlert(errorMsg, 'error')
+			reject(new Error(errorMsg))
+		})
+
+		xhr.addEventListener('abort', () => {
+			const errorMsg = 'Upload cancelled'
+			failUpload(uploadId, errorMsg)
+			reject(new Error(errorMsg))
+		})
+
+		xhr.open('POST', fullpath)
+
+		if (auth_token) {
+			xhr.setRequestHeader('Authorization', auth_token)
+		}
+
+		xhr.send(form)
+	})
 }
 
 export default apiRequest

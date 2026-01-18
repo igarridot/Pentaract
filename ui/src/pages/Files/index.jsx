@@ -146,9 +146,12 @@ const Files = () => {
 
 		event.target.value = null
 
-		await API.files.uploadFile(params.id, params.path, file)
-		addAlert(`Uploaded file "${file.name}"`, 'success')
-		await fetchFSLayer()
+		try {
+			await API.files.uploadFile(params.id, params.path, file)
+			await fetchFSLayer()
+		} catch {
+			// Error is already handled by the upload progress system
+		}
 	}
 
 	return (

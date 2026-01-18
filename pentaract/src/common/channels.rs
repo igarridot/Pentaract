@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use tokio::sync::{mpsc, oneshot};
 use uuid::Uuid;
 
@@ -20,7 +22,7 @@ pub enum ClientData {
 pub struct UploadFileData {
     pub file_id: Uuid,
     pub user_id: Uuid,
-    pub file_data: Box<[u8]>,
+    pub temp_file_path: PathBuf,
 }
 
 pub struct DownloadFileData {

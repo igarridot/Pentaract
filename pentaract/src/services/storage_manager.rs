@@ -1,5 +1,8 @@
+use std::path::PathBuf;
+
 use futures::future::join_all;
 use sqlx::PgPool;
+use tokio::io::AsyncReadExt;
 use uuid::Uuid;
 
 use crate::{
@@ -8,7 +11,7 @@ use crate::{
         telegram_api::bot_api::TelegramBotApi,
         types::ChatId,
     },
-    errors::PentaractResult,
+    errors::{PentaractError, PentaractResult},
     models::file_chunks::FileChunk,
     repositories::{files::FilesRepository, storages::StoragesRepository},
     schemas::files::DownloadedChunkSchema,
@@ -44,8 +47,9 @@ impl<'d> StorageManagerService<'d> {
         // 1. getting storage
         let storage = self.storages_repo.get_by_file_id(data.file_id).await?;
 
-        // 2. dividing file into chunks
-        let bytes_chunks = data.file_data.chunks(self.chunk_size);
+        // 2. read file and divide into chunks
+        let file_data = Self::read_temp_file(&data.temp_file_path).await?;
+        let bytes_chunks = file_data.chunks(self.chunk_size);
 
         // 3. uploading by chunks
         let futures_: Vec<_> = bytes_chunks
@@ -67,7 +71,35 @@ impl<'d> StorageManagerService<'d> {
             .collect::<PentaractResult<Vec<_>>>()?;
 
         // 4. saving chunks to db
-        self.files_repo.create_chunks_batch(chunks).await
+        let result = self.files_repo.create_chunks_batch(chunks).await;
+
+        // 5. cleanup temp file (always, regardless of result)
+        Self::cleanup_temp_file(&data.temp_file_path).await;
+
+        result
+    }
+
+    async fn read_temp_file(path: &PathBuf) -> PentaractResult<Vec<u8>> {
+        let mut file = tokio::fs::File::open(path).await.map_err(|e| {
+            tracing::error!("Failed to open temp file {:?}: {}", path, e);
+            PentaractError::InternalError
+        })?;
+
+        let mut buffer = Vec::new();
+        file.read_to_end(&mut buffer).await.map_err(|e| {
+            tracing::error!("Failed to read temp file {:?}: {}", path, e);
+            PentaractError::InternalError
+        })?;
+
+        Ok(buffer)
+    }
+
+    async fn cleanup_temp_file(path: &PathBuf) {
+        if let Err(e) = tokio::fs::remove_file(path).await {
+            tracing::warn!("Failed to remove temp file {:?}: {}", path, e);
+        } else {
+            tracing::debug!("Cleaned up temp file {:?}", path);
+        }
     }
 
     async fn upload_chunk(

@@ -37,6 +37,8 @@ pub enum PentaractError {
     CannotManageAccessOfYourself,
     #[error("Storage does not have workers")]
     StorageDoesNotHaveWorkers,
+    #[error("Internal server error")]
+    InternalError,
     #[error("unknown error")]
     Unknown,
     #[error("{0} header is required")]

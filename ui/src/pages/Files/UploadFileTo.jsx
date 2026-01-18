@@ -8,10 +8,8 @@ import Stack from '@suid/material/Stack'
 import ChevronLeftIcon from '@suid/icons-material/ChevronLeft'
 
 import API from '../../api'
-import { alertStore } from '../../components/AlertStack'
 
 const UploadFileTo = () => {
-	const { addAlert } = alertStore
 	const navigate = useNavigate()
 	const params = useParams()
 
@@ -31,11 +29,12 @@ const UploadFileTo = () => {
 		const path = data.get('path')
 		const file = data.get('file')
 
-		await API.files.uploadFileTo(params.id, path, file)
-
-		addAlert(`Uploaded file to "${path}"`, 'success')
-
-		navigateToFiles()
+		try {
+			await API.files.uploadFileTo(params.id, path, file)
+			navigateToFiles()
+		} catch {
+			// Error is already handled by the upload progress system
+		}
 	}
 
 	return (
