@@ -132,13 +132,11 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		}
 		switch part.FormName() {
 		case "path":
-			buf := make([]byte, 4096)
-			n, _ := part.Read(buf)
-			path = string(buf[:n])
+			b, _ := io.ReadAll(part)
+			path = string(b)
 		case "upload_id":
-			buf := make([]byte, 256)
-			n, _ := part.Read(buf)
-			uploadID = string(buf[:n])
+			b, _ := io.ReadAll(part)
+			uploadID = string(b)
 		case "file":
 			filename = part.FileName()
 			filePart = part
@@ -147,7 +145,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 				fileSize = 0
 			}
 		}
-		if filePart != nil && filename != "" {
+		if filePart != nil {
 			break
 		}
 	}
@@ -230,10 +228,6 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	<-copyDone
 }
 
-func (h *FilesHandler) UploadTo(w http.ResponseWriter, r *http.Request) {
-	h.Upload(w, r)
-}
-
 // CancelUpload cancels an in-flight upload and cleans up.
 func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
@@ -301,10 +295,7 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		}
 
 		p := tracker.progress
-		total := p.TotalChunks
-		uploaded := p.UploadedChunks.Load()
-		totalBytes := p.TotalBytes
-		uploadedBytes := p.UploadedBytes.Load()
+		status := "uploading"
 
 		h.mu.RLock()
 		isDone := tracker.done
@@ -312,22 +303,18 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		h.mu.RUnlock()
 
 		if isDone && uploadErr != nil {
-			fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"error\"}\n\n",
-				total, uploaded, totalBytes, uploadedBytes)
-			flusher.Flush()
-			return
+			status = "error"
+		} else if isDone {
+			status = "done"
 		}
 
-		if isDone && uploadErr == nil {
-			fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"done\"}\n\n",
-				total, uploaded, totalBytes, uploadedBytes)
-			flusher.Flush()
-			return
-		}
-
-		fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"uploading\"}\n\n",
-			total, uploaded, totalBytes, uploadedBytes)
+		fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"%s\"}\n\n",
+			p.TotalChunks, p.UploadedChunks.Load(), p.TotalBytes, p.UploadedBytes.Load(), status)
 		flusher.Flush()
+
+		if isDone {
+			return
+		}
 	}
 }
 

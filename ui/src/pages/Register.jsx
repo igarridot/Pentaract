@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Box, Container, TextField, Button, Typography, Stack } from '@mui/material'
+import { Box, Container, TextField, Button, Typography, Stack, Link as MuiLink } from '@mui/material'
 import API from '../api'
 import { isAuthenticated, getRedirectPath } from '../common/auth_guard'
 import AppIcon from '../components/AppIcon'
@@ -35,11 +35,11 @@ export default function Register() {
       display: 'flex',
       alignItems: 'center',
       justifyContent: 'center',
-      bgcolor: '#f5f5f7',
+      bgcolor: 'background.default',
     }}>
       <Container maxWidth="xs">
         <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <AppIcon sx={{ fontSize: 56, color: '#0071e3', mb: 1 }} />
+          <AppIcon sx={{ fontSize: 56, color: 'primary.main', mb: 1 }} />
           <Typography variant="h4" sx={{ mb: 0.5 }}>Pentaract</Typography>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
             Create your account
@@ -47,11 +47,12 @@ export default function Register() {
           <Box
             sx={{
               width: '100%',
-              bgcolor: 'white',
+              bgcolor: 'background.paper',
               borderRadius: 4,
               p: 4,
-              boxShadow: '0 2px 16px rgba(0,0,0,0.06)',
-              border: '1px solid rgba(0,0,0,0.06)',
+              boxShadow: 2,
+              border: '1px solid',
+              borderColor: 'divider',
             }}
           >
             <form onSubmit={handleSubmit}>
@@ -77,9 +78,9 @@ export default function Register() {
           </Box>
           <Typography variant="body2" color="text.secondary" sx={{ mt: 3 }}>
             Already have an account?{' '}
-            <Link to="/login" style={{ color: '#0071e3', textDecoration: 'none', fontWeight: 500 }}>
+            <MuiLink component={Link} to="/login" sx={{ color: 'primary.main', textDecoration: 'none', fontWeight: 500 }}>
               Sign in
-            </Link>
+            </MuiLink>
           </Typography>
         </Box>
       </Container>

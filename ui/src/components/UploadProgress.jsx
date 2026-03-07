@@ -37,10 +37,10 @@ export default function UploadProgress({ filename, totalBytes, uploadedBytes, to
       sx={{
         mb: 2,
         p: 2,
-        bgcolor: isError ? 'rgba(255,59,48,0.06)' : 'white',
+        bgcolor: isError ? 'rgba(255,59,48,0.06)' : 'background.paper',
         borderRadius: 3,
         border: '1px solid',
-        borderColor: isError ? 'rgba(255,59,48,0.15)' : 'rgba(0,0,0,0.06)',
+        borderColor: isError ? 'rgba(255,59,48,0.15)' : 'divider',
       }}
     >
       <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>

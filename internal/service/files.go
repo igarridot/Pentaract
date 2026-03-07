@@ -210,14 +210,3 @@ func (s *FilesService) Move(ctx context.Context, userID, storageID uuid.UUID, ol
 	return s.filesRepo.Move(ctx, storageID, oldPath, newPath)
 }
 
-func (s *FilesService) GetFileInfo(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
-	if err != nil {
-		return nil, err
-	}
-	if !ok {
-		return nil, domain.ErrForbidden()
-	}
-
-	return s.filesRepo.GetByPath(ctx, storageID, path)
-}

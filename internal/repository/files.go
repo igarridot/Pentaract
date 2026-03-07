@@ -99,21 +99,6 @@ func (r *FilesRepo) GetByPath(ctx context.Context, storageID uuid.UUID, path str
 	return f, nil
 }
 
-func (r *FilesRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.File, error) {
-	f := &domain.File{}
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, path, size, storage_id, is_uploaded FROM files WHERE id = $1`,
-		id,
-	).Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrNotFound("file")
-		}
-		return nil, err
-	}
-	return f, nil
-}
-
 // ListDir returns files and folders at the given path prefix.
 func (r *FilesRepo) ListDir(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FSElement, error) {
 	// Ensure path ends with /

@@ -2,10 +2,8 @@ package repository
 
 import (
 	"context"
-	"errors"
 
 	"github.com/google/uuid"
-	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/domain"
@@ -91,17 +89,3 @@ func (r *AccessRepo) HasAccess(ctx context.Context, userID, storageID uuid.UUID,
 	return exists, nil
 }
 
-func (r *AccessRepo) GetAccess(ctx context.Context, userID, storageID uuid.UUID) (*domain.Access, error) {
-	a := &domain.Access{}
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, user_id, storage_id, access_type FROM access WHERE user_id = $1 AND storage_id = $2`,
-		userID, storageID,
-	).Scan(&a.ID, &a.UserID, &a.StorageID, &a.AccessType)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrNotFound("access")
-		}
-		return nil, err
-	}
-	return a, nil
-}

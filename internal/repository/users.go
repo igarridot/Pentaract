@@ -4,7 +4,6 @@ import (
 	"context"
 	"errors"
 
-	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
 
@@ -49,17 +48,3 @@ func (r *UsersRepo) GetByEmail(ctx context.Context, email string) (*domain.User,
 	return user, nil
 }
 
-func (r *UsersRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
-	user := &domain.User{}
-	err := r.pool.QueryRow(ctx,
-		`SELECT id, email, password_hash FROM users WHERE id = $1`,
-		id,
-	).Scan(&user.ID, &user.Email, &user.PasswordHash)
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrNotFound("user")
-		}
-		return nil, err
-	}
-	return user, nil
-}

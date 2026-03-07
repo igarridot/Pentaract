@@ -74,11 +74,12 @@ export default function MoveDialog({ open, item, storageId, onMove, onClose }) {
         </Breadcrumbs>
 
         <Box sx={{
-          border: '1px solid rgba(0,0,0,0.06)',
+          border: '1px solid',
+          borderColor: 'divider',
           borderRadius: 2,
           maxHeight: 280,
           overflow: 'auto',
-          bgcolor: '#f5f5f7',
+          bgcolor: 'background.default',
         }}>
           <List dense disablePadding>
             {folders.length === 0 && (
@@ -93,7 +94,7 @@ export default function MoveDialog({ open, item, storageId, onMove, onClose }) {
                 sx={{ py: 0.75 }}
               >
                 <ListItemIcon sx={{ minWidth: 36 }}>
-                  <FolderIcon sx={{ color: '#0071e3', fontSize: 20 }} />
+                  <FolderIcon sx={{ color: 'primary.main', fontSize: 20 }} />
                 </ListItemIcon>
                 <ListItemText
                   primary={folder.name}
@@ -105,7 +106,7 @@ export default function MoveDialog({ open, item, storageId, onMove, onClose }) {
         </Box>
 
         <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, fontSize: '0.8125rem' }}>
-          Destination: <strong style={{ color: '#1d1d1f' }}>/{targetPath || 'Root'}</strong>
+          Destination: <strong>/{targetPath || 'Root'}</strong>
         </Typography>
       </DialogContent>
       <DialogActions>

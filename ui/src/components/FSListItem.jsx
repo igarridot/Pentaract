@@ -44,7 +44,7 @@ export default function FSListItem({ item, storageId, currentPath, onInfo, onDel
         <ListItemIcon sx={{ minWidth: 40 }}>
           {item.is_file
             ? <FileIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
-            : <FolderIcon sx={{ color: '#0071e3', fontSize: 20 }} />
+            : <FolderIcon sx={{ color: 'primary.main', fontSize: 20 }} />
           }
         </ListItemIcon>
         <ListItemText

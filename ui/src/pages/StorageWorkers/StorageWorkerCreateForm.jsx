@@ -40,9 +40,10 @@ export default function StorageWorkerCreateForm() {
     <Box>
       <Typography variant="h5" sx={{ mb: 3 }}>Create Worker</Typography>
       <Box sx={{
-        bgcolor: 'white',
+        bgcolor: 'background.paper',
         borderRadius: 3,
-        border: '1px solid rgba(0,0,0,0.06)',
+        border: '1px solid',
+        borderColor: 'divider',
         p: 3,
         maxWidth: 480,
       }}>

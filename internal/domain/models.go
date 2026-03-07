@@ -1,8 +1,6 @@
 package domain
 
 import (
-	"time"
-
 	"github.com/google/uuid"
 )
 
@@ -53,12 +51,6 @@ type StorageWorker struct {
 	UserID    uuid.UUID  `json:"user_id"`
 	Token     string     `json:"token"`
 	StorageID *uuid.UUID `json:"storage_id"`
-}
-
-type StorageWorkerUsage struct {
-	ID        uuid.UUID `json:"id"`
-	WorkerID  uuid.UUID `json:"worker_id"`
-	CreatedAt time.Time `json:"created_at"`
 }
 
 type File struct {

@@ -16,9 +16,12 @@ export default function SideBar({ open }) {
           boxSizing: 'border-box',
           overflowX: 'hidden',
           transition: 'width 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
-          backgroundColor: 'rgba(255,255,255,0.6)',
+          backgroundColor: (theme) => theme.palette.mode === 'dark'
+            ? 'rgba(28,28,30,0.6)'
+            : 'rgba(255,255,255,0.6)',
           backdropFilter: 'saturate(180%) blur(20px)',
-          borderRight: '1px solid rgba(0,0,0,0.06)',
+          borderRight: '1px solid',
+          borderColor: 'divider',
         },
       }}
     >

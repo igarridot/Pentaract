@@ -49,13 +49,6 @@ const API = {
       return apiMultipartRequest(`/storages/${storageId}/files/upload`, 'POST', formData)
     },
 
-    uploadTo: (storageId, path, file) => {
-      const formData = new FormData()
-      formData.append('path', path || '')
-      formData.append('file', file)
-      return apiMultipartRequest(`/storages/${storageId}/files/upload_to`, 'POST', formData)
-    },
-
     tree: (storageId, path) =>
       apiRequest(`/storages/${storageId}/files/tree/${path || ''}`),
 
@@ -88,20 +81,10 @@ const API = {
     cancelUpload: (uploadId) =>
       apiRequest(`/upload_cancel/${uploadId}`, 'POST'),
 
-    // Subscribe to upload progress via SSE. Returns an EventSource.
     subscribeProgress: (uploadId, onProgress) => {
       const token = localStorage.getItem('access_token')
       const base = import.meta.env.VITE_API_BASE || '/api'
-      // SSE doesn't support custom headers, so we pass the token as a query param
-      // and the upload_id. The backend auth middleware reads from Authorization header,
-      // so we use a regular fetch-based SSE reader instead.
       const url = `${base}/upload_progress?upload_id=${uploadId}`
-
-      const eventSource = new EventSource(url)
-      // Note: EventSource doesn't support auth headers. We'll use fetch-based streaming.
-      eventSource.close()
-
-      // Use fetch-based SSE with automatic reconnection
       let stopped = false
       let currentController = null
 

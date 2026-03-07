@@ -61,9 +61,10 @@ export default function StorageWorkers() {
       <Typography variant="h5" sx={{ mb: 3 }}>Storage Workers</Typography>
 
       <Box sx={{
-        bgcolor: 'white',
+        bgcolor: 'background.paper',
         borderRadius: 3,
-        border: '1px solid rgba(0,0,0,0.06)',
+        border: '1px solid',
+        borderColor: 'divider',
         overflow: 'hidden',
       }}>
         <List disablePadding>
