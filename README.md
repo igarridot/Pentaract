@@ -10,7 +10,7 @@ Built with **Go 1.24** (Chi, pgx) + **React 18** (Material UI 5) + **PostgreSQL 
 
 Nothing else needs to be installed on the host machine. All compilation, dependency management, and execution happens inside containers.
 
-## Quick start (production)
+## Quick start
 
 ```bash
 # 1. Create your environment file
@@ -51,7 +51,7 @@ make down
 
 ### Persistent data
 
-All persistent data is stored under `persistent_data/` in the project root, organized by component:
+All persistent data is stored under `persistent_data/` in the project root:
 
 | Directory | Contents |
 |-----------|----------|
@@ -59,14 +59,14 @@ All persistent data is stored under `persistent_data/` in the project root, orga
 | `persistent_data/go-mod-cache/` | Go module cache (dev only) |
 | `persistent_data/go-build-cache/` | Go build cache (dev only) |
 
-This directory is excluded from version control via `.gitignore`. To reset all data, stop the stack and delete the directory:
+This directory is excluded from version control via `.gitignore`. To reset all data:
 
 ```bash
 make down
 rm -rf persistent_data/
 ```
 
-### Production environment variables
+### Environment variables
 
 | Variable | Default | Description |
 |----------|---------|-------------|
@@ -88,92 +88,89 @@ rm -rf persistent_data/
 
 ## Development
 
-The project includes a `dev` service that provides a containerized Go + Node toolchain. Your source code is mounted as a volume, so edits on the host are reflected immediately. **No local Go or Node installation required.**
+The project includes a `dev` service that provides a containerized Go + Node toolchain. Source code is mounted as a volume, so edits on the host are reflected immediately.
 
-Build caches (Go modules and build artifacts) are persisted under `persistent_data/go-mod-cache/` and `persistent_data/go-build-cache/` so subsequent builds are fast.
+Build caches are persisted under `persistent_data/` so subsequent builds are fast.
 
-### Available make targets
+### Make targets
 
 | Command | Description |
 |---------|-------------|
+| `make up` | Build and start the full production stack |
+| `make down` | Stop and remove all containers |
 | `make build` | Compile Go backend inside a container |
 | `make check` | Run `go vet` inside a container |
 | `make mod-tidy` | Run `go mod tidy` inside a container |
 | `make ui-install` | Install frontend npm dependencies inside a container |
 | `make ui-build` | Build the production frontend bundle inside a container |
 | `make dev-shell` | Open an interactive shell in the dev container |
-| `make up` | Build and start the full production stack |
-| `make down` | Stop and remove all containers |
 
-### Development workflow
+### Workflow
 
 ```bash
-# 1. Create your .env (same as production)
+# 1. Create your .env
 cp .env.example .env
 # Edit SECRET_KEY at minimum
 
-# 2. First time: download dependencies
+# 2. Download dependencies
 make mod-tidy
 make ui-install
 
-# 3. Verify everything compiles
-make build
-
-# 4. Build the frontend
-make ui-build
-
-# 5. Run the full stack in production mode to test
+# 3. Build and run
 make up
 
-# 6. Check logs
+# 4. Check logs
 docker compose logs -f pentaract
 ```
 
-### Interactive development shell
-
-If you need to run arbitrary commands (tests, debugging, installing new packages):
+### Frontend hot-reload
 
 ```bash
-make dev-shell
-```
-
-This drops you into a container with Go 1.24, Node, and pnpm available. Your project directory is mounted at `/app`. Examples of what you can do inside:
-
-```bash
-# Run Go tests
-go test ./...
-
-# Add a new Go dependency
-go get github.com/some/package
-go mod tidy
-
-# Run the Vite dev server (for frontend hot-reload)
-cd ui && pnpm run dev
-
-# Run a one-off Go build
-go build -o pentaract ./cmd/pentaract
-```
-
-### Frontend development with hot-reload
-
-For frontend iteration with hot module replacement:
-
-```bash
-# 1. Start the backend + database in production mode
+# Start backend + database
 make up
 
-# 2. Open a dev shell and start the Vite dev server
-make dev-shell
-cd ui && pnpm run dev
+# Start Vite dev server in a container
+docker compose run --rm -p 3000:3000 dev sh -c "cd ui && pnpm run dev"
 ```
 
-The Vite dev server runs on port 3000 inside the container and proxies API requests to `http://localhost:8000`. To access it from the host, add a port mapping to the `dev` service or use `docker compose run --rm -p 3000:3000 dev sh -c "cd ui && pnpm run dev"`.
+The Vite dev server proxies `/api` requests to the backend.
+
+---
+
+## Features
+
+### File management
+- **Upload** files of any size with real-time progress tracking (SSE) and cancellation support
+- **Download** individual files or entire directories as ZIP archives
+- **Create folders**, **move** files/folders, and **delete** items
+- **Search** files by name within any directory
+- **Duplicate handling** — uploading a file with an existing name automatically appends a numeric suffix
+
+### Storage workers
+- Register multiple Telegram bots as workers for parallel chunk transfers
+- Workers can be assigned to specific storages or left available for all
+- Built-in rate limiter respects Telegram's per-bot API limits
+
+### Access control
+- Three access levels: **read** (r), **write** (w), and **admin** (a)
+- Admins can grant and revoke access per storage
+- Storage owners automatically get admin access
+
+### UI
+- Apple-inspired minimalist design with Inter font, frosted glass effects, and pill-shaped buttons
+- **Dark mode** with three options: Light, Dark, and Auto (follows system preference), persisted to localStorage
+- Responsive layout with collapsible sidebar
+
+### Multi-architecture
+The Docker image supports both `linux/amd64` and `linux/arm64`. The Go binary is cross-compiled natively for the target architecture.
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t pentaract .
+```
 
 ---
 
 ## How it works
-
-### Architecture
 
 ```
 Browser  -->  Go HTTP server  -->  PostgreSQL (metadata)
@@ -183,10 +180,10 @@ Browser  -->  Go HTTP server  -->  PostgreSQL (metadata)
 ```
 
 1. Users create **Storages**, each linked to a Telegram channel via its `chat_id`
-2. Users register **Storage Workers** (Telegram bots created via @BotFather) and bind them to storages
+2. Users register **Storage Workers** (Telegram bots) and optionally bind them to storages
 3. On **upload**, files are split into 20 MB chunks and uploaded to the Telegram channel in parallel using available bot workers
 4. On **download**, chunks are fetched from Telegram in parallel and reassembled in order
-5. A **rate limiter** tracks bot usage per minute and selects the least-loaded worker under the configured limit
+5. A **rate limiter** tracks bot usage per minute and selects the least-loaded available worker
 
 ### Setting up Telegram storage
 
@@ -196,22 +193,12 @@ Browser  -->  Go HTTP server  -->  PostgreSQL (metadata)
 4. Add the bots as administrators of the channel (they need permission to post messages)
 5. In Pentaract:
    - Go to **Storages** and create a storage with the channel's `chat_id`
-   - Go to **Storage Workers** and create a worker with each bot token, binding it to a storage
+   - Go to **Workers** and create a worker with each bot token
 6. Upload files through the **Files** browser
 
-### Multi-architecture support
+---
 
-The production Docker image supports both `linux/amd64` and `linux/arm64`. The `Dockerfile` uses BuildKit's `--platform=$BUILDPLATFORM` with Go cross-compilation (`GOOS`/`GOARCH` from `TARGETOS`/`TARGETARCH` build args), so the Go binary is compiled natively for the target architecture regardless of the host. All base images (`golang:1.24-alpine`, `node:22-slim`, `postgres:15-alpine`) publish multi-arch manifests.
-
-To build a multi-platform image manually:
-
-```bash
-docker buildx build --platform linux/amd64,linux/arm64 -t pentaract .
-```
-
-The CI workflow (`.github/workflows/docker-image.yml`) already builds and pushes both architectures using QEMU emulation.
-
-### Project structure
+## Project structure
 
 ```
 cmd/pentaract/main.go          Entry point
@@ -227,41 +214,66 @@ internal/
   password/                    bcrypt hashing
   jwt/                         JWT generation and validation
 ui/                            React frontend (Vite + MUI 5)
-persistent_data/               Docker volume data (git-ignored)
-  db/                          PostgreSQL data
-  go-mod-cache/                Go module cache (dev)
-  go-build-cache/              Go build cache (dev)
+  src/
+    api/                       API client (fetch-based)
+    common/                    Auth guard, theme context, utilities
+    components/                Reusable UI components
+    layouts/                   Page layouts
+    pages/                     Route pages
 ```
 
-### API endpoints
+## API endpoints
 
-```
-POST   /api/auth/login                              Login
-POST   /api/users                                   Register
+All endpoints except login and register require an `Authorization: Bearer <token>` header.
 
-GET    /api/storages                                 List storages
-POST   /api/storages                                 Create storage
-GET    /api/storages/:id                             Get storage
-DELETE /api/storages/:id                             Delete storage
+### Auth & Users
 
-GET    /api/storages/:id/access                      List access
-POST   /api/storages/:id/access                      Grant access
-DELETE /api/storages/:id/access                      Revoke access
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/auth/login` | Login, returns JWT |
+| POST | `/api/users` | Register new user |
 
-GET    /api/storage_workers                          List workers
-POST   /api/storage_workers                          Create worker
-GET    /api/storage_workers/has_workers?storage_id=  Check workers
+### Storages
 
-POST   /api/storages/:id/files/create_folder         Create folder
-POST   /api/storages/:id/files/upload                Upload file
-POST   /api/storages/:id/files/upload_to             Upload to path
-GET    /api/storages/:id/files/tree/*                 Browse directory
-GET    /api/storages/:id/files/download/*             Download file
-GET    /api/storages/:id/files/search/*               Search files
-DELETE /api/storages/:id/files/*                      Delete file/folder
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/storages` | List storages |
+| POST | `/api/storages` | Create storage |
+| GET | `/api/storages/:id` | Get storage details |
+| DELETE | `/api/storages/:id` | Delete storage |
 
-All endpoints except login and register require a `Authorization: Bearer <token>` header.
+### Access control
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/storages/:id/access` | List access entries |
+| POST | `/api/storages/:id/access` | Grant access |
+| DELETE | `/api/storages/:id/access` | Revoke access |
+
+### Storage workers
+
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/storage_workers` | List workers |
+| POST | `/api/storage_workers` | Create worker |
+| PUT | `/api/storage_workers/:id` | Update worker |
+| DELETE | `/api/storage_workers/:id` | Delete worker |
+| GET | `/api/storage_workers/has_workers?storage_id=` | Check if storage has workers |
+
+### Files
+
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/storages/:id/files/create_folder` | Create folder |
+| POST | `/api/storages/:id/files/move` | Move file or folder |
+| POST | `/api/storages/:id/files/upload` | Upload file (multipart) |
+| GET | `/api/storages/:id/files/tree/*` | Browse directory |
+| GET | `/api/storages/:id/files/download/*` | Download file |
+| GET | `/api/storages/:id/files/download_dir/*` | Download directory as ZIP |
+| GET | `/api/storages/:id/files/search/*` | Search files |
+| DELETE | `/api/storages/:id/files/*` | Delete file or folder |
+| GET | `/api/upload_progress?upload_id=` | SSE stream with upload progress |
+| POST | `/api/upload_cancel/:id` | Cancel an in-flight upload |
 
 ---
 
