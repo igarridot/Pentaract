@@ -99,6 +99,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Get("/storages/{storageID}/files/download/*", filesH.Download)
 			r.Get("/storages/{storageID}/files/search/*", filesH.Search)
 			r.Delete("/storages/{storageID}/files/*", filesH.DeleteFile)
+
+			// Upload progress (SSE)
+			r.Get("/upload_progress", filesH.UploadProgress)
 		})
 	})
 

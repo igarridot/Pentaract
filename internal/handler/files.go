@@ -1,13 +1,16 @@
 package handler
 
 import (
-	"io"
+	"fmt"
 	"mime"
 	"net/http"
 	"path/filepath"
 	"strings"
+	"sync"
+	"time"
 
 	"github.com/go-chi/chi/v5"
+	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/Dominux/Pentaract/internal/service"
@@ -15,10 +18,17 @@ import (
 
 type FilesHandler struct {
 	svc *service.FilesService
+
+	// In-flight upload progress tracking
+	mu       sync.RWMutex
+	progress map[string]*service.UploadProgress // keyed by upload ID
 }
 
 func NewFilesHandler(svc *service.FilesService) *FilesHandler {
-	return &FilesHandler{svc: svc}
+	return &FilesHandler{
+		svc:      svc,
+		progress: make(map[string]*service.UploadProgress),
+	}
 }
 
 type createFolderRequest struct {
@@ -61,44 +71,132 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := r.ParseMultipartForm(100 << 20); err != nil { // 100MB max memory
-		writeError(w, domain.ErrBadRequest("failed to parse multipart form"))
+	// Parse multipart: files larger than 32MB are spilled to disk by Go automatically
+	mr, err := r.MultipartReader()
+	if err != nil {
+		writeError(w, domain.ErrBadRequest("multipart form required"))
 		return
 	}
 
-	file, header, err := r.FormFile("file")
-	if err != nil {
+	var path, filename string
+	var fileSize int64
+	var fileReader *partReader
+
+	for {
+		part, err := mr.NextPart()
+		if err != nil {
+			break
+		}
+		switch part.FormName() {
+		case "path":
+			buf := make([]byte, 4096)
+			n, _ := part.Read(buf)
+			path = string(buf[:n])
+		case "file":
+			filename = part.FileName()
+			fileReader = &partReader{part: part}
+			// Content-Length is not available per-part; use the header as hint
+			fileSize = r.ContentLength
+			if fileSize < 0 {
+				fileSize = 0
+			}
+		}
+		if fileReader != nil && filename != "" {
+			break // we have what we need, start streaming
+		}
+	}
+
+	if fileReader == nil || filename == "" {
 		writeError(w, domain.ErrBadRequest("file is required"))
 		return
 	}
-	defer file.Close()
-
-	data, err := io.ReadAll(file)
-	if err != nil {
-		writeError(w, domain.ErrInternal("failed to read file"))
-		return
-	}
-
-	path := r.FormValue("path")
-	filename := header.Filename
+	defer fileReader.part.Close()
 
 	fullPath := filename
 	if path != "" {
 		fullPath = path + "/" + filename
 	}
 
-	created, err := h.svc.Upload(r.Context(), user.ID, storageID, fullPath, data)
+	// Create progress tracker
+	uploadID := uuid.New().String()
+	progress := &service.UploadProgress{}
+	h.mu.Lock()
+	h.progress[uploadID] = progress
+	h.mu.Unlock()
+	defer func() {
+		// Keep progress around briefly so the SSE client can read the final state
+		time.AfterFunc(30*time.Second, func() {
+			h.mu.Lock()
+			delete(h.progress, uploadID)
+			h.mu.Unlock()
+		})
+	}()
+
+	created, err := h.svc.Upload(r.Context(), user.ID, storageID, fullPath, fileSize, fileReader, progress)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	writeJSON(w, http.StatusCreated, created)
+	writeJSON(w, http.StatusCreated, map[string]interface{}{
+		"id":        created.ID,
+		"path":      created.Path,
+		"size":      created.Size,
+		"upload_id": uploadID,
+	})
 }
 
 func (h *FilesHandler) UploadTo(w http.ResponseWriter, r *http.Request) {
-	// Same as Upload - handles upload_to endpoint
 	h.Upload(w, r)
+}
+
+// UploadProgress returns an SSE stream with upload progress updates.
+func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
+	uploadID := r.URL.Query().Get("upload_id")
+	if uploadID == "" {
+		writeError(w, domain.ErrBadRequest("upload_id is required"))
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, domain.ErrInternal("streaming not supported"))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		h.mu.RLock()
+		p, exists := h.progress[uploadID]
+		h.mu.RUnlock()
+
+		if !exists {
+			fmt.Fprintf(w, "data: {\"status\":\"done\"}\n\n")
+			flusher.Flush()
+			return
+		}
+
+		total := p.TotalChunks
+		uploaded := p.UploadedChunks.Load()
+
+		fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"status\":\"uploading\"}\n\n", total, uploaded)
+		flusher.Flush()
+
+		if total > 0 && uploaded >= total {
+			fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"status\":\"done\"}\n\n", total, uploaded)
+			flusher.Flush()
+			return
+		}
+	}
 }
 
 func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
@@ -200,9 +298,20 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	w.WriteHeader(http.StatusNoContent)
 }
 
-// extractWildcardPath extracts the wildcard portion of the URL path.
 func extractWildcardPath(r *http.Request) string {
 	path := chi.URLParam(r, "*")
 	path = strings.TrimPrefix(path, "/")
 	return path
+}
+
+// partReader wraps a multipart.Part as an io.Reader.
+type partReader struct {
+	part interface {
+		Read([]byte) (int, error)
+		Close() error
+	}
+}
+
+func (pr *partReader) Read(p []byte) (int, error) {
+	return pr.part.Read(p)
 }

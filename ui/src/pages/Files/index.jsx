@@ -1,4 +1,4 @@
-import { useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation } from 'react-router-dom'
 import {
   Typography, List, Paper, Box, TextField, InputAdornment,
@@ -16,6 +16,7 @@ import FileInfo from '../../components/FileInfo'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import FloatingMenu from '../../components/Menu'
+import UploadProgress from '../../components/UploadProgress'
 
 export default function Files() {
   const { id: storageId } = useParams()
@@ -23,7 +24,6 @@ export default function Files() {
   const navigate = useNavigate()
   const addAlert = useAlert()
 
-  // Extract path from URL after /files/
   const prefix = `/storages/${storageId}/files/`
   const currentPath = location.pathname.startsWith(prefix)
     ? location.pathname.slice(prefix.length)
@@ -35,6 +35,8 @@ export default function Files() {
   const [infoFile, setInfoFile] = useState(null)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [uploadState, setUploadState] = useState(null)
+  const cancelProgressRef = useRef(null)
 
   const loadTree = useCallback(async () => {
     try {
@@ -50,6 +52,13 @@ export default function Files() {
     setSearchResults(null)
     setSearch('')
   }, [loadTree])
+
+  // Cleanup SSE on unmount
+  useEffect(() => {
+    return () => {
+      if (cancelProgressRef.current) cancelProgressRef.current()
+    }
+  }, [])
 
   const handleSearch = async (e) => {
     e.preventDefault()
@@ -78,11 +87,30 @@ export default function Files() {
   const handleUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
+
+    const filename = file.name
+    setUploadState({ filename, total: 0, uploaded: 0, status: 'uploading' })
+
     try {
-      await API.files.upload(storageId, currentPath, file)
+      const result = await API.files.upload(storageId, currentPath, file)
+
+      // Subscribe to progress if upload_id was returned
+      if (result && result.upload_id) {
+        const cancel = API.files.subscribeProgress(result.upload_id, (data) => {
+          setUploadState((prev) => ({ ...prev, ...data, filename }))
+          if (data.status === 'done') {
+            setTimeout(() => setUploadState(null), 2000)
+          }
+        })
+        cancelProgressRef.current = cancel
+      } else {
+        setUploadState(null)
+      }
+
       addAlert('File uploaded', 'success')
       loadTree()
     } catch (err) {
+      setUploadState(null)
       addAlert(err.message, 'error')
     }
     e.target.value = ''
@@ -114,7 +142,6 @@ export default function Files() {
     }
   }
 
-  // Breadcrumbs
   const pathParts = currentPath.split('/').filter(Boolean)
   const breadcrumbs = [
     <MuiLink
@@ -147,6 +174,15 @@ export default function Files() {
   return (
     <Box>
       <Breadcrumbs sx={{ mb: 2 }}>{breadcrumbs}</Breadcrumbs>
+
+      {uploadState && (
+        <UploadProgress
+          filename={uploadState.filename}
+          total={uploadState.total}
+          uploaded={uploadState.uploaded}
+          status={uploadState.status}
+        />
+      )}
 
       <Box component="form" onSubmit={handleSearch} sx={{ mb: 2 }}>
         <TextField

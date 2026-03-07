@@ -67,6 +67,61 @@ const API = {
 
     delete: (storageId, path) =>
       apiRequest(`/storages/${storageId}/files/${path}`, 'DELETE'),
+
+    // Subscribe to upload progress via SSE. Returns an EventSource.
+    subscribeProgress: (uploadId, onProgress) => {
+      const token = localStorage.getItem('access_token')
+      const base = import.meta.env.VITE_API_BASE || '/api'
+      // SSE doesn't support custom headers, so we pass the token as a query param
+      // and the upload_id. The backend auth middleware reads from Authorization header,
+      // so we use a regular fetch-based SSE reader instead.
+      const url = `${base}/upload_progress?upload_id=${uploadId}`
+
+      const eventSource = new EventSource(url)
+      // Note: EventSource doesn't support auth headers. We'll use fetch-based streaming.
+      eventSource.close()
+
+      // Use fetch-based SSE
+      const controller = new AbortController()
+      const fetchSSE = async () => {
+        try {
+          const resp = await fetch(url, {
+            headers: { Authorization: `Bearer ${token}` },
+            signal: controller.signal,
+          })
+          const reader = resp.body.getReader()
+          const decoder = new TextDecoder()
+          let buffer = ''
+
+          while (true) {
+            const { done, value } = await reader.read()
+            if (done) break
+            buffer += decoder.decode(value, { stream: true })
+
+            const lines = buffer.split('\n')
+            buffer = lines.pop() || ''
+
+            for (const line of lines) {
+              if (line.startsWith('data: ')) {
+                try {
+                  const data = JSON.parse(line.slice(6))
+                  onProgress(data)
+                  if (data.status === 'done') {
+                    controller.abort()
+                    return
+                  }
+                } catch {}
+              }
+            }
+          }
+        } catch (err) {
+          if (err.name !== 'AbortError') console.error('SSE error:', err)
+        }
+      }
+
+      fetchSSE()
+      return () => controller.abort()
+    },
   },
 }
 

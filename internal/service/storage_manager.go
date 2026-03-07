@@ -4,8 +4,10 @@ import (
 	"bytes"
 	"context"
 	"fmt"
+	"io"
 	"sort"
 	"sync"
+	"sync/atomic"
 
 	"golang.org/x/sync/errgroup"
 
@@ -37,15 +39,19 @@ func NewStorageManager(
 	}
 }
 
-// Upload splits data into chunks, uploads them to Telegram in parallel, and records them in the DB.
-func (m *StorageManager) Upload(ctx context.Context, file *domain.File, data []byte) error {
+// UploadProgress tracks chunk upload progress.
+type UploadProgress struct {
+	TotalChunks    int32
+	UploadedChunks atomic.Int32
+}
+
+// Upload reads from reader chunk by chunk (streaming), uploads to Telegram in parallel,
+// and records chunk metadata in the DB. Never holds the full file in memory.
+func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
 	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
 		return fmt.Errorf("getting storage: %w", err)
 	}
-
-	// Split data into chunks
-	chunks := splitIntoChunks(data, chunkSize)
 
 	type chunkResult struct {
 		TelegramFileID string
@@ -56,29 +62,50 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, data []b
 	var results []chunkResult
 
 	g, gctx := errgroup.WithContext(ctx)
+	// Limit parallel uploads to avoid excessive memory (N chunks * 20MB in flight)
+	g.SetLimit(5)
 
-	for i, chunk := range chunks {
-		position := int16(i)
-		chunkData := chunk
+	position := int16(0)
+	for {
+		buf := make([]byte, chunkSize)
+		n, readErr := io.ReadFull(reader, buf)
+		if n == 0 && readErr != nil {
+			break
+		}
+		chunkData := buf[:n]
+		pos := position
+		position++
 
 		g.Go(func() error {
 			token, err := m.scheduler.GetToken(gctx, storage.ID)
 			if err != nil {
-				return fmt.Errorf("getting token for chunk %d: %w", position, err)
+				return fmt.Errorf("getting token for chunk %d: %w", pos, err)
 			}
 
-			filename := telegram.GenerateChunkFilename(file.ID, int(position))
+			filename := telegram.GenerateChunkFilename(file.ID, int(pos))
 			fileID, err := m.tgClient.Upload(token, storage.ChatID, chunkData, filename)
 			if err != nil {
-				return fmt.Errorf("uploading chunk %d: %w", position, err)
+				return fmt.Errorf("uploading chunk %d: %w", pos, err)
 			}
 
 			mu.Lock()
-			results = append(results, chunkResult{TelegramFileID: fileID, Position: position})
+			results = append(results, chunkResult{TelegramFileID: fileID, Position: pos})
 			mu.Unlock()
+
+			if progress != nil {
+				progress.UploadedChunks.Add(1)
+			}
 
 			return nil
 		})
+
+		if readErr != nil {
+			break
+		}
+	}
+
+	if progress != nil {
+		progress.TotalChunks = int32(position)
 	}
 
 	if err := g.Wait(); err != nil {
@@ -131,6 +158,7 @@ func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byt
 	var results []downloadResult
 
 	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(5)
 
 	for _, chunk := range chunks {
 		c := chunk
@@ -168,17 +196,4 @@ func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byt
 	}
 
 	return buf.Bytes(), nil
-}
-
-func splitIntoChunks(data []byte, size int) [][]byte {
-	var chunks [][]byte
-	for len(data) > 0 {
-		end := size
-		if end > len(data) {
-			end = len(data)
-		}
-		chunks = append(chunks, data[:end])
-		data = data[end:]
-	}
-	return chunks
 }
