@@ -3,6 +3,7 @@ package handler
 import (
 	"encoding/json"
 	"errors"
+	"log"
 	"net/http"
 
 	"github.com/go-chi/chi/v5"
@@ -25,6 +26,7 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, appErr.Code, appErr)
 		return
 	}
+	log.Printf("ERROR: %v", err)
 	writeJSON(w, http.StatusInternalServerError, &domain.AppError{
 		Code:    http.StatusInternalServerError,
 		Message: "internal server error",

@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"mime"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -301,6 +302,9 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 func extractWildcardPath(r *http.Request) string {
 	path := chi.URLParam(r, "*")
 	path = strings.TrimPrefix(path, "/")
+	if decoded, err := url.PathUnescape(path); err == nil {
+		path = decoded
+	}
 	return path
 }
 

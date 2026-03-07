@@ -6,7 +6,7 @@ const AlertContext = createContext()
 function alertReducer(state, action) {
   switch (action.type) {
     case 'ADD':
-      return [{ id: Date.now(), ...action.payload }, ...state]
+      return [action.payload, ...state]
     case 'REMOVE':
       return state.filter((a) => a.id !== action.id)
     default:
@@ -18,8 +18,8 @@ export function AlertProvider({ children }) {
   const [alerts, dispatch] = useReducer(alertReducer, [])
 
   const addAlert = useCallback((message, severity = 'info') => {
-    const id = Date.now()
-    dispatch({ type: 'ADD', payload: { message, severity } })
+    const id = Date.now() + Math.random()
+    dispatch({ type: 'ADD', payload: { id, message, severity } })
     setTimeout(() => dispatch({ type: 'REMOVE', id }), 5000)
   }, [])
 

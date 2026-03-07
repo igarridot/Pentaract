@@ -191,12 +191,12 @@ Browser  -->  Go HTTP server  -->  PostgreSQL (metadata)
 ### Setting up Telegram storage
 
 1. Create a Telegram channel (private recommended)
-2. Get the channel's numeric ID (you can use bots like `@userinfobot` or the Telegram API)
+2. Send a message in the channel and forward it to [@RawDataBot](https://t.me/RawDataBot) to get the channel's `chat_id`
 3. Create one or more Telegram bots via [@BotFather](https://t.me/BotFather) and save their tokens
 4. Add the bots as administrators of the channel (they need permission to post messages)
 5. In Pentaract:
-   - Go to **Storage Workers** and create a worker with each bot token, binding it to a storage
    - Go to **Storages** and create a storage with the channel's `chat_id`
+   - Go to **Storage Workers** and create a worker with each bot token, binding it to a storage
 6. Upload files through the **Files** browser
 
 ### Multi-architecture support

@@ -1,4 +1,4 @@
-import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom'
+import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import BasicLayout from './layouts/Basic'
 import Login from './pages/Login'
 import Register from './pages/Register'
@@ -10,23 +10,25 @@ import UploadFileTo from './pages/Files/UploadFileTo'
 import StorageWorkers from './pages/StorageWorkers'
 import StorageWorkerCreateForm from './pages/StorageWorkers/StorageWorkerCreateForm'
 
+const router = createBrowserRouter([
+  { path: '/login', element: <Login /> },
+  { path: '/register', element: <Register /> },
+  {
+    path: '/',
+    element: <BasicLayout />,
+    children: [
+      { index: true, element: <Navigate to="/storages" replace /> },
+      { path: 'storages', element: <Storages /> },
+      { path: 'storages/register', element: <StorageCreateForm /> },
+      { path: 'storages/:id/files/*', element: <Files /> },
+      { path: 'storages/:id/upload_to', element: <UploadFileTo /> },
+      { path: 'storage_workers', element: <StorageWorkers /> },
+      { path: 'storage_workers/register', element: <StorageWorkerCreateForm /> },
+      { path: '*', element: <NotFound /> },
+    ],
+  },
+])
+
 export default function App() {
-  return (
-    <BrowserRouter>
-      <Routes>
-        <Route path="/login" element={<Login />} />
-        <Route path="/register" element={<Register />} />
-        <Route path="/" element={<BasicLayout />}>
-          <Route index element={<Navigate to="/storages" replace />} />
-          <Route path="storages" element={<Storages />} />
-          <Route path="storages/register" element={<StorageCreateForm />} />
-          <Route path="storages/:id/files/*" element={<Files />} />
-          <Route path="storages/:id/upload_to" element={<UploadFileTo />} />
-          <Route path="storage_workers" element={<StorageWorkers />} />
-          <Route path="storage_workers/register" element={<StorageWorkerCreateForm />} />
-          <Route path="*" element={<NotFound />} />
-        </Route>
-      </Routes>
-    </BrowserRouter>
-  )
+  return <RouterProvider router={router} />
 }

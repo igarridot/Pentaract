@@ -28,6 +28,10 @@ func (s *StorageWorkersService) List(ctx context.Context, userID uuid.UUID) ([]d
 	return s.workersRepo.List(ctx, userID)
 }
 
+func (s *StorageWorkersService) Delete(ctx context.Context, id, userID uuid.UUID) error {
+	return s.workersRepo.Delete(ctx, id, userID)
+}
+
 func (s *StorageWorkersService) HasWorkers(ctx context.Context, storageID uuid.UUID) (bool, error) {
 	return s.workersRepo.HasWorkers(ctx, storageID)
 }

@@ -65,12 +65,32 @@ func (r *StorageWorkersRepo) HasWorkers(ctx context.Context, storageID uuid.UUID
 	return exists, err
 }
 
+func (r *StorageWorkersRepo) Delete(ctx context.Context, id, userID uuid.UUID) error {
+	ct, err := r.pool.Exec(ctx,
+		`DELETE FROM storage_workers WHERE id = $1 AND user_id = $2`,
+		id, userID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return domain.ErrNotFound("storage worker")
+	}
+	return nil
+}
+
+// WorkerToken holds the token and name of a selected worker.
+type WorkerToken struct {
+	Token string
+	Name  string
+}
+
 // GetToken atomically selects the least-loaded worker under the rate limit
-// and records a usage entry. Returns empty string if no worker is available.
-func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, rateLimit int) (string, error) {
+// and records a usage entry. Returns nil if no worker is available.
+func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, rateLimit int) (*WorkerToken, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 	defer tx.Rollback(ctx)
 
@@ -79,18 +99,18 @@ func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, 
 		`DELETE FROM storage_workers_usages WHERE created_at < now() - interval '1 minute'`,
 	)
 	if err != nil {
-		return "", err
+		return nil, err
 	}
 
 	// Select least-loaded worker under rate limit and insert usage
-	var token string
+	var token, name string
 	err = tx.QueryRow(ctx,
 		`WITH available_workers AS (
-			SELECT sw.id, sw.token, COUNT(swu.id) AS usage_count
+			SELECT sw.id, sw.name, sw.token, COUNT(swu.id) AS usage_count
 			FROM storage_workers sw
 			LEFT JOIN storage_workers_usages swu ON swu.worker_id = sw.id
 			WHERE sw.storage_id = $1
-			GROUP BY sw.id, sw.token
+			GROUP BY sw.id, sw.name, sw.token
 			HAVING COUNT(swu.id) < $2
 			ORDER BY COUNT(swu.id) ASC
 			LIMIT 1
@@ -100,19 +120,19 @@ func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, 
 			SELECT id FROM available_workers
 			RETURNING worker_id
 		)
-		SELECT aw.token FROM available_workers aw`,
+		SELECT aw.token, aw.name FROM available_workers aw`,
 		storageID, rateLimit,
-	).Scan(&token)
+	).Scan(&token, &name)
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
-			return "", nil
+			return nil, nil
 		}
-		return "", err
+		return nil, err
 	}
 
 	if err := tx.Commit(ctx); err != nil {
-		return "", err
+		return nil, err
 	}
-	return token, nil
+	return &WorkerToken{Token: token, Name: name}, nil
 }
