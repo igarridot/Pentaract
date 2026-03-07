@@ -1,5 +1,0 @@
-[toolchain]
-channel = "stable"
-components = []
-targets = []
-profile = "default"
