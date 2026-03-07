@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation, useBlocker } from 'react-router-dom'
 import {
-  Typography, List, Paper, Box, TextField, InputAdornment,
+  Typography, List, Box, TextField, InputAdornment,
   MenuItem, Divider, Breadcrumbs, Link as MuiLink, Button,
 } from '@mui/material'
 import {
@@ -57,14 +57,12 @@ export default function Files() {
     setSearch('')
   }, [loadTree])
 
-  // Cleanup SSE on unmount
   useEffect(() => {
     return () => {
       if (cancelProgressRef.current) cancelProgressRef.current()
     }
   }, [])
 
-  // Warn before closing/navigating away during upload
   const isUploading = uploadState?.status === 'uploading'
 
   useEffect(() => {
@@ -77,7 +75,6 @@ export default function Files() {
     return () => window.removeEventListener('beforeunload', handler)
   }, [isUploading])
 
-  // Block SPA navigation during upload
   const blocker = useBlocker(isUploading)
 
   const handleSearch = async (e) => {
@@ -113,7 +110,6 @@ export default function Files() {
     uploadIdRef.current = uploadId
     setUploadState({ filename, totalBytes: file.size, uploadedBytes: 0, totalChunks: 0, uploadedChunks: 0, status: 'uploading' })
 
-    // Subscribe to SSE progress immediately (before the upload POST completes)
     const cancel = API.files.subscribeProgress(uploadId, (data) => {
       setUploadState((prev) => ({
         ...prev,
@@ -138,7 +134,6 @@ export default function Files() {
     })
     cancelProgressRef.current = cancel
 
-    // Start upload (this blocks until file body is fully sent)
     try {
       await API.files.upload(storageId, currentPath.replace(/\/+$/, ''), file, uploadId)
     } catch (err) {
@@ -219,7 +214,7 @@ export default function Files() {
       key="root"
       underline="hover"
       color="inherit"
-      sx={{ cursor: 'pointer' }}
+      sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
       onClick={() => navigate(prefix)}
     >
       Root
@@ -231,7 +226,7 @@ export default function Files() {
           key={pathTo}
           underline="hover"
           color="inherit"
-          sx={{ cursor: 'pointer' }}
+          sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
           onClick={() => navigate(pathTo)}
         >
           {part}
@@ -258,7 +253,7 @@ export default function Files() {
         />
       )}
 
-      <Box component="form" onSubmit={handleSearch} sx={{ mb: 2 }}>
+      <Box component="form" onSubmit={handleSearch} sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
         <TextField
           size="small"
           placeholder="Search files..."
@@ -266,19 +261,31 @@ export default function Files() {
           onChange={(e) => setSearch(e.target.value)}
           InputProps={{
             startAdornment: (
-              <InputAdornment position="start"><SearchIcon /></InputAdornment>
+              <InputAdornment position="start">
+                <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+              </InputAdornment>
             ),
           }}
+          sx={{ width: 260 }}
         />
         {searchResults && (
-          <Button size="small" onClick={() => { setSearchResults(null); setSearch('') }} sx={{ ml: 1 }}>
+          <Button
+            size="small"
+            onClick={() => { setSearchResults(null); setSearch('') }}
+            sx={{ color: 'text.secondary', fontSize: '0.8125rem' }}
+          >
             Clear
           </Button>
         )}
       </Box>
 
-      <Paper variant="outlined">
-        <List>
+      <Box sx={{
+        bgcolor: 'white',
+        borderRadius: 3,
+        border: '1px solid rgba(0,0,0,0.06)',
+        overflow: 'hidden',
+      }}>
+        <List disablePadding>
           {displayItems.map((item, i) => (
             <Box key={item.path || item.name}>
               {i > 0 && <Divider />}
@@ -294,22 +301,22 @@ export default function Files() {
             </Box>
           ))}
           {displayItems.length === 0 && (
-            <Box sx={{ p: 2, textAlign: 'center' }}>
-              <Typography color="text.secondary">
+            <Box sx={{ p: 4, textAlign: 'center' }}>
+              <Typography color="text.secondary" variant="body2">
                 {searchResults ? 'No results found' : 'Empty folder'}
               </Typography>
             </Box>
           )}
         </List>
-      </Paper>
+      </Box>
 
       <FloatingMenu>
         {(close) => [
           <MenuItem key="folder" onClick={() => { close(); setFolderDialogOpen(true) }}>
-            <FolderAddIcon sx={{ mr: 1 }} /> New Folder
+            <FolderAddIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> New Folder
           </MenuItem>,
           <MenuItem key="upload" component="label">
-            <UploadIcon sx={{ mr: 1 }} /> Upload File
+            <UploadIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> Upload File
             <input type="file" hidden onChange={(e) => { close(); handleUpload(e) }} />
           </MenuItem>,
         ]}

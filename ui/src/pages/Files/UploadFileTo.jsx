@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useParams, useNavigate } from 'react-router-dom'
-import { Box, Typography, Paper, TextField, Button, Stack } from '@mui/material'
+import { Box, Typography, TextField, Button, Stack } from '@mui/material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
 
@@ -26,16 +26,22 @@ export default function UploadFileTo() {
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>Upload File</Typography>
-      <Paper sx={{ p: 3, maxWidth: 500 }}>
+      <Typography variant="h5" sx={{ mb: 3 }}>Upload File</Typography>
+      <Box sx={{
+        bgcolor: 'white',
+        borderRadius: 3,
+        border: '1px solid rgba(0,0,0,0.06)',
+        p: 3,
+        maxWidth: 480,
+      }}>
         <form onSubmit={handleSubmit}>
-          <Stack spacing={2}>
+          <Stack spacing={2.5}>
             <TextField
-              fullWidth label="Path (optional)" value={path}
+              fullWidth placeholder="Path (optional)" value={path}
               onChange={(e) => setPath(e.target.value)}
               helperText="e.g. folder1/subfolder"
             />
-            <Button variant="outlined" component="label">
+            <Button variant="outlined" component="label" sx={{ justifyContent: 'flex-start' }}>
               {file ? file.name : 'Choose file'}
               <input type="file" hidden onChange={(e) => setFile(e.target.files[0])} />
             </Button>
@@ -44,7 +50,7 @@ export default function UploadFileTo() {
             </Button>
           </Stack>
         </form>
-      </Paper>
+      </Box>
     </Box>
   )
 }

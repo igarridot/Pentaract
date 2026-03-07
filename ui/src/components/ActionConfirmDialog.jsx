@@ -7,11 +7,13 @@ export default function ActionConfirmDialog({ open, entity, action, description,
     <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth>
       <DialogTitle>{action} {entity}</DialogTitle>
       <DialogContent>
-        <Typography>{description}</Typography>
+        <Typography variant="body2" color="text.secondary">
+          {description}
+        </Typography>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onCancel}>Cancel</Button>
-        <Button onClick={onConfirm} color="warning" variant="contained">
+        <Button onClick={onCancel} color="inherit">Cancel</Button>
+        <Button onClick={onConfirm} color="error" variant="contained">
           {action}
         </Button>
       </DialogActions>

@@ -9,8 +9,8 @@ export default function NavigationBlockDialog({ blocker }) {
     <Dialog open onClose={() => blocker.reset()}>
       <DialogTitle>Upload in progress</DialogTitle>
       <DialogContent>
-        <DialogContentText>
-          A file upload is currently in progress. Leaving this page will interrupt it. Are you sure you want to leave?
+        <DialogContentText sx={{ fontSize: '0.875rem' }}>
+          A file upload is currently in progress. Leaving this page will interrupt it.
         </DialogContentText>
       </DialogContent>
       <DialogActions>

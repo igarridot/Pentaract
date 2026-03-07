@@ -16,22 +16,22 @@ export default function CreateFolderDialog({ open, onCreate, onClose }) {
 
   return (
     <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
-      <DialogTitle>Create Folder</DialogTitle>
+      <DialogTitle>New Folder</DialogTitle>
       <DialogContent>
         <TextField
           autoFocus
           fullWidth
           margin="dense"
-          label="Folder name"
+          placeholder="Folder name"
           value={name}
           onChange={(e) => setName(e.target.value)}
           error={name.includes('/')}
-          helperText={name.includes('/') ? 'Folder name cannot contain /' : ''}
+          helperText={name.includes('/') ? 'Name cannot contain /' : ''}
           onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
         />
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose} color="inherit">Cancel</Button>
         <Button onClick={handleCreate} variant="contained" disabled={!name || name.includes('/')}>
           Create
         </Button>

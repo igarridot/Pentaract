@@ -6,7 +6,7 @@ import {
 import {
   InsertDriveFile as FileIcon,
   Folder as FolderIcon,
-  MoreVert as MoreIcon,
+  MoreHoriz as MoreIcon,
 } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
 
@@ -29,17 +29,31 @@ export default function FSListItem({ item, storageId, currentPath, onInfo, onDel
 
   return (
     <ListItem
+      disablePadding
       secondaryAction={
-        <IconButton onClick={(e) => setAnchorEl(e.currentTarget)}>
-          <MoreIcon />
+        <IconButton
+          onClick={(e) => setAnchorEl(e.currentTarget)}
+          size="small"
+          sx={{ opacity: 0.5, '&:hover': { opacity: 1 } }}
+        >
+          <MoreIcon fontSize="small" />
         </IconButton>
       }
     >
-      <ListItemButton onClick={handleClick}>
-        <ListItemIcon>
-          {item.is_file ? <FileIcon /> : <FolderIcon />}
+      <ListItemButton onClick={handleClick} sx={{ py: 1 }}>
+        <ListItemIcon sx={{ minWidth: 40 }}>
+          {item.is_file
+            ? <FileIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
+            : <FolderIcon sx={{ color: '#0071e3', fontSize: 20 }} />
+          }
         </ListItemIcon>
-        <ListItemText primary={item.name} />
+        <ListItemText
+          primary={item.name}
+          primaryTypographyProps={{
+            fontSize: '0.875rem',
+            fontWeight: item.is_file ? 400 : 500,
+          }}
+        />
       </ListItemButton>
 
       <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
@@ -54,7 +68,7 @@ export default function FSListItem({ item, storageId, currentPath, onInfo, onDel
         <MenuItem onClick={() => { setAnchorEl(null); onMove(item) }}>
           Move
         </MenuItem>
-        <MenuItem onClick={() => { setAnchorEl(null); onDelete(item) }}>
+        <MenuItem onClick={() => { setAnchorEl(null); onDelete(item) }} sx={{ color: 'error.main' }}>
           Delete
         </MenuItem>
       </Menu>

@@ -8,9 +8,15 @@ export default function FloatingMenu({ children }) {
   return (
     <>
       <Fab
-        color="secondary"
+        color="primary"
         onClick={(e) => setAnchorEl(e.currentTarget)}
-        sx={{ position: 'fixed', bottom: 24, right: 24 }}
+        sx={{
+          position: 'fixed',
+          bottom: 28,
+          right: 28,
+          width: 52,
+          height: 52,
+        }}
       >
         <AddIcon />
       </Fab>

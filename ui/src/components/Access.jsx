@@ -7,7 +7,7 @@ import AccessTypeChip from './AccessTypeChip'
 
 export default function Access({ users, currentUserId, onEdit, onDelete }) {
   return (
-    <TableContainer component={Paper} variant="outlined">
+    <TableContainer component={Paper}>
       <Table size="small">
         <TableHead>
           <TableRow>
@@ -19,7 +19,7 @@ export default function Access({ users, currentUserId, onEdit, onDelete }) {
         <TableBody>
           {users.map((user) => (
             <TableRow key={user.id}>
-              <TableCell>{user.email}</TableCell>
+              <TableCell sx={{ fontSize: '0.875rem' }}>{user.email}</TableCell>
               <TableCell><AccessTypeChip type={user.access_type} /></TableCell>
               <TableCell align="right">
                 <IconButton
@@ -27,14 +27,14 @@ export default function Access({ users, currentUserId, onEdit, onDelete }) {
                   disabled={user.id === currentUserId}
                   onClick={() => onEdit(user)}
                 >
-                  <EditIcon fontSize="small" />
+                  <EditIcon sx={{ fontSize: 16 }} />
                 </IconButton>
                 <IconButton
                   size="small"
                   disabled={user.id === currentUserId}
                   onClick={() => onDelete(user)}
                 >
-                  <DeleteIcon fontSize="small" />
+                  <DeleteIcon sx={{ fontSize: 16 }} />
                 </IconButton>
               </TableCell>
             </TableRow>

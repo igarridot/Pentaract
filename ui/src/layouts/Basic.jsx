@@ -17,11 +17,19 @@ export default function BasicLayout() {
 
   return (
     <AlertProvider>
-      <Box sx={{ display: 'flex' }}>
+      <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
         <Header onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
         <SideBar open={sidebarOpen} />
-        <Box component="main" sx={{ flexGrow: 1, p: 3 }}>
-          <Toolbar />
+        <Box
+          component="main"
+          sx={{
+            flexGrow: 1,
+            px: { xs: 2, sm: 3, md: 4 },
+            py: 3,
+            maxWidth: 1200,
+          }}
+        >
+          <Toolbar sx={{ minHeight: '52px !important' }} />
           <Outlet />
         </Box>
       </Box>

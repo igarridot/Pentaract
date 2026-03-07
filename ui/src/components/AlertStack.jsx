@@ -1,5 +1,5 @@
 import { createContext, useCallback, useContext, useReducer } from 'react'
-import { Alert, Stack } from '@mui/material'
+import { Alert, Stack, Slide } from '@mui/material'
 
 const AlertContext = createContext()
 
@@ -32,22 +32,23 @@ export function AlertProvider({ children }) {
         spacing={1}
         sx={{
           position: 'fixed',
-          top: 16,
-          right: 16,
+          top: 64,
+          right: 20,
           zIndex: 99999,
-          width: '30vw',
-          minWidth: 240,
-          maxWidth: 360,
+          width: 340,
+          maxWidth: 'calc(100vw - 40px)',
         }}
       >
         {alerts.map((alert) => (
-          <Alert
-            key={alert.id}
-            severity={alert.severity}
-            onClose={() => dispatch({ type: 'REMOVE', id: alert.id })}
-          >
-            {alert.message}
-          </Alert>
+          <Slide key={alert.id} direction="left" in mountOnEnter unmountOnExit>
+            <Alert
+              severity={alert.severity}
+              onClose={() => dispatch({ type: 'REMOVE', id: alert.id })}
+              sx={{ fontSize: '0.8125rem' }}
+            >
+              {alert.message}
+            </Alert>
+          </Slide>
         ))}
       </Stack>
     </AlertContext.Provider>

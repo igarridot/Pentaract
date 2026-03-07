@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
   Typography, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
-  IconButton, Paper, Box, Fab, Divider,
+  IconButton, Box, Fab, Divider,
 } from '@mui/material'
 import {
   Storage as StorageIcon,
@@ -79,7 +79,6 @@ export default function Storages() {
     }
   }
 
-  // Get current user ID from JWT
   const token = localStorage.getItem('access_token')
   let currentUserId = null
   if (token) {
@@ -91,48 +90,73 @@ export default function Storages() {
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>Storages</Typography>
+      <Typography variant="h5" sx={{ mb: 3 }}>Storages</Typography>
 
-      <Paper variant="outlined">
-        <List>
+      <Box sx={{
+        bgcolor: 'white',
+        borderRadius: 3,
+        border: '1px solid rgba(0,0,0,0.06)',
+        overflow: 'hidden',
+      }}>
+        <List disablePadding>
           {storages.map((s, i) => (
             <Box key={s.id}>
               {i > 0 && <Divider />}
               <ListItem
+                disablePadding
                 secondaryAction={
-                  <Box>
-                    <IconButton onClick={() => loadAccess(s.id)} title="Manage access">
-                      <PeopleIcon />
+                  <Box sx={{ display: 'flex', gap: 0.25 }}>
+                    <IconButton
+                      size="small"
+                      onClick={() => loadAccess(s.id)}
+                      title="Manage access"
+                      sx={{ opacity: 0.4, '&:hover': { opacity: 1 } }}
+                    >
+                      <PeopleIcon sx={{ fontSize: 18 }} />
                     </IconButton>
-                    <IconButton onClick={() => setDeleteTarget(s)} title="Delete storage">
-                      <DeleteIcon />
+                    <IconButton
+                      size="small"
+                      onClick={() => setDeleteTarget(s)}
+                      title="Delete storage"
+                      sx={{ opacity: 0.4, '&:hover': { opacity: 1, color: 'error.main' } }}
+                    >
+                      <DeleteIcon sx={{ fontSize: 18 }} />
                     </IconButton>
                   </Box>
                 }
               >
-                <ListItemButton onClick={() => navigate(`/storages/${s.id}/files/`)}>
-                  <ListItemIcon><StorageIcon /></ListItemIcon>
+                <ListItemButton onClick={() => navigate(`/storages/${s.id}/files/`)} sx={{ py: 1.5 }}>
+                  <ListItemIcon sx={{ minWidth: 40 }}>
+                    <StorageIcon sx={{ color: 'primary.main', fontSize: 20 }} />
+                  </ListItemIcon>
                   <ListItemText
                     primary={s.name}
-                    secondary={`${s.files_amount} files - ${convertSize(s.size)}`}
+                    secondary={`${s.files_amount} files \u00b7 ${convertSize(s.size)}`}
+                    primaryTypographyProps={{ fontWeight: 500, fontSize: '0.875rem' }}
+                    secondaryTypographyProps={{ fontSize: '0.75rem' }}
                   />
                 </ListItemButton>
               </ListItem>
             </Box>
           ))}
           {storages.length === 0 && (
-            <ListItem>
-              <ListItemText primary="No storages yet" secondary="Create one to get started" />
-            </ListItem>
+            <Box sx={{ p: 4, textAlign: 'center' }}>
+              <Typography color="text.secondary" variant="body2">
+                No storages yet
+              </Typography>
+              <Typography color="text.secondary" variant="caption">
+                Create one to get started
+              </Typography>
+            </Box>
           )}
         </List>
-      </Paper>
+      </Box>
 
       <Fab
-        color="secondary"
+        color="primary"
         component={Link}
         to="/storages/register"
-        sx={{ position: 'fixed', bottom: 24, right: 24 }}
+        sx={{ position: 'fixed', bottom: 28, right: 28, width: 52, height: 52 }}
       >
         <AddIcon />
       </Fab>
@@ -148,14 +172,14 @@ export default function Storages() {
 
       {accessStorageId && (
         <Box sx={{ mt: 3 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1 }}>
-            <Typography variant="h6">Access Control</Typography>
+          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
+            <Typography variant="h6" sx={{ fontSize: '1rem' }}>Access Control</Typography>
             <Box>
-              <IconButton onClick={() => { setEditUser(null); setGrantOpen(true) }}>
-                <AddIcon />
+              <IconButton size="small" onClick={() => { setEditUser(null); setGrantOpen(true) }}>
+                <AddIcon sx={{ fontSize: 18 }} />
               </IconButton>
-              <IconButton onClick={() => setAccessStorageId(null)}>
-                <DeleteIcon />
+              <IconButton size="small" onClick={() => setAccessStorageId(null)}>
+                <DeleteIcon sx={{ fontSize: 18 }} />
               </IconButton>
             </Box>
           </Box>

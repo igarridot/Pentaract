@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Box, Typography, Paper, TextField, Button, Stack,
+  Box, Typography, TextField, Button, Stack,
   FormControl, InputLabel, Select, MenuItem,
 } from '@mui/material'
 import API from '../../api'
@@ -38,16 +38,22 @@ export default function StorageWorkerCreateForm() {
 
   return (
     <Box>
-      <Typography variant="h5" gutterBottom>Create Storage Worker</Typography>
-      <Paper sx={{ p: 3, maxWidth: 500 }}>
+      <Typography variant="h5" sx={{ mb: 3 }}>Create Worker</Typography>
+      <Box sx={{
+        bgcolor: 'white',
+        borderRadius: 3,
+        border: '1px solid rgba(0,0,0,0.06)',
+        p: 3,
+        maxWidth: 480,
+      }}>
         <form onSubmit={handleSubmit}>
-          <Stack spacing={2}>
+          <Stack spacing={2.5}>
             <TextField
-              fullWidth label="Name" value={name}
+              fullWidth placeholder="Worker name" value={name}
               onChange={(e) => setName(e.target.value)} required
             />
             <TextField
-              fullWidth label="Telegram Bot Token" value={token}
+              fullWidth placeholder="Telegram Bot Token" value={token}
               onChange={(e) => setToken(e.target.value)} required
               helperText="Get this from @BotFather on Telegram"
             />
@@ -65,11 +71,11 @@ export default function StorageWorkerCreateForm() {
               </Select>
             </FormControl>
             <Button variant="contained" type="submit" disabled={!name || !token}>
-              Create
+              Create Worker
             </Button>
           </Stack>
         </form>
-      </Paper>
+      </Box>
     </Box>
   )
 }

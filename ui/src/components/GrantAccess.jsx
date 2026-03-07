@@ -30,12 +30,13 @@ export default function GrantAccess({ open, onClose, onGrant, editUser }) {
         <TextField
           fullWidth
           margin="dense"
-          label="Email"
+          placeholder="Email address"
           value={email}
           onChange={(e) => setEmail(e.target.value)}
           disabled={!!editUser}
+          sx={{ mb: 2 }}
         />
-        <FormControl fullWidth margin="dense">
+        <FormControl fullWidth>
           <InputLabel>Access Type</InputLabel>
           <Select value={accessType} onChange={(e) => setAccessType(e.target.value)} label="Access Type">
             <MenuItem value="r">Viewer (Read)</MenuItem>
@@ -45,9 +46,9 @@ export default function GrantAccess({ open, onClose, onGrant, editUser }) {
         </FormControl>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose} color="inherit">Cancel</Button>
         <Button onClick={handleSubmit} variant="contained" disabled={!email}>
-          {editUser ? 'Change' : 'Grant'}
+          {editUser ? 'Update' : 'Grant'}
         </Button>
       </DialogActions>
     </Dialog>

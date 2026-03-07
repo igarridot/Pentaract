@@ -24,7 +24,7 @@ export default function EditWorkerDialog({ open, worker, storages, onSave, onClo
       <DialogTitle>Edit Worker</DialogTitle>
       <DialogContent>
         <TextField
-          label="Name"
+          placeholder="Worker name"
           fullWidth
           value={name}
           onChange={(e) => setName(e.target.value)}
@@ -45,7 +45,7 @@ export default function EditWorkerDialog({ open, worker, storages, onSave, onClo
         </FormControl>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose} color="inherit">Cancel</Button>
         <Button onClick={handleSave} variant="contained" disabled={!name.trim()}>
           Save
         </Button>

@@ -35,7 +35,6 @@ export default function MoveDialog({ open, item, storageId, onMove, onClose }) {
     onMove(item, newPath)
   }
 
-  // Don't allow moving into the same location
   const currentDir = item?.path
     ? item.path.substring(0, item.path.lastIndexOf('/') + 1).replace(/\/$/, '')
     : ''
@@ -45,15 +44,15 @@ export default function MoveDialog({ open, item, storageId, onMove, onClose }) {
     <Dialog open={open} onClose={onClose} maxWidth="sm" fullWidth>
       <DialogTitle>Move "{item?.name}"</DialogTitle>
       <DialogContent>
-        <Typography variant="body2" color="text.secondary" sx={{ mb: 1 }}>
-          Select destination folder:
+        <Typography variant="body2" color="text.secondary" sx={{ mb: 1.5 }}>
+          Select destination folder
         </Typography>
 
-        <Breadcrumbs sx={{ mb: 1 }}>
+        <Breadcrumbs sx={{ mb: 1.5 }}>
           <MuiLink
             underline="hover"
             color="inherit"
-            sx={{ cursor: 'pointer' }}
+            sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
             onClick={() => loadFolders('')}
           >
             Root
@@ -65,7 +64,7 @@ export default function MoveDialog({ open, item, storageId, onMove, onClose }) {
                 key={pathTo}
                 underline="hover"
                 color="inherit"
-                sx={{ cursor: 'pointer' }}
+                sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
                 onClick={() => loadFolders(pathTo)}
               >
                 {part}
@@ -74,10 +73,16 @@ export default function MoveDialog({ open, item, storageId, onMove, onClose }) {
           })}
         </Breadcrumbs>
 
-        <Box sx={{ border: 1, borderColor: 'divider', borderRadius: 1, maxHeight: 300, overflow: 'auto' }}>
-          <List dense>
+        <Box sx={{
+          border: '1px solid rgba(0,0,0,0.06)',
+          borderRadius: 2,
+          maxHeight: 280,
+          overflow: 'auto',
+          bgcolor: '#f5f5f7',
+        }}>
+          <List dense disablePadding>
             {folders.length === 0 && (
-              <Typography variant="body2" color="text.secondary" sx={{ p: 2, textAlign: 'center' }}>
+              <Typography variant="body2" color="text.secondary" sx={{ p: 3, textAlign: 'center' }}>
                 No subfolders
               </Typography>
             )}
@@ -85,20 +90,26 @@ export default function MoveDialog({ open, item, storageId, onMove, onClose }) {
               <ListItemButton
                 key={folder.path}
                 onClick={() => loadFolders(folder.path.replace(/\/$/, ''))}
+                sx={{ py: 0.75 }}
               >
-                <ListItemIcon><FolderIcon /></ListItemIcon>
-                <ListItemText primary={folder.name} />
+                <ListItemIcon sx={{ minWidth: 36 }}>
+                  <FolderIcon sx={{ color: '#0071e3', fontSize: 20 }} />
+                </ListItemIcon>
+                <ListItemText
+                  primary={folder.name}
+                  primaryTypographyProps={{ fontSize: '0.875rem' }}
+                />
               </ListItemButton>
             ))}
           </List>
         </Box>
 
-        <Typography variant="body2" sx={{ mt: 1 }}>
-          Destination: <strong>/{targetPath || 'Root'}</strong>
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 1.5, fontSize: '0.8125rem' }}>
+          Destination: <strong style={{ color: '#1d1d1f' }}>/{targetPath || 'Root'}</strong>
         </Typography>
       </DialogContent>
       <DialogActions>
-        <Button onClick={onClose}>Cancel</Button>
+        <Button onClick={onClose} color="inherit">Cancel</Button>
         <Button onClick={handleMove} variant="contained" disabled={isSameLocation}>
           Move here
         </Button>
