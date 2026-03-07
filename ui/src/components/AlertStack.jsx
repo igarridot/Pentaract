@@ -17,10 +17,12 @@ function alertReducer(state, action) {
 export function AlertProvider({ children }) {
   const [alerts, dispatch] = useReducer(alertReducer, [])
 
-  const addAlert = useCallback((message, severity = 'info') => {
+  const addAlert = useCallback((message, severity = 'info', { persistent = false } = {}) => {
     const id = Date.now() + Math.random()
     dispatch({ type: 'ADD', payload: { id, message, severity } })
-    setTimeout(() => dispatch({ type: 'REMOVE', id }), 5000)
+    if (!persistent) {
+      setTimeout(() => dispatch({ type: 'REMOVE', id }), 5000)
+    }
   }, [])
 
   return (

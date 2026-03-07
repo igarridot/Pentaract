@@ -38,7 +38,7 @@ func Load() (*Config, error) {
 		Workers:                getEnvInt("WORKERS", 4),
 		SuperuserEmail:         mustGetEnv("SUPERUSER_EMAIL"),
 		SuperuserPass:          mustGetEnv("SUPERUSER_PASS"),
-		AccessTokenExpireInSec: getEnvInt("ACCESS_TOKEN_EXPIRE_IN_SECS", 1800),
+		AccessTokenExpireInSec: getEnvInt("ACCESS_TOKEN_EXPIRE_IN_SECS", 31536000),
 		SecretKey:              mustGetEnv("SECRET_KEY"),
 		TelegramAPIBaseURL:     getEnv("TELEGRAM_API_BASE_URL", "https://api.telegram.org"),
 		TelegramRateLimit:      getEnvInt("TELEGRAM_RATE_LIMIT", 18),

@@ -28,6 +28,8 @@ const API = {
     list: () => apiRequest('/storage_workers'),
     create: (name, token, storage_id) =>
       apiRequest('/storage_workers', 'POST', { name, token, storage_id: storage_id || null }),
+    update: (id, name, storage_id) =>
+      apiRequest(`/storage_workers/${id}`, 'PUT', { name, storage_id: storage_id || null }),
     delete: (id) => apiRequest(`/storage_workers/${id}`, 'DELETE'),
     hasWorkers: (storageId) => apiRequest(`/storage_workers/has_workers?storage_id=${storageId}`),
   },
@@ -35,6 +37,9 @@ const API = {
   files: {
     createFolder: (storageId, path, folder_name) =>
       apiRequest(`/storages/${storageId}/files/create_folder`, 'POST', { path, folder_name }),
+
+    move: (storageId, oldPath, newPath) =>
+      apiRequest(`/storages/${storageId}/files/move`, 'POST', { old_path: oldPath, new_path: newPath }),
 
     upload: (storageId, path, file, uploadId) => {
       const formData = new FormData()
@@ -64,6 +69,16 @@ const API = {
       return resp.blob()
     },
 
+    downloadDir: async (storageId, path) => {
+      const token = localStorage.getItem('access_token')
+      const base = import.meta.env.VITE_API_BASE || '/api'
+      const resp = await fetch(`${base}/storages/${storageId}/files/download_dir/${path || ''}`, {
+        headers: { Authorization: `Bearer ${token}` },
+      })
+      if (!resp.ok) throw new Error('Download failed')
+      return resp.blob()
+    },
+
     search: (storageId, basePath, searchPath) =>
       apiRequest(`/storages/${storageId}/files/search/${basePath || ''}?search_path=${encodeURIComponent(searchPath)}`),
 
@@ -86,46 +101,56 @@ const API = {
       // Note: EventSource doesn't support auth headers. We'll use fetch-based streaming.
       eventSource.close()
 
-      // Use fetch-based SSE
-      const controller = new AbortController()
+      // Use fetch-based SSE with automatic reconnection
+      let stopped = false
+      let currentController = null
+
       const fetchSSE = async () => {
-        try {
-          const resp = await fetch(url, {
-            headers: { Authorization: `Bearer ${token}` },
-            signal: controller.signal,
-          })
-          const reader = resp.body.getReader()
-          const decoder = new TextDecoder()
-          let buffer = ''
+        while (!stopped) {
+          const controller = new AbortController()
+          currentController = controller
+          try {
+            const resp = await fetch(url, {
+              headers: { Authorization: `Bearer ${token}` },
+              signal: controller.signal,
+            })
+            const reader = resp.body.getReader()
+            const decoder = new TextDecoder()
+            let buffer = ''
 
-          while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            buffer += decoder.decode(value, { stream: true })
+            while (true) {
+              const { done, value } = await reader.read()
+              if (done) break
+              buffer += decoder.decode(value, { stream: true })
 
-            const lines = buffer.split('\n')
-            buffer = lines.pop() || ''
+              const lines = buffer.split('\n')
+              buffer = lines.pop() || ''
 
-            for (const line of lines) {
-              if (line.startsWith('data: ')) {
-                try {
-                  const data = JSON.parse(line.slice(6))
-                  onProgress(data)
-                  if (data.status === 'done') {
-                    controller.abort()
-                    return
-                  }
-                } catch {}
+              for (const line of lines) {
+                if (line.startsWith('data: ')) {
+                  try {
+                    const data = JSON.parse(line.slice(6))
+                    onProgress(data)
+                    if (data.status === 'done' || data.status === 'error') {
+                      stopped = true
+                      return
+                    }
+                  } catch {}
+                }
               }
             }
+          } catch (err) {
+            if (err.name === 'AbortError' || stopped) return
           }
-        } catch (err) {
-          if (err.name !== 'AbortError') console.error('SSE error:', err)
+          // Reconnect after a short delay
+          if (!stopped) {
+            await new Promise((r) => setTimeout(r, 1000))
+          }
         }
       }
 
       fetchSSE()
-      return () => controller.abort()
+      return () => { stopped = true; if (currentController) currentController.abort() }
     },
   },
 }

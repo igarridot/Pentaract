@@ -80,6 +80,24 @@ func (r *StorageWorkersRepo) Delete(ctx context.Context, id, userID uuid.UUID) e
 	return nil
 }
 
+// Update updates a worker's name and storage assignment.
+func (r *StorageWorkersRepo) Update(ctx context.Context, id, userID uuid.UUID, name string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
+	w := &domain.StorageWorker{}
+	err := r.pool.QueryRow(ctx,
+		`UPDATE storage_workers SET name = $3, storage_id = $4
+		WHERE id = $1 AND user_id = $2
+		RETURNING id, name, user_id, token, storage_id`,
+		id, userID, name, storageID,
+	).Scan(&w.ID, &w.Name, &w.UserID, &w.Token, &w.StorageID)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, domain.ErrNotFound("storage worker")
+		}
+		return nil, err
+	}
+	return w, nil
+}
+
 // WorkerToken holds the token and name of a selected worker.
 type WorkerToken struct {
 	Token string

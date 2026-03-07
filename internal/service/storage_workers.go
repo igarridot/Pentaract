@@ -28,6 +28,13 @@ func (s *StorageWorkersService) List(ctx context.Context, userID uuid.UUID) ([]d
 	return s.workersRepo.List(ctx, userID)
 }
 
+func (s *StorageWorkersService) Update(ctx context.Context, id, userID uuid.UUID, name string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
+	if name == "" {
+		return nil, domain.ErrBadRequest("name is required")
+	}
+	return s.workersRepo.Update(ctx, id, userID, name, storageID)
+}
+
 func (s *StorageWorkersService) Delete(ctx context.Context, id, userID uuid.UUID) error {
 	return s.workersRepo.Delete(ctx, id, userID)
 }

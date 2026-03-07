@@ -36,7 +36,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to parse database config: %v", err)
 	}
-	poolCfg.MaxConns = int32(cfg.Workers * 4)
+	poolCfg.MaxConns = int32(cfg.Workers * 8)
 
 	pool, err := pgxpool.NewWithConfig(ctx, poolCfg)
 	if err != nil {

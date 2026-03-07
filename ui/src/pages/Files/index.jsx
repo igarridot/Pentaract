@@ -18,6 +18,7 @@ import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import NavigationBlockDialog from '../../components/NavigationBlockDialog'
 import FloatingMenu from '../../components/Menu'
 import UploadProgress from '../../components/UploadProgress'
+import MoveDialog from '../../components/MoveDialog'
 
 export default function Files() {
   const { id: storageId } = useParams()
@@ -36,6 +37,7 @@ export default function Files() {
   const [infoFile, setInfoFile] = useState(null)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [moveTarget, setMoveTarget] = useState(null)
   const [uploadState, setUploadState] = useState(null)
   const cancelProgressRef = useRef(null)
   const uploadIdRef = useRef(null)
@@ -130,7 +132,7 @@ export default function Files() {
       }
       if (data.status === 'error') {
         uploadIdRef.current = null
-        addAlert('Upload failed', 'error')
+        addAlert('Upload failed unexpectedly. Please try again.', 'error', { persistent: true })
         setTimeout(() => setUploadState(null), 3000)
       }
     })
@@ -138,12 +140,12 @@ export default function Files() {
 
     // Start upload (this blocks until file body is fully sent)
     try {
-      await API.files.upload(storageId, currentPath, file, uploadId)
+      await API.files.upload(storageId, currentPath.replace(/\/+$/, ''), file, uploadId)
     } catch (err) {
       if (uploadIdRef.current === uploadId) {
         setUploadState(null)
         uploadIdRef.current = null
-        addAlert(err.message, 'error')
+        addAlert(`Upload interrupted: ${err.message}`, 'error', { persistent: true })
       }
     }
     e.target.value = ''
@@ -166,11 +168,18 @@ export default function Files() {
 
   const handleDownload = async (item) => {
     try {
-      const blob = await API.files.download(storageId, item.path)
+      let blob, filename
+      if (item.is_file) {
+        blob = await API.files.download(storageId, item.path)
+        filename = item.name
+      } else {
+        blob = await API.files.downloadDir(storageId, item.path)
+        filename = item.name + '.zip'
+      }
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
       a.href = url
-      a.download = item.name
+      a.download = filename
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {
@@ -180,10 +189,24 @@ export default function Files() {
 
   const handleDelete = async () => {
     try {
-      const path = deleteTarget.path || deleteTarget.name
+      const path = (deleteTarget.path || deleteTarget.name).replace(/\/+$/, '')
       await API.files.delete(storageId, path)
       addAlert('Deleted', 'success')
       setDeleteTarget(null)
+      loadTree()
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
+
+  const handleMove = async (item, newPath) => {
+    try {
+      const oldPath = item.is_file
+        ? (item.path || item.name)
+        : (item.path || item.name).replace(/\/$/, '')
+      await API.files.move(storageId, oldPath, newPath)
+      addAlert('Moved successfully', 'success')
+      setMoveTarget(null)
       loadTree()
     } catch (err) {
       addAlert(err.message, 'error')
@@ -266,6 +289,7 @@ export default function Files() {
                 onInfo={setInfoFile}
                 onDelete={setDeleteTarget}
                 onDownload={handleDownload}
+                onMove={setMoveTarget}
               />
             </Box>
           ))}
@@ -309,6 +333,14 @@ export default function Files() {
       />
 
       <NavigationBlockDialog blocker={blocker} />
+
+      <MoveDialog
+        open={!!moveTarget}
+        item={moveTarget}
+        storageId={storageId}
+        onMove={handleMove}
+        onClose={() => setMoveTarget(null)}
+      />
     </Box>
   )
 }

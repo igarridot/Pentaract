@@ -6,7 +6,6 @@ import (
 	"fmt"
 	"io"
 	"log"
-	"sort"
 	"sync"
 	"sync/atomic"
 
@@ -246,71 +245,60 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 }
 
 // Download retrieves all chunks from Telegram in parallel and reassembles the file.
+// Download returns the full file contents in memory. Only suitable for smaller files.
 func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byte, error) {
+	var buf bytes.Buffer
+	if err := m.DownloadToWriter(ctx, file, &buf); err != nil {
+		return nil, err
+	}
+	return buf.Bytes(), nil
+}
+
+// DownloadToWriter streams a file's chunks sequentially to the given writer.
+// Chunks are downloaded one at a time in order so only one chunk (~20MB) is in memory at once.
+func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer) error {
 	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
 	if err != nil {
-		return nil, fmt.Errorf("listing chunks: %w", err)
+		return fmt.Errorf("listing chunks: %w", err)
 	}
 
 	if len(chunks) == 0 {
-		return nil, domain.ErrNotFound("file chunks")
+		return domain.ErrNotFound("file chunks")
 	}
 
 	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
-		return nil, fmt.Errorf("getting storage: %w", err)
+		return fmt.Errorf("getting storage: %w", err)
 	}
 
 	log.Printf("[download] starting file=%s chunks=%d storage=%s chat=%s", file.Path, len(chunks), storage.Name, storage.Name)
 
-	type downloadResult struct {
-		Data     []byte
-		Position int16
-	}
-
-	var mu sync.Mutex
-	var results []downloadResult
-
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(5)
-
+	// Chunks are already sorted by position from ListChunks.
+	// Download and write sequentially to keep memory usage constant (~20MB).
 	for _, chunk := range chunks {
-		c := chunk
-		g.Go(func() error {
-			wt, err := m.scheduler.GetToken(gctx, storage.ID)
-			if err != nil {
-				return fmt.Errorf("getting token for download: %w", err)
-			}
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 
-			log.Printf("[download] chunk %d of file=%s via worker=%s chat=%s", c.Position, file.Path, wt.Name, storage.Name)
+		wt, err := m.scheduler.GetToken(ctx, storage.ID)
+		if err != nil {
+			return fmt.Errorf("getting token for chunk %d: %w", chunk.Position, err)
+		}
 
-			data, err := m.tgClient.Download(wt.Token, c.TelegramFileID)
-			if err != nil {
-				return fmt.Errorf("downloading chunk %d: %w", c.Position, err)
-			}
+		log.Printf("[download] chunk %d of file=%s via worker=%s chat=%s", chunk.Position, file.Path, wt.Name, storage.Name)
 
-			mu.Lock()
-			results = append(results, downloadResult{Data: data, Position: c.Position})
-			mu.Unlock()
+		data, err := m.tgClient.Download(wt.Token, chunk.TelegramFileID)
+		if err != nil {
+			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
+		}
 
-			return nil
-		})
-	}
-
-	if err := g.Wait(); err != nil {
-		return nil, err
-	}
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Position < results[j].Position
-	})
-
-	var buf bytes.Buffer
-	for _, r := range results {
-		buf.Write(r.Data)
+		if _, err := w.Write(data); err != nil {
+			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
+		}
 	}
 
 	log.Printf("[download] completed file=%s storage=%s chat=%s", file.Path, storage.Name, storage.Name)
-
-	return buf.Bytes(), nil
+	return nil
 }

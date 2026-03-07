@@ -10,14 +10,15 @@ import {
 } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
 
-export default function FSListItem({ item, storageId, currentPath, onInfo, onDelete, onDownload }) {
+export default function FSListItem({ item, storageId, currentPath, onInfo, onDelete, onDownload, onMove }) {
   const navigate = useNavigate()
   const [anchorEl, setAnchorEl] = useState(null)
 
   const handleClick = () => {
-    if (!item.is_file) {
-      const newPath = item.path
-      navigate(`/storages/${storageId}/files/${newPath}`)
+    if (item.is_file) {
+      if (onDownload) onDownload(item)
+    } else {
+      navigate(`/storages/${storageId}/files/${item.path}`)
     }
   }
 
@@ -47,11 +48,12 @@ export default function FSListItem({ item, storageId, currentPath, onInfo, onDel
             Info
           </MenuItem>
         )}
-        {item.is_file && (
-          <MenuItem onClick={handleDownload}>
-            Download
-          </MenuItem>
-        )}
+        <MenuItem onClick={handleDownload}>
+          {item.is_file ? 'Download' : 'Download as ZIP'}
+        </MenuItem>
+        <MenuItem onClick={() => { setAnchorEl(null); onMove(item) }}>
+          Move
+        </MenuItem>
         <MenuItem onClick={() => { setAnchorEl(null); onDelete(item) }}>
           Delete
         </MenuItem>

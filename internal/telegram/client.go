@@ -23,8 +23,10 @@ type Client struct {
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		baseURL:    baseURL,
-		httpClient: &http.Client{},
+		baseURL: baseURL,
+		httpClient: &http.Client{
+			Timeout: 10 * time.Minute, // 20MB chunks can be slow on limited connections
+		},
 	}
 }
 
