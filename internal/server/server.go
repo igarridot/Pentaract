@@ -89,6 +89,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			// Storage workers
 			r.Get("/storage_workers", workersH.List)
 			r.Post("/storage_workers", workersH.Create)
+			r.Delete("/storage_workers/{workerID}", workersH.Delete)
 			r.Get("/storage_workers/has_workers", workersH.HasWorkers)
 
 			// Files

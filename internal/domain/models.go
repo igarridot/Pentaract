@@ -70,10 +70,11 @@ type File struct {
 }
 
 type FileChunk struct {
-	ID             uuid.UUID `json:"id"`
-	FileID         uuid.UUID `json:"file_id"`
-	TelegramFileID string    `json:"telegram_file_id"`
-	Position       int16     `json:"position"`
+	ID                uuid.UUID `json:"id"`
+	FileID            uuid.UUID `json:"file_id"`
+	TelegramFileID    string    `json:"telegram_file_id"`
+	TelegramMessageID int64     `json:"telegram_message_id"`
+	Position          int16     `json:"position"`
 }
 
 type FSElement struct {

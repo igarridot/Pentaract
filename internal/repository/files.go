@@ -201,6 +201,32 @@ func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, s
 	return results, rows.Err()
 }
 
+// ListChunksByPath returns all chunks for files matching an exact path or folder prefix.
+func (r *FilesRepo) ListChunksByPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FileChunk, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT fc.id, fc.file_id, fc.telegram_file_id, fc.telegram_message_id, fc.position
+		FROM file_chunks fc
+		JOIN files f ON f.id = fc.file_id
+		WHERE f.storage_id = $1 AND (f.path = $2 OR f.path LIKE $3)
+		ORDER BY fc.file_id, fc.position`,
+		storageID, path, path+"/%",
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []domain.FileChunk
+	for rows.Next() {
+		var c domain.FileChunk
+		if err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.TelegramMessageID, &c.Position); err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
 func (r *FilesRepo) Delete(ctx context.Context, storageID uuid.UUID, path string) error {
 	// Delete exact file or all files under folder path
 	ct, err := r.pool.Exec(ctx,
@@ -222,21 +248,21 @@ func (r *FilesRepo) CreateChunks(ctx context.Context, chunks []domain.FileChunk)
 	}
 
 	valueStrings := make([]string, 0, len(chunks))
-	valueArgs := make([]interface{}, 0, len(chunks)*3)
+	valueArgs := make([]interface{}, 0, len(chunks)*4)
 	for i, c := range chunks {
-		base := i * 3
-		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d)", base+1, base+2, base+3))
-		valueArgs = append(valueArgs, c.FileID, c.TelegramFileID, c.Position)
+		base := i * 4
+		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d)", base+1, base+2, base+3, base+4))
+		valueArgs = append(valueArgs, c.FileID, c.TelegramFileID, c.TelegramMessageID, c.Position)
 	}
 
-	query := `INSERT INTO file_chunks (file_id, telegram_file_id, position) VALUES ` + strings.Join(valueStrings, ", ")
+	query := `INSERT INTO file_chunks (file_id, telegram_file_id, telegram_message_id, position) VALUES ` + strings.Join(valueStrings, ", ")
 	_, err := r.pool.Exec(ctx, query, valueArgs...)
 	return err
 }
 
 func (r *FilesRepo) ListChunks(ctx context.Context, fileID uuid.UUID) ([]domain.FileChunk, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT id, file_id, telegram_file_id, position FROM file_chunks WHERE file_id = $1 ORDER BY position`,
+		`SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = $1 ORDER BY position`,
 		fileID,
 	)
 	if err != nil {
@@ -247,7 +273,7 @@ func (r *FilesRepo) ListChunks(ctx context.Context, fileID uuid.UUID) ([]domain.
 	var chunks []domain.FileChunk
 	for rows.Next() {
 		var c domain.FileChunk
-		if err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.Position); err != nil {
+		if err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.TelegramMessageID, &c.Position); err != nil {
 			return nil, err
 		}
 		chunks = append(chunks, c)

@@ -81,8 +81,19 @@ func InitDB(ctx context.Context, pool *pgxpool.Pool) error {
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
 			file_id UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
 			telegram_file_id TEXT NOT NULL,
+			telegram_message_id BIGINT NOT NULL DEFAULT 0,
 			position SMALLINT NOT NULL
 		)`,
+
+		// Migration: add telegram_message_id if missing (existing DBs)
+		`DO $$ BEGIN
+			IF NOT EXISTS (
+				SELECT 1 FROM information_schema.columns
+				WHERE table_name = 'file_chunks' AND column_name = 'telegram_message_id'
+			) THEN
+				ALTER TABLE file_chunks ADD COLUMN telegram_message_id BIGINT NOT NULL DEFAULT 0;
+			END IF;
+		END $$`,
 
 		`CREATE TABLE IF NOT EXISTS storage_workers_usages (
 			id UUID PRIMARY KEY DEFAULT gen_random_uuid(),

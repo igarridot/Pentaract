@@ -2,26 +2,39 @@ import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Typography, List, ListItem, ListItemText, Paper, Box, Fab, Divider, Chip,
+  IconButton,
 } from '@mui/material'
-import { Add as AddIcon } from '@mui/icons-material'
+import { Add as AddIcon, Delete as DeleteIcon } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
+import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 
 export default function StorageWorkers() {
   const addAlert = useAlert()
   const [workers, setWorkers] = useState([])
+  const [deleteTarget, setDeleteTarget] = useState(null)
 
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await API.storageWorkers.list()
-        setWorkers(data || [])
-      } catch (err) {
-        addAlert(err.message, 'error')
-      }
+  const load = async () => {
+    try {
+      const data = await API.storageWorkers.list()
+      setWorkers(data || [])
+    } catch (err) {
+      addAlert(err.message, 'error')
     }
-    load()
-  }, [])
+  }
+
+  useEffect(() => { load() }, [])
+
+  const handleDelete = async () => {
+    try {
+      await API.storageWorkers.delete(deleteTarget.id)
+      setDeleteTarget(null)
+      addAlert('Worker deleted', 'success')
+      load()
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
 
   return (
     <Box>
@@ -32,13 +45,19 @@ export default function StorageWorkers() {
           {workers.map((w, i) => (
             <Box key={w.id}>
               {i > 0 && <Divider />}
-              <ListItem>
+              <ListItem
+                secondaryAction={
+                  <IconButton onClick={() => setDeleteTarget(w)} title="Delete worker">
+                    <DeleteIcon />
+                  </IconButton>
+                }
+              >
                 <ListItemText
                   primary={w.name}
                   secondary={`Token: ${w.token.substring(0, 10)}...`}
                 />
                 {w.storage_id && (
-                  <Chip label="Bound" size="small" color="primary" variant="outlined" />
+                  <Chip label="Bound" size="small" color="primary" variant="outlined" sx={{ mr: 4 }} />
                 )}
               </ListItem>
             </Box>
@@ -59,6 +78,15 @@ export default function StorageWorkers() {
       >
         <AddIcon />
       </Fab>
+
+      <ActionConfirmDialog
+        open={!!deleteTarget}
+        entity={deleteTarget?.name || 'worker'}
+        action="Delete"
+        description={`Are you sure you want to delete worker "${deleteTarget?.name}"?`}
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
     </Box>
   )
 }

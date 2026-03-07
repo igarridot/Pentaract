@@ -66,6 +66,22 @@ func (h *StorageWorkersHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workers)
 }
 
+func (h *StorageWorkersHandler) Delete(w http.ResponseWriter, r *http.Request) {
+	user := GetAuthUser(r.Context())
+	workerID, err := parseUUIDParam(r, "workerID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if err := h.svc.Delete(r.Context(), workerID, user.ID); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *StorageWorkersHandler) HasWorkers(w http.ResponseWriter, r *http.Request) {
 	storageIDStr := r.URL.Query().Get("storage_id")
 	if storageIDStr == "" {

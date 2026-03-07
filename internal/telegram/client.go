@@ -5,7 +5,6 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
-	"math"
 	"mime/multipart"
 	"net/http"
 	"strconv"
@@ -26,18 +25,24 @@ func NewClient(baseURL string) *Client {
 }
 
 // convertChatID converts a regular chat ID to the Telegram Bot API format.
-// Formula: chat_id = original - (100 * 10^n) where n = number of digits of abs(original)
+// Prepends -100 to the channel ID: 3696691277 -> -1003696691277
 func convertChatID(chatID int64) int64 {
-	abs := chatID
-	if abs < 0 {
-		abs = -abs
+	if chatID < 0 {
+		return chatID
 	}
-	n := len(strconv.FormatInt(abs, 10))
-	return chatID - int64(100*math.Pow10(n))
+	s := fmt.Sprintf("-100%d", chatID)
+	result, _ := strconv.ParseInt(s, 10, 64)
+	return result
+}
+
+// UploadResult holds the result of a sendDocument call.
+type UploadResult struct {
+	FileID    string
+	MessageID int64
 }
 
 // Upload sends a file to a Telegram channel via sendDocument.
-func (c *Client) Upload(token string, chatID int64, data []byte, filename string) (string, error) {
+func (c *Client) Upload(token string, chatID int64, data []byte, filename string) (*UploadResult, error) {
 	convertedChatID := convertChatID(chatID)
 
 	var body bytes.Buffer
@@ -47,41 +52,63 @@ func (c *Client) Upload(token string, chatID int64, data []byte, filename string
 
 	part, err := writer.CreateFormFile("document", filename)
 	if err != nil {
-		return "", fmt.Errorf("creating form file: %w", err)
+		return nil, fmt.Errorf("creating form file: %w", err)
 	}
 	if _, err := part.Write(data); err != nil {
-		return "", fmt.Errorf("writing file data: %w", err)
+		return nil, fmt.Errorf("writing file data: %w", err)
 	}
 	writer.Close()
 
-	url := fmt.Sprintf("%s/bot%s/sendDocument", c.baseURL, token)
-	req, err := http.NewRequest("POST", url, &body)
+	apiURL := fmt.Sprintf("%s/bot%s/sendDocument", c.baseURL, token)
+	req, err := http.NewRequest("POST", apiURL, &body)
 	if err != nil {
-		return "", fmt.Errorf("creating request: %w", err)
+		return nil, fmt.Errorf("creating request: %w", err)
 	}
 	req.Header.Set("Content-Type", writer.FormDataContentType())
 
 	resp, err := c.httpClient.Do(req)
 	if err != nil {
-		return "", fmt.Errorf("sending document: %w", err)
+		return nil, fmt.Errorf("sending document: %w", err)
 	}
 	defer resp.Body.Close()
 
 	if resp.StatusCode != http.StatusOK {
 		respBody, _ := io.ReadAll(resp.Body)
-		return "", fmt.Errorf("telegram API error (status %d): %s", resp.StatusCode, string(respBody))
+		return nil, fmt.Errorf("telegram API error (status %d): %s", resp.StatusCode, string(respBody))
 	}
 
 	var result SendDocumentResponse
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
-		return "", fmt.Errorf("decoding response: %w", err)
+		return nil, fmt.Errorf("decoding response: %w", err)
 	}
 
 	if !result.OK {
-		return "", fmt.Errorf("telegram sendDocument failed")
+		return nil, fmt.Errorf("telegram sendDocument failed")
 	}
 
-	return result.Result.Document.FileID, nil
+	return &UploadResult{
+		FileID:    result.Result.Document.FileID,
+		MessageID: result.Result.MessageID,
+	}, nil
+}
+
+// DeleteMessage deletes a message from a Telegram channel.
+func (c *Client) DeleteMessage(token string, chatID int64, messageID int64) error {
+	convertedChatID := convertChatID(chatID)
+	apiURL := fmt.Sprintf("%s/bot%s/deleteMessage?chat_id=%d&message_id=%d",
+		c.baseURL, token, convertedChatID, messageID)
+
+	resp, err := c.httpClient.Get(apiURL)
+	if err != nil {
+		return fmt.Errorf("deleting message: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		return fmt.Errorf("telegram deleteMessage error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+	return nil
 }
 
 // Download retrieves a file from Telegram by its file_id.

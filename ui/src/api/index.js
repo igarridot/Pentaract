@@ -28,6 +28,7 @@ const API = {
     list: () => apiRequest('/storage_workers'),
     create: (name, token, storage_id) =>
       apiRequest('/storage_workers', 'POST', { name, token, storage_id: storage_id || null }),
+    delete: (id) => apiRequest(`/storage_workers/${id}`, 'DELETE'),
     hasWorkers: (storageId) => apiRequest(`/storage_workers/has_workers?storage_id=${storageId}`),
   },
 

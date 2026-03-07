@@ -117,7 +117,29 @@ func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, 
 		return domain.ErrForbidden()
 	}
 
-	return s.filesRepo.Delete(ctx, storageID, path)
+	// Get chunks before deleting (CASCADE will remove them from DB)
+	chunks, err := s.filesRepo.ListChunksByPath(ctx, storageID, path)
+	if err != nil {
+		return err
+	}
+
+	// Get storage info for Telegram deletion
+	storage, err := s.manager.storagesRepo.GetByID(ctx, storageID)
+	if err != nil {
+		return err
+	}
+
+	// Delete from DB first
+	if err := s.filesRepo.Delete(ctx, storageID, path); err != nil {
+		return err
+	}
+
+	// Delete from Telegram (best-effort, don't fail if this errors)
+	if len(chunks) > 0 {
+		go s.manager.DeleteFromTelegram(context.Background(), *storage, chunks)
+	}
+
+	return nil
 }
 
 func (s *FilesService) GetFileInfo(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {

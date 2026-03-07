@@ -3,7 +3,8 @@ package telegram
 type SendDocumentResponse struct {
 	OK     bool `json:"ok"`
 	Result struct {
-		Document struct {
+		MessageID int64 `json:"message_id"`
+		Document  struct {
 			FileID string `json:"file_id"`
 		} `json:"document"`
 	} `json:"result"`

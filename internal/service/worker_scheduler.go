@@ -24,26 +24,26 @@ func NewWorkerScheduler(workersRepo *repository.StorageWorkersRepo, rateLimit in
 }
 
 // GetToken blocks until a worker token is available for the given storage.
-func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (string, error) {
+func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*repository.WorkerToken, error) {
 	for {
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		default:
 		}
 
-		token, err := s.workersRepo.GetToken(ctx, storageID, s.rateLimit)
+		wt, err := s.workersRepo.GetToken(ctx, storageID, s.rateLimit)
 		if err != nil {
-			return "", fmt.Errorf("getting worker token: %w", err)
+			return nil, fmt.Errorf("getting worker token: %w", err)
 		}
-		if token != "" {
-			return token, nil
+		if wt != nil {
+			return wt, nil
 		}
 
 		log.Printf("No workers available for storage %s, retrying in 1s...", storageID)
 		select {
 		case <-ctx.Done():
-			return "", ctx.Err()
+			return nil, ctx.Err()
 		case <-time.After(1 * time.Second):
 		}
 	}

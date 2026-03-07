@@ -5,6 +5,7 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"log"
 	"sort"
 	"sync"
 	"sync/atomic"
@@ -53,16 +54,18 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		return fmt.Errorf("getting storage: %w", err)
 	}
 
+	log.Printf("[upload] starting file=%s storage=%s (chat=%s)", file.Path, storage.Name, storage.Name)
+
 	type chunkResult struct {
-		TelegramFileID string
-		Position       int16
+		TelegramFileID    string
+		TelegramMessageID int64
+		Position          int16
 	}
 
 	var mu sync.Mutex
 	var results []chunkResult
 
 	g, gctx := errgroup.WithContext(ctx)
-	// Limit parallel uploads to avoid excessive memory (N chunks * 20MB in flight)
 	g.SetLimit(5)
 
 	position := int16(0)
@@ -77,19 +80,25 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		position++
 
 		g.Go(func() error {
-			token, err := m.scheduler.GetToken(gctx, storage.ID)
+			wt, err := m.scheduler.GetToken(gctx, storage.ID)
 			if err != nil {
 				return fmt.Errorf("getting token for chunk %d: %w", pos, err)
 			}
 
+			log.Printf("[upload] chunk %d of file=%s via worker=%s chat=%s", pos, file.Path, wt.Name, storage.Name)
+
 			filename := telegram.GenerateChunkFilename(file.ID, int(pos))
-			fileID, err := m.tgClient.Upload(token, storage.ChatID, chunkData, filename)
+			result, err := m.tgClient.Upload(wt.Token, storage.ChatID, chunkData, filename)
 			if err != nil {
 				return fmt.Errorf("uploading chunk %d: %w", pos, err)
 			}
 
 			mu.Lock()
-			results = append(results, chunkResult{TelegramFileID: fileID, Position: pos})
+			results = append(results, chunkResult{
+				TelegramFileID:    result.FileID,
+				TelegramMessageID: result.MessageID,
+				Position:          pos,
+			})
 			mu.Unlock()
 
 			if progress != nil {
@@ -116,9 +125,10 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 	fileChunks := make([]domain.FileChunk, len(results))
 	for i, r := range results {
 		fileChunks[i] = domain.FileChunk{
-			FileID:         file.ID,
-			TelegramFileID: r.TelegramFileID,
-			Position:       r.Position,
+			FileID:            file.ID,
+			TelegramFileID:    r.TelegramFileID,
+			TelegramMessageID: r.TelegramMessageID,
+			Position:          r.Position,
 		}
 	}
 
@@ -130,7 +140,39 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		return fmt.Errorf("marking file as uploaded: %w", err)
 	}
 
+	log.Printf("[upload] completed file=%s chunks=%d storage=%s chat=%s", file.Path, len(results), storage.Name, storage.Name)
+
 	return nil
+}
+
+// DeleteFromTelegram deletes chunk messages from Telegram for the given chunks.
+func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk) {
+	log.Printf("[delete] removing %d chunks from telegram chat=%s", len(chunks), storage.Name)
+
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(5)
+
+	for _, chunk := range chunks {
+		c := chunk
+		if c.TelegramMessageID == 0 {
+			continue
+		}
+		g.Go(func() error {
+			wt, err := m.scheduler.GetToken(gctx, storage.ID)
+			if err != nil {
+				log.Printf("[delete] WARNING: could not get token to delete message %d from chat=%s: %v", c.TelegramMessageID, storage.Name, err)
+				return nil
+			}
+			log.Printf("[delete] deleting message %d via worker=%s chat=%s", c.TelegramMessageID, wt.Name, storage.Name)
+			if err := m.tgClient.DeleteMessage(wt.Token, storage.ChatID, c.TelegramMessageID); err != nil {
+				log.Printf("[delete] WARNING: could not delete message %d via worker=%s chat=%s: %v", c.TelegramMessageID, wt.Name, storage.Name, err)
+			}
+			return nil
+		})
+	}
+
+	g.Wait()
+	log.Printf("[delete] finished removing chunks from chat=%s", storage.Name)
 }
 
 // Download retrieves all chunks from Telegram in parallel and reassembles the file.
@@ -149,6 +191,8 @@ func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byt
 		return nil, fmt.Errorf("getting storage: %w", err)
 	}
 
+	log.Printf("[download] starting file=%s chunks=%d storage=%s chat=%s", file.Path, len(chunks), storage.Name, storage.Name)
+
 	type downloadResult struct {
 		Data     []byte
 		Position int16
@@ -163,12 +207,14 @@ func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byt
 	for _, chunk := range chunks {
 		c := chunk
 		g.Go(func() error {
-			token, err := m.scheduler.GetToken(gctx, storage.ID)
+			wt, err := m.scheduler.GetToken(gctx, storage.ID)
 			if err != nil {
 				return fmt.Errorf("getting token for download: %w", err)
 			}
 
-			data, err := m.tgClient.Download(token, c.TelegramFileID)
+			log.Printf("[download] chunk %d of file=%s via worker=%s chat=%s", c.Position, file.Path, wt.Name, storage.Name)
+
+			data, err := m.tgClient.Download(wt.Token, c.TelegramFileID)
 			if err != nil {
 				return fmt.Errorf("downloading chunk %d: %w", c.Position, err)
 			}
@@ -185,7 +231,6 @@ func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byt
 		return nil, err
 	}
 
-	// Sort by position and concatenate
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Position < results[j].Position
 	})
@@ -194,6 +239,8 @@ func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byt
 	for _, r := range results {
 		buf.Write(r.Data)
 	}
+
+	log.Printf("[download] completed file=%s storage=%s chat=%s", file.Path, storage.Name, storage.Name)
 
 	return buf.Bytes(), nil
 }

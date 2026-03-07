@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams, useNavigate, useLocation } from 'react-router-dom'
+import { useParams, useNavigate, useLocation, useBlocker } from 'react-router-dom'
 import {
   Typography, List, Paper, Box, TextField, InputAdornment,
   MenuItem, Divider, Breadcrumbs, Link as MuiLink, Button,
@@ -15,6 +15,7 @@ import FSListItem from '../../components/FSListItem'
 import FileInfo from '../../components/FileInfo'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
+import NavigationBlockDialog from '../../components/NavigationBlockDialog'
 import FloatingMenu from '../../components/Menu'
 import UploadProgress from '../../components/UploadProgress'
 
@@ -59,6 +60,22 @@ export default function Files() {
       if (cancelProgressRef.current) cancelProgressRef.current()
     }
   }, [])
+
+  // Warn before closing/navigating away during upload
+  const isUploading = uploadState?.status === 'uploading'
+
+  useEffect(() => {
+    if (!isUploading) return
+    const handler = (e) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isUploading])
+
+  // Block SPA navigation during upload
+  const blocker = useBlocker(isUploading)
 
   const handleSearch = async (e) => {
     e.preventDefault()
@@ -233,9 +250,9 @@ export default function Files() {
           <MenuItem key="folder" onClick={() => { close(); setFolderDialogOpen(true) }}>
             <FolderAddIcon sx={{ mr: 1 }} /> New Folder
           </MenuItem>,
-          <MenuItem key="upload" component="label" onClick={close}>
+          <MenuItem key="upload" component="label">
             <UploadIcon sx={{ mr: 1 }} /> Upload File
-            <input type="file" hidden onChange={handleUpload} />
+            <input type="file" hidden onChange={(e) => { close(); handleUpload(e) }} />
           </MenuItem>,
         ]}
       </FloatingMenu>
@@ -256,6 +273,8 @@ export default function Files() {
         onConfirm={handleDelete}
         onCancel={() => setDeleteTarget(null)}
       />
+
+      <NavigationBlockDialog blocker={blocker} />
     </Box>
   )
 }

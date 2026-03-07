@@ -25,8 +25,10 @@ export async function apiRequest(path, method = 'GET', body = null, auth = true,
     throw new Error(data.error || `Request failed with status ${resp.status}`)
   }
 
-  if (resp.status === 204) return null
-  return resp.json()
+  if (resp.status === 204 || resp.headers.get('Content-Length') === '0') return null
+  const text = await resp.text()
+  if (!text) return null
+  return JSON.parse(text)
 }
 
 export async function apiMultipartRequest(path, method, formData, auth = true) {
@@ -48,6 +50,8 @@ export async function apiMultipartRequest(path, method, formData, auth = true) {
     throw new Error(data.error || `Request failed with status ${resp.status}`)
   }
 
-  if (resp.status === 204) return null
-  return resp.json()
+  if (resp.status === 204 || resp.headers.get('Content-Length') === '0') return null
+  const text = await resp.text()
+  if (!text) return null
+  return JSON.parse(text)
 }
