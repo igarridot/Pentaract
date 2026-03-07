@@ -1,4 +1,4 @@
-FROM golang:1.24-alpine
+FROM public.ecr.aws/docker/library/golang:1.24-alpine
 
 RUN apk add --no-cache ca-certificates nodejs npm git
 RUN npm install -g pnpm@latest

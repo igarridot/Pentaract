@@ -1,5 +1,5 @@
 # Stage 1: Build Go binary
-FROM --platform=$BUILDPLATFORM golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.24-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o pentaract ./cmd/pentaract
 
 # Stage 2: Build UI
-FROM node:22-slim AS ui
+FROM public.ecr.aws/docker/library/node:22-slim AS ui
 
 WORKDIR /app
 COPY ui/package.json ui/pnpm-lock.yaml* ./
