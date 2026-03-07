@@ -4,11 +4,13 @@ Cloud storage system that uses **Telegram as the storage backend**. Files are sp
 
 Built with **Go 1.24** (Chi, pgx) + **React 18** (Material UI 5) + **PostgreSQL 15**. Supports **amd64** and **arm64** architectures.
 
+## Credits
+
+Before continuing, please note that this project is based on the original [Pentaract](https://github.com/Dominux/Pentaract) idea. I have rewrote the full code as the original seems abandoned, but the core concept is derived from the original. All credit for the initial idea and implementation goes to the original author.
+
 ## Prerequisites
 
-- Docker and Docker Compose
-
-Nothing else needs to be installed on the host machine. All compilation, dependency management, and execution happens inside containers.
+Docker and Docker Compose
 
 ## Quick start
 
@@ -31,6 +33,15 @@ Edit `.env` and set at minimum:
 make up
 ```
 
+1. Create a Telegram channel (private recommended)
+2. Send a message in the channel and forward it to [@RawDataBot](https://t.me/RawDataBot) to get the channel's `chat_id`
+3. Create one or more Telegram bots via [@BotFather](https://t.me/BotFather) and save their tokens
+4. Add the bots as administrators of the channel (they need permission to post messages)
+5. In Pentaract:
+   - Go to **Storages** and create a storage with the channel's `chat_id`
+   - Go to **Workers** and create a worker with each bot token
+6. Upload files through the **Files** browser
+
 The application will be available at **http://localhost:8000** (or whatever `PORT` you configured).
 
 To stop:
@@ -38,6 +49,23 @@ To stop:
 ```bash
 make down
 ```
+
+---
+
+## How it works
+
+```
+Browser  -->  Go HTTP server  -->  PostgreSQL (metadata)
+                    |
+                    v
+              Telegram Bot API (file storage)
+```
+
+1. Users create **Storages**, each linked to a Telegram channel via its `chat_id`
+2. Users register **Storage Workers** (Telegram bots) and optionally bind them to storages
+3. On **upload**, files are split into 20 MB chunks and uploaded to the Telegram channel in parallel using available bot workers
+4. On **download**, chunks are fetched from Telegram in parallel and reassembled in order
+5. A **rate limiter** tracks bot usage per minute and selects the least-loaded available worker
 
 ### What `make up` does
 
@@ -157,7 +185,7 @@ The Vite dev server proxies `/api` requests to the backend.
 - Storage owners automatically get admin access
 
 ### UI
-- Apple-inspired minimalist design with Inter font, frosted glass effects, and pill-shaped buttons
+- Minimalist design with Inter font, frosted glass effects, and pill-shaped buttons
 - **Dark mode** with three options: Light, Dark, and Auto (follows system preference), persisted to localStorage
 - Responsive layout with collapsible sidebar
 
@@ -167,34 +195,6 @@ The Docker image supports both `linux/amd64` and `linux/arm64`. The Go binary is
 ```bash
 docker buildx build --platform linux/amd64,linux/arm64 -t pentaract .
 ```
-
----
-
-## How it works
-
-```
-Browser  -->  Go HTTP server  -->  PostgreSQL (metadata)
-                    |
-                    v
-              Telegram Bot API (file storage)
-```
-
-1. Users create **Storages**, each linked to a Telegram channel via its `chat_id`
-2. Users register **Storage Workers** (Telegram bots) and optionally bind them to storages
-3. On **upload**, files are split into 20 MB chunks and uploaded to the Telegram channel in parallel using available bot workers
-4. On **download**, chunks are fetched from Telegram in parallel and reassembled in order
-5. A **rate limiter** tracks bot usage per minute and selects the least-loaded available worker
-
-### Setting up Telegram storage
-
-1. Create a Telegram channel (private recommended)
-2. Send a message in the channel and forward it to [@RawDataBot](https://t.me/RawDataBot) to get the channel's `chat_id`
-3. Create one or more Telegram bots via [@BotFather](https://t.me/BotFather) and save their tokens
-4. Add the bots as administrators of the channel (they need permission to post messages)
-5. In Pentaract:
-   - Go to **Storages** and create a storage with the channel's `chat_id`
-   - Go to **Workers** and create a worker with each bot token
-6. Upload files through the **Files** browser
 
 ---
 
