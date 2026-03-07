@@ -48,6 +48,38 @@ type createFolderRequest struct {
 	FolderName string `json:"folder_name"`
 }
 
+type moveFileRequest struct {
+	OldPath string `json:"old_path"`
+	NewPath string `json:"new_path"`
+}
+
+func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
+	user := GetAuthUser(r.Context())
+	storageID, err := parseUUIDParam(r, "storageID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	var req moveFileRequest
+	if err := parseBody(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if req.OldPath == "" || req.NewPath == "" {
+		writeError(w, domain.ErrBadRequest("old_path and new_path are required"))
+		return
+	}
+
+	if err := h.svc.Move(r.Context(), user.ID, storageID, req.OldPath, req.NewPath); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	w.WriteHeader(http.StatusNoContent)
+}
+
 func (h *FilesHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
 	storageID, err := parseUUIDParam(r, "storageID")
@@ -125,6 +157,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	path = strings.TrimSuffix(path, "/")
 	fullPath := filename
 	if path != "" {
 		fullPath = path + "/" + filename
@@ -164,7 +197,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	// Start upload in background
 	go func() {
 		defer func() {
-			time.AfterFunc(30*time.Second, func() {
+			time.AfterFunc(5*time.Minute, func() {
 				h.mu.Lock()
 				delete(h.uploads, uploadID)
 				h.mu.Unlock()
@@ -330,6 +363,34 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	w.Write(data)
 }
 
+func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
+	user := GetAuthUser(r.Context())
+	storageID, err := parseUUIDParam(r, "storageID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	path := extractWildcardPath(r)
+
+	// Derive zip filename from path
+	trimmed := strings.TrimSuffix(path, "/")
+	dirName := trimmed
+	if idx := strings.LastIndex(trimmed, "/"); idx >= 0 {
+		dirName = trimmed[idx+1:]
+	}
+	if dirName == "" {
+		dirName = "files"
+	}
+
+	w.Header().Set("Content-Type", "application/zip")
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, dirName))
+
+	if _, err := h.svc.DownloadDir(r.Context(), user.ID, storageID, path, w); err != nil {
+		log.Printf("[download-dir] error: %v", err)
+	}
+}
+
 func (h *FilesHandler) Tree(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
 	storageID, err := parseUUIDParam(r, "storageID")
@@ -384,6 +445,7 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := extractWildcardPath(r)
+	path = strings.TrimSuffix(path, "/")
 	if path == "" {
 		writeError(w, domain.ErrBadRequest("file path is required"))
 		return

@@ -159,6 +159,10 @@ func (r *FilesRepo) ListDir(ctx context.Context, storageID uuid.UUID, path strin
 		if err := rows.Scan(&fullPath, &el.Name, &el.Size, &el.IsFile); err != nil {
 			return nil, err
 		}
+		// Hide .folder placeholder files
+		if el.IsFile && el.Name == ".folder" {
+			continue
+		}
 		if el.IsFile {
 			el.Path = fullPath
 		} else {
@@ -182,6 +186,7 @@ func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, s
 			AND path LIKE $2 || '%'
 			AND path LIKE $3
 			AND is_uploaded = true
+			AND path NOT LIKE '%/.folder'
 		ORDER BY path`,
 		storageID, basePath, pattern,
 	)
@@ -279,6 +284,63 @@ func (r *FilesRepo) ListChunks(ctx context.Context, fileID uuid.UUID) ([]domain.
 		chunks = append(chunks, c)
 	}
 	return chunks, rows.Err()
+}
+
+// ListFilesUnderPath returns all uploaded files under a directory prefix.
+func (r *FilesRepo) ListFilesUnderPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) {
+	if path != "" && !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+
+	rows, err := r.pool.Query(ctx,
+		`SELECT id, path, size, storage_id, is_uploaded FROM files
+		WHERE storage_id = $1 AND path LIKE $2 || '%' AND is_uploaded = true AND path NOT LIKE '%/.folder'
+		ORDER BY path`,
+		storageID, path,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var files []domain.File
+	for rows.Next() {
+		var f domain.File
+		if err := rows.Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded); err != nil {
+			return nil, err
+		}
+		files = append(files, f)
+	}
+	return files, rows.Err()
+}
+
+// Move renames a file or moves all files under a folder prefix to a new path.
+func (r *FilesRepo) Move(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error {
+	// Move single file
+	ct, err := r.pool.Exec(ctx,
+		`UPDATE files SET path = $3 WHERE storage_id = $1 AND path = $2`,
+		storageID, oldPath, newPath,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() > 0 {
+		return nil
+	}
+
+	// Move folder: update all files under oldPath/
+	ct, err = r.pool.Exec(ctx,
+		`UPDATE files SET path = $3 || substring(path from length($2) + 1)
+		WHERE storage_id = $1 AND path LIKE $2 || '/%'`,
+		storageID, oldPath, newPath,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return domain.ErrNotFound("file")
+	}
+	return nil
 }
 
 // CreateFolder creates a placeholder file for a folder (size=0, is_uploaded=true).

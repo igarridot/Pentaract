@@ -1,8 +1,10 @@
 package service
 
 import (
+	"archive/zip"
 	"context"
 	"io"
+	"strings"
 
 	"github.com/google/uuid"
 
@@ -140,6 +142,72 @@ func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, 
 	}
 
 	return nil
+}
+
+// DownloadDir writes all files under a directory as a zip archive to the given writer.
+func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer) (string, error) {
+	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
+	if err != nil {
+		return "", err
+	}
+	if !ok {
+		return "", domain.ErrForbidden()
+	}
+
+	files, err := s.filesRepo.ListFilesUnderPath(ctx, storageID, dirPath)
+	if err != nil {
+		return "", err
+	}
+	if len(files) == 0 {
+		return "", domain.ErrNotFound("files in directory")
+	}
+
+	// Determine zip filename from directory name
+	trimmed := strings.TrimSuffix(dirPath, "/")
+	dirName := trimmed
+	if idx := strings.LastIndex(trimmed, "/"); idx >= 0 {
+		dirName = trimmed[idx+1:]
+	}
+	if dirName == "" {
+		dirName = "files"
+	}
+
+	zipWriter := zip.NewWriter(w)
+	defer zipWriter.Close()
+
+	prefix := dirPath
+	if prefix != "" && !strings.HasSuffix(prefix, "/") {
+		prefix += "/"
+	}
+
+	for _, file := range files {
+		// Use relative path within the directory
+		relPath := strings.TrimPrefix(file.Path, prefix)
+
+		entry, err := zipWriter.Create(relPath)
+		if err != nil {
+			return "", err
+		}
+
+		// Stream chunks directly into the zip entry — no full file buffering
+		if err := s.manager.DownloadToWriter(ctx, &file, entry); err != nil {
+			return "", err
+		}
+	}
+
+	return dirName, nil
+}
+
+func (s *FilesService) Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error {
+	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessWrite)
+	if err != nil {
+		return err
+	}
+	if !ok {
+		return domain.ErrForbidden()
+	}
+
+	return s.filesRepo.Move(ctx, storageID, oldPath, newPath)
 }
 
 func (s *FilesService) GetFileInfo(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {

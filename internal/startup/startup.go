@@ -104,6 +104,9 @@ func InitDB(ctx context.Context, pool *pgxpool.Pool) error {
 		`CREATE OR REPLACE FUNCTION regexp_quote(text) RETURNS text AS $$
 			SELECT regexp_replace($1, '([.?*+^$[\]\\(){}|\\-])', '\\\1', 'g');
 		$$ LANGUAGE sql IMMUTABLE`,
+
+		// Fix double slashes in file paths from previous bug
+		`UPDATE files SET path = regexp_replace(path, '//', '/', 'g') WHERE path LIKE '%//%'`,
 	}
 
 	tx, err := pool.Begin(ctx)

@@ -56,7 +56,6 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	// Middleware
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
-	r.Use(middleware.Throttle(cfg.Workers))
 	r.Use(cors.Handler(cors.Options{
 		AllowedOrigins:   []string{"*"},
 		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
@@ -89,15 +88,18 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			// Storage workers
 			r.Get("/storage_workers", workersH.List)
 			r.Post("/storage_workers", workersH.Create)
+			r.Put("/storage_workers/{workerID}", workersH.Update)
 			r.Delete("/storage_workers/{workerID}", workersH.Delete)
 			r.Get("/storage_workers/has_workers", workersH.HasWorkers)
 
 			// Files
 			r.Post("/storages/{storageID}/files/create_folder", filesH.CreateFolder)
+			r.Post("/storages/{storageID}/files/move", filesH.Move)
 			r.Post("/storages/{storageID}/files/upload", filesH.Upload)
 			r.Post("/storages/{storageID}/files/upload_to", filesH.UploadTo)
 			r.Get("/storages/{storageID}/files/tree/*", filesH.Tree)
 			r.Get("/storages/{storageID}/files/download/*", filesH.Download)
+			r.Get("/storages/{storageID}/files/download_dir/*", filesH.DownloadDir)
 			r.Get("/storages/{storageID}/files/search/*", filesH.Search)
 			r.Delete("/storages/{storageID}/files/*", filesH.DeleteFile)
 

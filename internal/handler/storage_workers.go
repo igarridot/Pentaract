@@ -66,6 +66,44 @@ func (h *StorageWorkersHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workers)
 }
 
+type updateWorkerRequest struct {
+	Name      string  `json:"name"`
+	StorageID *string `json:"storage_id"`
+}
+
+func (h *StorageWorkersHandler) Update(w http.ResponseWriter, r *http.Request) {
+	user := GetAuthUser(r.Context())
+	workerID, err := parseUUIDParam(r, "workerID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	var req updateWorkerRequest
+	if err := parseBody(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	var storageID *uuid.UUID
+	if req.StorageID != nil && *req.StorageID != "" {
+		id, err := uuid.Parse(*req.StorageID)
+		if err != nil {
+			writeError(w, domain.ErrBadRequest("invalid storage_id"))
+			return
+		}
+		storageID = &id
+	}
+
+	worker, err := h.svc.Update(r.Context(), workerID, user.ID, req.Name, storageID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	writeJSON(w, http.StatusOK, worker)
+}
+
 func (h *StorageWorkersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
 	workerID, err := parseUUIDParam(r, "workerID")
