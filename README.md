@@ -34,7 +34,7 @@ make up
 ```
 
 1. Create a Telegram channel (private recommended)
-2. Send a message in the channel and forward it to [@RawDataBot](https://t.me/RawDataBot) to get the channel's `chat_id`
+2. Send a message in the channel and forward it to [@RawDataBot](https://t.me/RawDataBot) to get the channel's `message.forward_origin.chat.id`. Remove heading "-100"
 3. Create one or more Telegram bots via [@BotFather](https://t.me/BotFather) and save their tokens
 4. Add the bots as administrators of the channel (they need permission to post messages)
 5. In Pentaract:
