@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"io"
 
 	"github.com/google/uuid"
 
@@ -40,7 +41,7 @@ func (s *FilesService) CreateFolder(ctx context.Context, userID, storageID uuid.
 	return s.filesRepo.CreateFolder(ctx, storageID, fullPath)
 }
 
-func (s *FilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, path string, data []byte) (*domain.File, error) {
+func (s *FilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *UploadProgress) (*domain.File, error) {
 	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessWrite)
 	if err != nil {
 		return nil, err
@@ -49,12 +50,12 @@ func (s *FilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, 
 		return nil, domain.ErrForbidden()
 	}
 
-	file, err := s.filesRepo.CreateFileAnyway(ctx, path, int64(len(data)), storageID)
+	file, err := s.filesRepo.CreateFileAnyway(ctx, path, size, storageID)
 	if err != nil {
 		return nil, err
 	}
 
-	if err := s.manager.Upload(ctx, file, data); err != nil {
+	if err := s.manager.Upload(ctx, file, reader, progress); err != nil {
 		return nil, err
 	}
 

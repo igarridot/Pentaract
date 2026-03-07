@@ -58,11 +58,13 @@ func main() {
 	handler := server.New(cfg, pool)
 
 	srv := &http.Server{
-		Addr:         fmt.Sprintf("0.0.0.0:%d", cfg.Port),
-		Handler:      handler,
-		ReadTimeout:  30 * time.Second,
-		WriteTimeout: 5 * time.Minute,
-		IdleTimeout:  120 * time.Second,
+		Addr:              fmt.Sprintf("0.0.0.0:%d", cfg.Port),
+		Handler:           handler,
+		ReadHeaderTimeout: 30 * time.Second,
+		// No ReadTimeout/WriteTimeout: large file uploads and downloads
+		// can take hours depending on file size and Telegram rate limits.
+		// Per-request timeouts are handled via context cancellation.
+		IdleTimeout: 120 * time.Second,
 	}
 
 	// Graceful shutdown
