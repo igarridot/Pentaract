@@ -2,7 +2,7 @@
 
 Cloud storage system that uses **Telegram as the storage backend**. Files are split into 20 MB chunks, uploaded to Telegram channels via bot workers, and reassembled on download.
 
-Built with **Go 1.24** (Chi, pgx) + **React 18** (Material UI 5) + **PostgreSQL 15**.
+Built with **Go 1.24** (Chi, pgx) + **React 18** (Material UI 5) + **PostgreSQL 15**. Supports **amd64** and **arm64** architectures.
 
 ## Prerequisites
 
@@ -42,12 +42,29 @@ make down
 ### What `make up` does
 
 1. Builds a multi-stage Docker image (`Dockerfile`):
-   - Stage 1: Compiles the Go binary (`golang:1.24-alpine`)
-   - Stage 2: Builds the React frontend (`node:21-slim` + Vite)
+   - Stage 1: Cross-compiles the Go binary for the target architecture (`golang:1.24-alpine`)
+   - Stage 2: Builds the React frontend (`node:22-slim` + Vite)
    - Stage 3: Copies both into a minimal `scratch` image
 2. Starts PostgreSQL 15 with a health check
 3. Starts the Pentaract server once the database is healthy
 4. The server automatically creates the database schema and the superuser on first boot
+
+### Persistent data
+
+All persistent data is stored under `persistent_data/` in the project root, organized by component:
+
+| Directory | Contents |
+|-----------|----------|
+| `persistent_data/db/` | PostgreSQL database files |
+| `persistent_data/go-mod-cache/` | Go module cache (dev only) |
+| `persistent_data/go-build-cache/` | Go build cache (dev only) |
+
+This directory is excluded from version control via `.gitignore`. To reset all data, stop the stack and delete the directory:
+
+```bash
+make down
+rm -rf persistent_data/
+```
 
 ### Production environment variables
 
@@ -72,6 +89,8 @@ make down
 ## Development
 
 The project includes a `dev` service that provides a containerized Go + Node toolchain. Your source code is mounted as a volume, so edits on the host are reflected immediately. **No local Go or Node installation required.**
+
+Build caches (Go modules and build artifacts) are persisted under `persistent_data/go-mod-cache/` and `persistent_data/go-build-cache/` so subsequent builds are fast.
 
 ### Available make targets
 
@@ -180,6 +199,18 @@ Browser  -->  Go HTTP server  -->  PostgreSQL (metadata)
    - Go to **Storages** and create a storage with the channel's `chat_id`
 6. Upload files through the **Files** browser
 
+### Multi-architecture support
+
+The production Docker image supports both `linux/amd64` and `linux/arm64`. The `Dockerfile` uses BuildKit's `--platform=$BUILDPLATFORM` with Go cross-compilation (`GOOS`/`GOARCH` from `TARGETOS`/`TARGETARCH` build args), so the Go binary is compiled natively for the target architecture regardless of the host. All base images (`golang:1.24-alpine`, `node:22-slim`, `postgres:15-alpine`) publish multi-arch manifests.
+
+To build a multi-platform image manually:
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t pentaract .
+```
+
+The CI workflow (`.github/workflows/docker-image.yml`) already builds and pushes both architectures using QEMU emulation.
+
 ### Project structure
 
 ```
@@ -196,6 +227,10 @@ internal/
   password/                    bcrypt hashing
   jwt/                         JWT generation and validation
 ui/                            React frontend (Vite + MUI 5)
+persistent_data/               Docker volume data (git-ignored)
+  db/                          PostgreSQL data
+  go-mod-cache/                Go module cache (dev)
+  go-build-cache/              Go build cache (dev)
 ```
 
 ### API endpoints
