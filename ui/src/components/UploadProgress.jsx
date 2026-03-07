@@ -35,18 +35,27 @@ export default function UploadProgress({ filename, totalBytes, uploadedBytes, to
   return (
     <Box
       sx={{
+        width: '100%',
+        maxWidth: '100%',
+        boxSizing: 'border-box',
         mb: 2,
         p: 2,
         bgcolor: isError ? 'rgba(255,59,48,0.06)' : 'background.paper',
         borderRadius: 3,
         border: '1px solid',
         borderColor: isError ? 'rgba(255,59,48,0.15)' : 'divider',
+        overflow: 'hidden',
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1 }}>
-        <Typography variant="body2" noWrap sx={{ fontWeight: 500, flexGrow: 1 }}>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1, minWidth: 0 }}>
+        <Typography variant="body2" noWrap sx={{ fontWeight: 500, flexGrow: 1, minWidth: 0 }}>
           {isError ? `Failed` : isActive ? `Uploading` : `Complete`}
-          <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 0.5 }}>
+          <Typography
+            component="span"
+            variant="body2"
+            color="text.secondary"
+            sx={{ ml: 0.5, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}
+          >
             {filename}
           </Typography>
         </Typography>
@@ -60,13 +69,13 @@ export default function UploadProgress({ filename, totalBytes, uploadedBytes, to
         variant={totalBytes > 0 ? 'determinate' : 'indeterminate'}
         value={percent}
         color={isError ? 'error' : isActive ? 'primary' : 'success'}
-        sx={{ mb: 0.75 }}
+        sx={{ mb: 0.75, width: '100%' }}
       />
-      <Box sx={{ display: 'flex', justifyContent: 'space-between' }}>
+      <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 0.75, flexDirection: { xs: 'column', sm: 'row' } }}>
         <Typography variant="caption" color="text.secondary">
           {progressText}
         </Typography>
-        <Typography variant="caption" color="text.secondary">
+        <Typography variant="caption" color="text.secondary" sx={{ textAlign: { xs: 'left', sm: 'right' } }}>
           {[chunkText && isActive ? chunkText : '', speedText && isActive ? speedText : ''].filter(Boolean).join(' \u00b7 ')}
         </Typography>
       </Box>
