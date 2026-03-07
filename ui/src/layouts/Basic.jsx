@@ -1,34 +1,38 @@
-import { onMount } from 'solid-js'
-import { Outlet } from '@solidjs/router'
+import { useState, useEffect } from 'react'
+import { Outlet, useNavigate, useLocation } from 'react-router-dom'
+import { Box, Toolbar } from '@mui/material'
 import Header from '../components/Header'
 import SideBar from '../components/SideBar'
-import Box from '@suid/material/Box'
-import Container from '@suid/material/Container'
-import CssBaseline from '@suid/material/CssBaseline'
-import Toolbar from '@suid/material/Toolbar'
-
+import { AlertProvider } from '../components/AlertStack'
 import { checkAuth } from '../common/auth_guard'
 
-const BasicLayout = () => {
-	onMount(checkAuth)
+export default function BasicLayout() {
+  const navigate = useNavigate()
+  const location = useLocation()
+  const [sidebarOpen, setSidebarOpen] = useState(window.innerWidth > 840)
 
-	return (
-		<>
-			<Header />
-			<Box>
-				<CssBaseline />
-				<Toolbar />
+  useEffect(() => {
+    checkAuth(navigate, location)
+  }, [])
 
-				<Box sx={{ display: 'flex' }}>
-					<SideBar></SideBar>
-
-					<Container sx={{ pt: 4 }}>
-						<Outlet />
-					</Container>
-				</Box>
-			</Box>
-		</>
-	)
+  return (
+    <AlertProvider>
+      <Box sx={{ display: 'flex', minHeight: '100vh', bgcolor: 'background.default' }}>
+        <Header onToggleSidebar={() => setSidebarOpen(!sidebarOpen)} />
+        <SideBar open={sidebarOpen} />
+        <Box
+          component="main"
+          sx={{
+            flexGrow: 1,
+            px: { xs: 2, sm: 3, md: 4 },
+            py: 3,
+            maxWidth: 1200,
+          }}
+        >
+          <Toolbar sx={{ minHeight: '52px !important' }} />
+          <Outlet />
+        </Box>
+      </Box>
+    </AlertProvider>
+  )
 }
-
-export default BasicLayout

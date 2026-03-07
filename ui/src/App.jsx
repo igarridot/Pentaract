@@ -1,54 +1,32 @@
-import { Routes, Route, Navigate } from '@solidjs/router'
-import { ThemeProvider, createTheme } from '@suid/material'
-
-import Login from './pages/Login'
+import { createBrowserRouter, RouterProvider, Navigate } from 'react-router-dom'
 import BasicLayout from './layouts/Basic'
-import Storages from './pages/Storages'
-import StorageCreateForm from './pages/Storages/StorageCreateForm'
-import AlertStack from './components/AlertStack'
-import StorageWorkers from './pages/StorageWorkers'
-import StorageWorkerCreateForm from './pages/StorageWorkers/StorageWorkerCreateForm'
-import Files from './pages/Files'
-import UploadFileTo from './pages/Files/UploadFileTo'
+import Login from './pages/Login'
 import Register from './pages/Register'
 import NotFound from './pages/404'
+import Storages from './pages/Storages'
+import StorageCreateForm from './pages/Storages/StorageCreateForm'
+import Files from './pages/Files'
+import StorageWorkers from './pages/StorageWorkers'
+import StorageWorkerCreateForm from './pages/StorageWorkers/StorageWorkerCreateForm'
 
-const theme = createTheme({
-	palette: {
-		primary: {
-			main: '#0D1821',
-		},
-		secondary: {
-			main: '#F9E900',
-		},
-	},
-})
+const router = createBrowserRouter([
+  { path: '/login', element: <Login /> },
+  { path: '/register', element: <Register /> },
+  {
+    path: '/',
+    element: <BasicLayout />,
+    children: [
+      { index: true, element: <Navigate to="/storages" replace /> },
+      { path: 'storages', element: <Storages /> },
+      { path: 'storages/register', element: <StorageCreateForm /> },
+      { path: 'storages/:id/files/*', element: <Files /> },
+      { path: 'storage_workers', element: <StorageWorkers /> },
+      { path: 'storage_workers/register', element: <StorageWorkerCreateForm /> },
+      { path: '*', element: <NotFound /> },
+    ],
+  },
+])
 
-const App = () => {
-	return (
-		<ThemeProvider theme={theme}>
-			<Routes>
-				<Route path="/login" component={Login} />
-				<Route path="/register" component={Register} />
-
-				<Route path="/" component={BasicLayout}>
-					<Route path="/" element={<Navigate href="/storages" />} />
-					<Route path="/storages" component={Storages} />
-					<Route path="/storages/register" component={StorageCreateForm} />
-					<Route path="/storages/:id/files/*path" component={Files} />
-					<Route path="/storages/:id/upload_to" component={UploadFileTo} />
-					<Route path="/storage_workers" component={StorageWorkers} />
-					<Route
-						path="/storage_workers/register"
-						component={StorageWorkerCreateForm}
-					/>
-					<Route path="*404" component={NotFound} />
-				</Route>
-			</Routes>
-
-			<AlertStack />
-		</ThemeProvider>
-	)
+export default function App() {
+  return <RouterProvider router={router} />
 }
-
-export default App

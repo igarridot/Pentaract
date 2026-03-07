@@ -1,149 +1,77 @@
-import ListItem from '@suid/material/ListItem'
-import ListItemButton from '@suid/material/ListItemButton'
-import ListItemIcon from '@suid/material/ListItemIcon'
-import ListItemText from '@suid/material/ListItemText'
-import MenuMUI from '@suid/material/Menu'
-import MenuItem from '@suid/material/MenuItem'
-import IconButton from '@suid/material/IconButton'
-import FileIcon from '@suid/icons-material/InsertDriveFileOutlined'
-import FolderIcon from '@suid/icons-material/Folder'
-import MoreVertIcon from '@suid/icons-material/MoreVert'
-import DownloadIcon from '@suid/icons-material/Download'
-import InfoIcon from '@suid/icons-material/Info'
-import DeleteIcon from '@suid/icons-material/Delete'
-import { createSignal } from 'solid-js'
-import { useNavigate, useParams } from '@solidjs/router'
+import { useState } from 'react'
+import {
+  ListItem, ListItemButton, ListItemIcon, ListItemText,
+  IconButton, Menu, MenuItem,
+} from '@mui/material'
+import {
+  InsertDriveFile as FileIcon,
+  Folder as FolderIcon,
+  MoreHoriz as MoreIcon,
+} from '@mui/icons-material'
+import { useNavigate } from 'react-router-dom'
 
-import API from '../api'
-import ActionConfirmDialog from './ActionConfirmDialog'
-import FileInfoDialog from './FileInfo'
+export default function FSListItem({ item, storageId, currentPath, onInfo, onDelete, onDownload, onMove }) {
+  const navigate = useNavigate()
+  const [anchorEl, setAnchorEl] = useState(null)
 
-/**
- * @typedef {Object} FSListItemProps
- * @property {import("../api").FSElement} fsElement
- * @property {string} storageId
- * @property {() => {}} onDelete
- */
+  const handleClick = () => {
+    if (item.is_file) {
+      if (onDownload) onDownload(item)
+    } else {
+      navigate(`/storages/${storageId}/files/${item.path}`)
+    }
+  }
 
-/**
- *
- * @param {FSListItemProps} props
- * @returns
- */
-const FSListItem = (props) => {
-	const [moreAnchorEl, setMoreAnchorEl] = createSignal(null)
-	const [isActionConfirmDialogOpened, setIsActionConfirmDialogOpened] =
-		createSignal(false)
-	const [isInfoDialogOpened, setIsInfoDialogOpened] = createSignal(false)
-	const navigate = useNavigate()
-	const params = useParams()
+  const handleDownload = async () => {
+    setAnchorEl(null)
+    if (onDownload) onDownload(item)
+  }
 
-	const openMore = () => Boolean(moreAnchorEl())
+  return (
+    <ListItem
+      disablePadding
+      secondaryAction={
+        <IconButton
+          onClick={(e) => setAnchorEl(e.currentTarget)}
+          size="small"
+          sx={{ opacity: 0.5, '&:hover': { opacity: 1 } }}
+        >
+          <MoreIcon fontSize="small" />
+        </IconButton>
+      }
+    >
+      <ListItemButton onClick={handleClick} sx={{ py: 1 }}>
+        <ListItemIcon sx={{ minWidth: 40 }}>
+          {item.is_file
+            ? <FileIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
+            : <FolderIcon sx={{ color: 'primary.main', fontSize: 20 }} />
+          }
+        </ListItemIcon>
+        <ListItemText
+          primary={item.name}
+          primaryTypographyProps={{
+            fontSize: '0.875rem',
+            fontWeight: item.is_file ? 400 : 500,
+          }}
+        />
+      </ListItemButton>
 
-	const handleCloseMore = () => {
-		setMoreAnchorEl(null)
-	}
-
-	const handleNavigate = () => {
-		if (!props.fsElement.is_file) {
-			navigate(`/storages/${props.storageId}/files/${props.fsElement.path}`)
-		}
-	}
-
-	const download = async () => {
-		const blob = await API.files.download(params.id, props.fsElement.path)
-
-		const href = URL.createObjectURL(blob)
-		const a = Object.assign(document.createElement('a'), {
-			href,
-			style: 'display: none',
-			download: props.fsElement.name,
-		})
-		document.body.appendChild(a)
-
-		a.click()
-		URL.revokeObjectURL(href)
-		a.remove()
-	}
-
-	const openActionConfirmDialog = () => {
-		handleCloseMore()
-		setIsActionConfirmDialogOpened(true)
-	}
-	const closeActionConfirmDialog = () => {
-		setIsActionConfirmDialogOpened(false)
-	}
-
-	const deleteFile = async () => {
-		closeActionConfirmDialog()
-		await API.files.deleteFile(params.id, props.fsElement.path)
-		props.onDelete()
-	}
-
-	return (
-		<>
-			<ListItem disablePadding>
-				<ListItemButton onClick={handleNavigate}>
-					<ListItemIcon>
-						<Show when={props.fsElement.is_file} fallback={<FolderIcon />}>
-							<FileIcon />
-						</Show>
-					</ListItemIcon>
-					<ListItemText primary={props.fsElement.name} />
-				</ListItemButton>
-				<IconButton
-					onClick={(event) => {
-						setMoreAnchorEl(event.currentTarget)
-					}}
-				>
-					<MoreVertIcon />
-				</IconButton>
-			</ListItem>
-			<MenuMUI
-				id="basic-menu"
-				anchorEl={moreAnchorEl()}
-				open={openMore()}
-				onClose={handleCloseMore}
-				MenuListProps={{ 'aria-labelledby': 'basic-button' }}
-			>
-				<MenuItem onClick={() => setIsInfoDialogOpened(true)}>
-					<ListItemIcon>
-						<InfoIcon fontSize="small" />
-					</ListItemIcon>
-					<ListItemText>Info</ListItemText>
-				</MenuItem>
-
-				<MenuItem onClick={download} disabled={!props.fsElement.is_file}>
-					<ListItemIcon>
-						<DownloadIcon fontSize="small" />
-					</ListItemIcon>
-					<ListItemText>Download</ListItemText>
-				</MenuItem>
-
-				<MenuItem onClick={openActionConfirmDialog}>
-					<ListItemIcon>
-						<DeleteIcon fontSize="small" />
-					</ListItemIcon>
-					<ListItemText>Delete</ListItemText>
-				</MenuItem>
-			</MenuMUI>
-
-			<ActionConfirmDialog
-				action="Delete"
-				entity="file"
-				actionDescription={`delete file ${props.fsElement.name}`}
-				isOpened={isActionConfirmDialogOpened()}
-				onConfirm={deleteFile}
-				onCancel={closeActionConfirmDialog}
-			/>
-
-			<FileInfoDialog
-				file={props.fsElement}
-				isOpened={isInfoDialogOpened()}
-				onClose={() => setIsInfoDialogOpened(false)}
-			/>
-		</>
-	)
+      <Menu anchorEl={anchorEl} open={Boolean(anchorEl)} onClose={() => setAnchorEl(null)}>
+        {item.is_file && (
+          <MenuItem onClick={() => { setAnchorEl(null); onInfo(item) }}>
+            Info
+          </MenuItem>
+        )}
+        <MenuItem onClick={handleDownload}>
+          {item.is_file ? 'Download' : 'Download as ZIP'}
+        </MenuItem>
+        <MenuItem onClick={() => { setAnchorEl(null); onMove(item) }}>
+          Move
+        </MenuItem>
+        <MenuItem onClick={() => { setAnchorEl(null); onDelete(item) }} sx={{ color: 'error.main' }}>
+          Delete
+        </MenuItem>
+      </Menu>
+    </ListItem>
+  )
 }
-
-export default FSListItem

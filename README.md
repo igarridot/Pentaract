@@ -1,297 +1,282 @@
-![pentaract-github-logo](https://github.com/Dominux/Pentaract/assets/55978340/db39e76f-4119-41c1-bbfd-9b59f40ab626)
+# Pentaract
 
-[<img alt="GitHub Workflow Status (with event)" src="https://img.shields.io/github/actions/workflow/status/Dominux/Pentaract/docker-image.yml?style=plastic&logo=github">](https://github.com/Dominux/Pentaract/actions)
-[<img alt="Dockerhub latest" src="https://img.shields.io/badge/dockerhub-latest-blue?logo=docker&style=plastic">](https://hub.docker.com/r/thedominux/pentaract)
-[<img alt="Docker Image Size (tag)" src="https://img.shields.io/docker/image-size/thedominux/pentaract/latest?style=plastic&logo=docker&color=gold">](https://hub.docker.com/r/thedominux/pentaract/tags?page=1&name=latest)
-[<img alt="Any platform" src="https://img.shields.io/badge/platform-any-green?style=plastic&logo=linux&logoColor=white">](https://github.com/Dominux/Pentaract)
+Cloud storage system that uses **Telegram as the storage backend**. Files are split into 20 MB chunks, uploaded to Telegram channels via bot workers, and reassembled on download.
 
-_Cloud storage system based on using Telegram as a storage so it doesn't use your server filesystem or any other paid cloud storage system underneath the hood._
+Built with **Go 1.24** (Chi, pgx) + **React 18** (Material UI 5) + **PostgreSQL 15**. Supports **amd64** and **arm64** architectures.
 
-**BTC**: `18mquj59AcB4y4VBevdn5HekG5y7gvPYGk`
+## Credits
 
-**TON**: `UQDoGRgUIEDA30cko8k-icnI8S5i8QIq2jFvqswNvVUc9F2U`
+Before continuing, please note that this project is based on the original [Pentaract](https://github.com/Dominux/Pentaract) idea. I have rewrote the full code as the original seems abandoned, but the core concept is derived from the original. All credit for the initial idea and implementation goes to the original author.
 
-**USDT TON**: `UQDoGRgUIEDA30cko8k-icnI8S5i8QIq2jFvqswNvVUc9F2U`
+## Prerequisites
 
-https://github.com/Dominux/Pentaract/assets/55978340/b62305a7-cae3-4e1c-a509-38e415392dcf
+Docker and Docker Compose
 
-Pentaract is aimed to take as small disk space as possible. So it does not need any code interpreter/platform to run. The whole app is just several megabytes in size. It also uses Postgres as a database and we try our best to economy space by not creating unneeded fields and tables and to wisely pick proper datatypes.
+## Quick start
 
-The platform itself can be used differently, like as a personal (on your own server or a local machine) platform or a platform for many users with multiple storages and so on. Since it provides Rest API, you can also use it as a file system in your backend like [NextCloud](https://nextcloud.com/) or [AWS S3](https://aws.amazon.com/s3/) or S3 compatable services (like [MinIO](https://min.io/)), but for now it's so early so I don't recommend to use it in production ready apps.
-
-# Installation
-
-This project is aimed on running the app in container, so the primary way to run it is via [Docker](https://www.docker.com/). If you don't have it installed or simply don't want to run the app via Docker, you can build it from source.
-
-> NOTE: Pentaract uses [Postgres](https://www.postgresql.org/) as a database. So if you are going to run it from source or run the Pentaract image only, you will need to have a Postgres instance running and available in your network so you will connect your Pentaract app to it
-
-<details>
-  <summary>Docker Compose with pre-built image <i>(recommended)</i></summary>
-
-The simplest way to run and manage the app
-
-1. Create new directory for the app files and name it however you wish:
-
-```sh
-mkdir pentaract
+```bash
+# 1. Create your environment file
+cp .env.example .env
 ```
 
-2. Go to it and place `docker-compose.yml` file like this one:
+Edit `.env` and set at minimum:
 
-```yaml
-version: "3.9"
+| Variable | What to change |
+|----------|---------------|
+| `SECRET_KEY` | Replace `XXX` with a random string (`openssl rand -hex 32`) |
+| `SUPERUSER_EMAIL` | Admin account email |
+| `SUPERUSER_PASS` | Admin account password |
+| `DATABASE_PASSWORD` | Something other than the default |
 
-volumes:
-  pentaract-db-volume:
-    name: pentaract-db-volume
-
-services:
-  pentaract:
-    container_name: pentaract
-    image: thedominux/pentaract
-    env_file:
-      - .env
-    ports:
-      - ${PORT}:8000
-    restart: unless-stopped
-    depends_on:
-      - db
-
-  db:
-    container_name: pentaract_db
-    image: postgres:15.0-alpine
-    environment:
-      POSTGRES_USER: ${DATABASE_USER}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
-    restart: unless-stopped
-    volumes:
-      - pentaract-db-volume:/var/lib/postgresql/data
-```
-
-And `.env` file like the next one. **Don't forget to set your superuser email, password and secret key**:
-
-```env
-PORT=8000
-WORKERS=4
-CHANNEL_CAPACITY=32
-SUPERUSER_EMAIL=<YOUR-EMAIL>
-SUPERUSER_PASS=<YOUR-PASSWORD>
-ACCESS_TOKEN_EXPIRE_IN_SECS=1800
-REFRESH_TOKEN_EXPIRE_IN_DAYS=14
-SECRET_KEY=<YOUR-SECRET-KEY>
-TELEGRAM_API_BASE_URL=https://api.telegram.org
-
-DATABASE_USER=pentaract
-DATABASE_PASSWORD=pentaract
-DATABASE_NAME=pentaract
-DATABASE_HOST=db
-DATABASE_PORT=5432
-```
-
-Secret key can be set by your hand, but I strongly recommend to use long randomly generated sequences. So you either can generate it via some free websites that provide such funcionallity or by running something like this in the terminal:
-
-```sh
-openssl rand -hex 32
-```
-
-3. For now everything is set up so we can run our app:
-
-```sh
-docker compose up -d
-```
-
-To check if everything works fine you can go to http://localhost:8000 or to `http://<YOUR-PUBLIC-IP>:8000` if you run it on a server.
-
-If there are troubles, you can check the logs, there may be some errors:
-
-```sh
-docker logs -f pentaract
-```
-
-</details>
-
-<details>
-  <summary>Docker Compose from source</summary>
-
-Kind of simple way, but it's aimed to use it during development process
-
-1. Clone the repository and go inside the newly created directory:
-
-```sh
-git clone git@github.com:Dominux/Pentaract.git
-```
-
-2. Copy `.env.example` to `.env`:
-
-```sh
-cp ./.env.example ./.env
-```
-
-and edit it like you wish.
-
-3. For now everything is set up so we can run our app:
-
-```sh
+```bash
+# 2. Build and start
 make up
 ```
 
-To check if everything works fine you can go to http://localhost:8000 or to `http://<YOUR-PUBLIC-IP>:8000` if you run it on a server.
+1. Create a Telegram channel (private recommended)
+2. Send a message in the channel and forward it to [@RawDataBot](https://t.me/RawDataBot) to get the channel's `message.forward_origin.chat.id`. Remove heading "-100"
+3. Create one or more Telegram bots via [@BotFather](https://t.me/BotFather) and save their tokens
+4. Add the bots as administrators of the channel (they need permission to post messages)
+5. In Pentaract:
+   - Go to **Storages** and create a storage with the channel's `chat_id`
+   - Go to **Workers** and create a worker with each bot token
+6. Upload files through the **Files** browser
 
-If there are troubles, you can check the logs, there may be some errors:
+The application will be available at **http://localhost:8000** (or whatever `PORT` you configured).
 
-```sh
-docker logs -f pentaract
+To stop:
+
+```bash
+make down
 ```
 
-</details>
+---
 
-<details>
-  <summary>Docker with pre-built image</summary>
+## How it works
 
-**TODO**
-
-</details>
-
-<details>
-  <summary>From source</summary>
-
-The most complex way to run the app.
-
-Requires the next stuff to be installed:
-
-- [Cargo](https://github.com/rust-lang/cargo)
-- [Node.js](https://nodejs.org/en)
-- [pnpm](https://pnpm.io/)
-- [Postgres](https://www.postgresql.org/)
-
-1. Create a directory to place all the app files wherever in your system:
-
-```sh
-mkdir ~/pentaract
+```
+Browser  -->  Go HTTP server  -->  PostgreSQL (metadata)
+                    |
+                    v
+              Telegram Bot API (file storage)
 ```
 
-2. Clone the repository and go inside the newly created directory:
+1. Users create **Storages**, each linked to a Telegram channel via its `chat_id`
+2. Users register **Storage Workers** (Telegram bots) and optionally bind them to storages
+3. On **upload**, files are split into 20 MB chunks and uploaded to the Telegram channel in parallel using available bot workers
+4. On **download**, chunks are fetched from Telegram in parallel and reassembled in order
+5. A **rate limiter** tracks bot usage per minute and selects the least-loaded available worker
 
-```sh
-git clone git@github.com:Dominux/Pentaract.git
+### What `make up` does
+
+1. Builds a multi-stage Docker image (`Dockerfile`):
+   - Stage 1: Cross-compiles the Go binary for the target architecture (`golang:1.24-alpine`)
+   - Stage 2: Builds the React frontend (`node:22-slim` + Vite)
+   - Stage 3: Copies both into a minimal `scratch` image
+2. Starts PostgreSQL 15 with a health check
+3. Starts the Pentaract server once the database is healthy
+4. The server automatically creates the database schema and the superuser on first boot
+
+### Persistent data
+
+All persistent data is stored under `persistent_data/` in the project root:
+
+| Directory | Contents |
+|-----------|----------|
+| `persistent_data/db/` | PostgreSQL database files |
+| `persistent_data/go-mod-cache/` | Go module cache (dev only) |
+| `persistent_data/go-build-cache/` | Go build cache (dev only) |
+
+This directory is excluded from version control via `.gitignore`. To reset all data:
+
+```bash
+make down
+rm -rf persistent_data/
 ```
 
-3. Go to the `./pentaract` directory and build server side app:
+### Environment variables
 
-```sh
-cd ./pentaract
-cargo build --release
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `PORT` | `8000` | Port exposed to the host |
+| `WORKERS` | `4` | Max concurrent requests (throttle) |
+| `SECRET_KEY` | *required* | Secret for JWT signing (use `openssl rand -hex 32`) |
+| `SUPERUSER_EMAIL` | *required* | Email for the initial admin account |
+| `SUPERUSER_PASS` | *required* | Password for the initial admin account |
+| `ACCESS_TOKEN_EXPIRE_IN_SECS` | `1800` | JWT token lifetime in seconds |
+| `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Telegram Bot API base URL |
+| `TELEGRAM_RATE_LIMIT` | `18` | Max requests per minute per bot worker |
+| `DATABASE_USER` | `pentaract` | PostgreSQL user |
+| `DATABASE_PASSWORD` | `pentaract` | PostgreSQL password |
+| `DATABASE_NAME` | `pentaract` | PostgreSQL database name |
+| `DATABASE_HOST` | `db` | PostgreSQL host (use `db` for the compose service) |
+| `DATABASE_PORT` | `5432` | PostgreSQL port |
+
+---
+
+## Development
+
+The project includes a `dev` service that provides a containerized Go + Node toolchain. Source code is mounted as a volume, so edits on the host are reflected immediately.
+
+Build caches are persisted under `persistent_data/` so subsequent builds are fast.
+
+### Make targets
+
+| Command | Description |
+|---------|-------------|
+| `make up` | Build and start the full production stack |
+| `make down` | Stop and remove all containers |
+| `make build` | Compile Go backend inside a container |
+| `make check` | Run `go vet` inside a container |
+| `make mod-tidy` | Run `go mod tidy` inside a container |
+| `make ui-install` | Install frontend npm dependencies inside a container |
+| `make ui-build` | Build the production frontend bundle inside a container |
+| `make dev-shell` | Open an interactive shell in the dev container |
+
+### Workflow
+
+```bash
+# 1. Create your .env
+cp .env.example .env
+# Edit SECRET_KEY at minimum
+
+# 2. Download dependencies
+make mod-tidy
+make ui-install
+
+# 3. Build and run
+make up
+
+# 4. Check logs
+docker compose logs -f pentaract
 ```
 
-and copy the target to the app directory (or create a soft link via `ln -s`, does not matter):
+### Frontend hot-reload
 
-```sh
-cp ./target/release/pentaract ~/pentaract/pentaract
+```bash
+# Start backend + database
+make up
+
+# Start Vite dev server in a container
+docker compose run --rm -p 3000:3000 dev sh -c "cd ui && pnpm run dev"
 ```
 
-4. Go to the `../ui` and build the UI side of the app:
+The Vite dev server proxies `/api` requests to the backend.
 
-```sh
-cd ../ui
-pnpm run build
+---
+
+## Features
+
+### File management
+- **Upload** files of any size with real-time progress tracking (SSE) and cancellation support
+- **Download** individual files or entire directories as ZIP archives
+- **Create folders**, **move** files/folders, and **delete** items
+- **Search** files by name within any directory
+- **Duplicate handling** — uploading a file with an existing name automatically appends a numeric suffix
+
+### Storage workers
+- Register multiple Telegram bots as workers for parallel chunk transfers
+- Workers can be assigned to specific storages or left available for all
+- Built-in rate limiter respects Telegram's per-bot API limits
+
+### Access control
+- Three access levels: **read** (r), **write** (w), and **admin** (a)
+- Admins can grant and revoke access per storage
+- Storage owners automatically get admin access
+
+### UI
+- Minimalist design with Inter font, frosted glass effects, and pill-shaped buttons
+- **Dark mode** with three options: Light, Dark, and Auto (follows system preference), persisted to localStorage
+- Responsive layout with collapsible sidebar
+
+### Multi-architecture
+The Docker image supports both `linux/amd64` and `linux/arm64`. The Go binary is cross-compiled natively for the target architecture.
+
+```bash
+docker buildx build --platform linux/amd64,linux/arm64 -t pentaract .
 ```
 
-and copy built files into the app directory:
+---
 
-```sh
-cp ./dist/* ~/pentaract/ui/
+## Project structure
+
+```
+cmd/pentaract/main.go          Entry point
+internal/
+  config/                      Environment configuration
+  domain/                      Models and error types
+  repository/                  Database queries (raw SQL + pgx)
+  service/                     Business logic
+  handler/                     HTTP handlers and middleware
+  telegram/                    Telegram Bot API client
+  server/                      Router, CORS, static file serving
+  startup/                     Database creation, migrations, superuser seed
+  password/                    bcrypt hashing
+  jwt/                         JWT generation and validation
+ui/                            React frontend (Vite + MUI 5)
+  src/
+    api/                       API client (fetch-based)
+    common/                    Auth guard, theme context, utilities
+    components/                Reusable UI components
+    layouts/                   Page layouts
+    pages/                     Route pages
 ```
 
-5. Now go to the app directory:
+## API endpoints
 
-```sh
-cd ~/pentaract
-```
+All endpoints except login and register require an `Authorization: Bearer <token>` header.
 
-6. Make sure that you have Postgres database ran in your system (or available from network)
-7. Set all needed environment variables. You can check them in the [.env.example file](https://github.com/Dominux/Pentaract/blob/main/.env.example). **Don't forget to set right Postgres credentials, host and port**:
+### Auth & Users
 
-```sh
-export PORT=8000
-export WORKERS=4
-# ...
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/auth/login` | Login, returns JWT |
+| POST | `/api/users` | Register new user |
 
-8. Finally run the app:
+### Storages
 
-```sh
-./pentaract
-```
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/storages` | List storages |
+| POST | `/api/storages` | Create storage |
+| GET | `/api/storages/:id` | Get storage details |
+| DELETE | `/api/storages/:id` | Delete storage |
 
-To check if everything works fine you can go to http://localhost:8000 or to `http://<YOUR-PUBLIC-IP>:8000` if you run it on a server.
+### Access control
 
-</details>
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/storages/:id/access` | List access entries |
+| POST | `/api/storages/:id/access` | Grant access |
+| DELETE | `/api/storages/:id/access` | Revoke access |
 
-<br/>
+### Storage workers
 
-It's also recommended to use a HTTP reverse-proxy, like [Nginx](https://www.nginx.com/) or [Traefik](https://traefik.io/traefik/) if you use containarized version of the app and don't wanna work with Nginx and certbot.
+| Method | Path | Description |
+|--------|------|-------------|
+| GET | `/api/storage_workers` | List workers |
+| POST | `/api/storage_workers` | Create worker |
+| PUT | `/api/storage_workers/:id` | Update worker |
+| DELETE | `/api/storage_workers/:id` | Delete worker |
+| GET | `/api/storage_workers/has_workers?storage_id=` | Check if storage has workers |
 
-# Usage
+### Files
 
-The platform is tied to the "storages" concept. Every storage is a separated files system, like different volumes on your drive. It provides funcionallity to work with a file system like it's Google Drive: you can create files and folders, download files, see files and folders info and delete them on your wish.
+| Method | Path | Description |
+|--------|------|-------------|
+| POST | `/api/storages/:id/files/create_folder` | Create folder |
+| POST | `/api/storages/:id/files/move` | Move file or folder |
+| POST | `/api/storages/:id/files/upload` | Upload file (multipart) |
+| GET | `/api/storages/:id/files/tree/*` | Browse directory |
+| GET | `/api/storages/:id/files/download/*` | Download file |
+| GET | `/api/storages/:id/files/download_dir/*` | Download directory as ZIP |
+| GET | `/api/storages/:id/files/search/*` | Search files |
+| DELETE | `/api/storages/:id/files/*` | Delete file or folder |
+| GET | `/api/upload_progress?upload_id=` | SSE stream with upload progress |
+| POST | `/api/upload_cancel/:id` | Cancel an in-flight upload |
 
-In our case every storage has its own Telegram channel, where it will store all the data.
+---
 
-The platform also uses "storage workers". It is telegram bots that are used to upload and download files from the telegram API
+## License
 
-## Telegram API limitations
-
-Telegram has its policy to limit some access to their platform. For us the main limitations are:
-
-- Requests per a period for one bot (RPM)
-- File size
-
-Pentaract has ways to workaround them:
-
-### RPM
-
-To workaround RPM users can create additional storage workers. For now one user can create up to 20 bots. You can also create additional accounts to create extra bots or ask your nearest for example to do so. This way from up to Telegram limitations it becomes up to you on how fast you can upload/download in Pentaract storage.
-
-I should notice that current RPM (20 requests per minute) is completely fine to work with a single storage worker if you need the storage to be your own and don't need to upload/download big files fast.
-
-### File size
-
-Currently Telegram API limits file download to 20 MB, hence we can't upload files more than that limit too.
-
-Pentaract divides uploaded files into chunks and save them to Telegram separately and on downloading a file it fetches all the file chunks from the Telegram API and combine them into one in the order it was divided in. That grants ability to upload and download files with almost unlimited size (it's like you've ever downloaded a file with size >10 GB).
-
-## Current in storage features
-
-- [x] Upload file
-- [x] Download file
-- [x] Create folder
-- [x] Get file/folder info
-- [x] Delete file/folder
-
-## Access
-
-You can manage access to your storages by granting access to other users. For now, there are 3 possible roles:
-
-- Viewer
-- Can edit
-- Admin
-
-So you can grant access, change it or restrict (delete access) for other users.
-
-# Donations
-
-If you find this project useful and would like to see it continue to grow and improve, your support is greatly appreciated! Your donation will help cover the costs of development, maintenance, and future enhancements. Every contribution, no matter the size, makes a significant impact:
-
-**BTC**: `18mquj59AcB4y4VBevdn5HekG5y7gvPYGk`
-
-**TON**: `UQDoGRgUIEDA30cko8k-icnI8S5i8QIq2jFvqswNvVUc9F2U`
-
-**USDT TON**: `UQDoGRgUIEDA30cko8k-icnI8S5i8QIq2jFvqswNvVUc9F2U`
-
-# Future plans
-
-Cloud storage system has a huge variety of possible ways to develop in. Like it can be a file hosting service, a cloud object storage, a cloud drive or anything else or everything in one place. And I personally don't have idea right now where to move and what users need so I'd like to know what features you would like this app to provide.
-
-# Contributing
-
-Is highly welcoming! Create issues or take existing ones and create PRs!
+Based on the original [Pentaract](https://github.com/Dominux/Pentaract) by Dominux.

@@ -1,102 +1,41 @@
-import Button from '@suid/material/Button'
-import TextField from '@suid/material/TextField'
-import Dialog from '@suid/material/Dialog'
-import DialogActions from '@suid/material/DialogActions'
-import DialogContent from '@suid/material/DialogContent'
-import DialogTitle from '@suid/material/DialogTitle'
-import { createEffect, createSignal } from 'solid-js'
+import { useState } from 'react'
+import {
+  Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
+} from '@mui/material'
 
-/**
- * @typedef {Object} CreateFolderDialogProps
- * @property {boolean} isOpened
- * @property {(folderName: string) => Promise<void>} onCreate
- * @property {() => void} onClose
- */
+export default function CreateFolderDialog({ open, onCreate, onClose }) {
+  const [name, setName] = useState('')
 
-/**
- *
- * @param {CreateFolderDialogProps} props
- * @returns
- */
-const CreateFolderDialog = (props) => {
-	const [errFolderName, setErrFolderName] = createSignal(null)
-	const [folderName, setFolderName] = createSignal('')
+  const handleCreate = () => {
+    if (name && !name.includes('/')) {
+      onCreate(name)
+      setName('')
+      onClose()
+    }
+  }
 
-	let folderNameElement
-
-	createEffect(() => {
-		if (props.isOpened) {
-			setTimeout(() => folderNameElement.querySelector('input').focus(), 200)
-		}
-	})
-
-	/**
-	 *
-	 * @param {SubmitEvent} event
-	 */
-	const validateFolderName = (event) => {
-		event.preventDefault()
-
-		/**
-		 * @type {string}
-		 */
-		const value = event.currentTarget.value
-
-		setErrFolderName(
-			value.includes('/') ? 'Folder name cannot have a "/" symbol' : null
-		)
-
-		setFolderName(value)
-	}
-
-	const onClose = () => {
-		setErrFolderName(null)
-		setFolderName('')
-		props.onClose()
-	}
-
-	const onCreate = async () => {
-		const foldeName = folderName()
-		onClose()
-		await props.onCreate(foldeName)
-	}
-
-	return (
-		<>
-			<Dialog open={props.isOpened} onClose={onClose}>
-				<form onSubmit={onCreate}>
-					<DialogTitle>Create folder</DialogTitle>
-					<DialogContent>
-						<TextField
-							ref={folderNameElement}
-							value={folderName()}
-							required
-							margin="dense"
-							id="folder-name"
-							label="New folder name"
-							onChange={validateFolderName}
-							helperText={errFolderName}
-							error={errFolderName() !== null}
-							fullWidth
-							variant="standard"
-						/>
-					</DialogContent>
-					<DialogActions>
-						<Button
-							type="submit"
-							color="success"
-							disabled={!folderName().length || errFolderName()}
-						>
-							Create
-						</Button>
-						<Button onClick={onClose} color="error">
-							Cancel
-						</Button>
-					</DialogActions>
-				</form>
-			</Dialog>
-		</>
-	)
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>New Folder</DialogTitle>
+      <DialogContent>
+        <TextField
+          autoFocus
+          fullWidth
+          margin="dense"
+          placeholder="Folder name"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          error={name.includes('/')}
+          helperText={name.includes('/') ? 'Name cannot contain /' : ''}
+          onKeyDown={(e) => e.key === 'Enter' && handleCreate()}
+        />
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} color="inherit">Cancel</Button>
+        <Button onClick={handleCreate} variant="contained" disabled={!name || name.includes('/')}>
+          Create
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
 }
-
-export default CreateFolderDialog

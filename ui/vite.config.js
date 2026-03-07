@@ -1,13 +1,18 @@
 import { defineConfig } from 'vite'
-import solidPlugin from 'vite-plugin-solid'
-import suidPlugin from '@suid/vite-plugin'
+import react from '@vitejs/plugin-react'
 
 export default defineConfig({
-	plugins: [suidPlugin(), solidPlugin()],
-	server: {
-		port: 3000,
-	},
-	build: {
-		target: 'esnext',
-	},
+  plugins: [react()],
+  server: {
+    port: 3000,
+    proxy: {
+      '/api': {
+        target: 'http://localhost:8000',
+        changeOrigin: true,
+      },
+    },
+  },
+  build: {
+    target: 'esnext',
+  },
 })

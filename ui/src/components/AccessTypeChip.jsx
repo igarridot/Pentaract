@@ -1,58 +1,24 @@
-import { ThemeProvider, createTheme } from '@suid/material'
-import red from '@suid/material/colors/red'
-import amber from '@suid/material/colors/amber'
-import lightBlue from '@suid/material/colors/lightBlue'
-import Chip from '@suid/material/Chip'
+import { Chip } from '@mui/material'
 
-export const makeAccessTypeUserFriendly = (at) => {
-	switch (at) {
-		case 'A':
-			return 'Admin'
-		case 'W':
-			return 'Can edit'
-		case 'R':
-			return 'Viewer'
-	}
+const accessTypeConfig = {
+  a: { label: 'Admin', color: 'rgba(255,59,48,0.12)', textColor: '#ff3b30' },
+  w: { label: 'Can edit', color: 'rgba(255,159,10,0.12)', textColor: '#ff9f0a' },
+  r: { label: 'Viewer', color: 'rgba(0,113,227,0.12)', textColor: '#0071e3' },
 }
 
-const accessTypeTheme = createTheme({
-	palette: {
-		A: {
-			main: red[500],
-			light: red[100],
-			dark: red[400],
-			contrastText: '#fff',
-		},
-		W: {
-			main: amber[500],
-			light: amber[100],
-			dark: amber[400],
-			contrastText: '#fff',
-		},
-		R: {
-			main: lightBlue[500],
-			light: lightBlue[100],
-			dark: lightBlue[200],
-			contrastText: '#fff',
-		},
-	},
-})
+export default function AccessTypeChip({ type }) {
+  const config = accessTypeConfig[type] || { label: type, color: 'rgba(0,0,0,0.06)', textColor: '#86868b' }
 
-/**
- * @typedef {Object} AccessTypeChipProps
- * @property {import('../api').AccessType} at
- */
-
-/**
- *
- * @param {AccessTypeChipProps} props
- */
-const AccessTypeChip = (props) => {
-	return (
-		<ThemeProvider theme={accessTypeTheme}>
-			<Chip label={makeAccessTypeUserFriendly(props.at)} color={props.at} />
-		</ThemeProvider>
-	)
+  return (
+    <Chip
+      label={config.label}
+      size="small"
+      sx={{
+        backgroundColor: config.color,
+        color: config.textColor,
+        fontWeight: 500,
+        fontSize: '0.75rem',
+      }}
+    />
+  )
 }
-
-export default AccessTypeChip

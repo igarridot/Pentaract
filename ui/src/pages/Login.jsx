@@ -1,90 +1,88 @@
-import { onMount } from 'solid-js'
-import Container from '@suid/material/Container'
-import Box from '@suid/material/Box'
-import TextField from '@suid/material/TextField'
-import Button from '@suid/material/Button'
-import Paper from '@suid/material/Paper'
-import Typography from '@suid/material/Typography'
-import Divider from '@suid/material/Divider'
-import createLocalStore from '../../libs'
-import { A, useNavigate } from '@solidjs/router'
-
+import { useState } from 'react'
+import { useNavigate, Link } from 'react-router-dom'
+import { Box, Container, TextField, Button, Typography, Stack, Link as MuiLink } from '@mui/material'
 import API from '../api'
+import { isAuthenticated, getRedirectPath } from '../common/auth_guard'
+import AppIcon from '../components/AppIcon'
 
-const Login = () => {
-	const [store, setStore] = createLocalStore()
-	const navigate = useNavigate()
+export default function Login() {
+  const navigate = useNavigate()
+  const [email, setEmail] = useState('')
+  const [password, setPassword] = useState('')
+  const [error, setError] = useState('')
 
-	onMount(() => {
-		if (store.access_token) {
-			navigate('/')
-		}
-	})
+  if (isAuthenticated()) {
+    navigate('/storages', { replace: true })
+    return null
+  }
 
-	/**
-	 *
-	 * @param {SubmitEvent} event
-	 */
-	const handleSubmit = async (event) => {
-		event.preventDefault()
-		const data = new FormData(event.currentTarget)
-		const email = data.get('email')
-		const password = data.get('password')
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    setError('')
+    try {
+      const data = await API.auth.login(email, password)
+      localStorage.setItem('access_token', data.access_token)
+      navigate(getRedirectPath(), { replace: true })
+    } catch (err) {
+      setError(err.message)
+    }
+  }
 
-		const tokenData = await API.auth.login(email, password)
-
-		setStore('access_token', tokenData.access_token)
-		setStore('user', { email })
-
-		const redirect_url = store.redirect || '/'
-		navigate(redirect_url)
-	}
-
-	return (
-		<Container maxWidth="sm" sx={{ width: 'fit-content' }}>
-			<Paper sx={{ mt: '20vh' }} elevation={4}>
-				<Box
-					component="form"
-					onSubmit={handleSubmit}
-					sx={{
-						px: 5,
-						py: 2,
-						display: 'flex',
-						flexDirection: 'column',
-						alignItems: 'center',
-						'& > :not(style)': { my: 1.5 },
-					}}
-				>
-					<Typography variant="h5">Pentaract Account</Typography>
-					<Divider />
-					<TextField
-						name="email"
-						label="email"
-						variant="standard"
-						type="email"
-						required
-					/>
-					<TextField
-						name="password"
-						label="Password"
-						variant="standard"
-						type="password"
-						required
-					/>
-					<Divider />
-					<Button type="submit" variant="contained" color="secondary">
-						Login
-					</Button>
-
-					<Divider />
-
-					<A class="default-link" href="/register">
-						Don't have an account yet? Register!
-					</A>
-				</Box>
-			</Paper>
-		</Container>
-	)
+  return (
+    <Box sx={{
+      minHeight: '100vh',
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'center',
+      bgcolor: 'background.default',
+    }}>
+      <Container maxWidth="xs">
+        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
+          <AppIcon sx={{ fontSize: 56, color: 'primary.main', mb: 1 }} />
+          <Typography variant="h4" sx={{ mb: 0.5 }}>Pentaract</Typography>
+          <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
+            Sign in to your account
+          </Typography>
+          <Box
+            sx={{
+              width: '100%',
+              bgcolor: 'background.paper',
+              borderRadius: 4,
+              p: 4,
+              boxShadow: 2,
+              border: '1px solid',
+              borderColor: 'divider',
+            }}
+          >
+            <form onSubmit={handleSubmit}>
+              <Stack spacing={2.5}>
+                <TextField
+                  fullWidth label="Email" type="email" value={email}
+                  onChange={(e) => setEmail(e.target.value)} required
+                />
+                <TextField
+                  fullWidth label="Password" type="password" value={password}
+                  onChange={(e) => setPassword(e.target.value)} required
+                />
+                {error && (
+                  <Typography color="error" variant="body2" sx={{ fontSize: '0.8rem' }}>
+                    {error}
+                  </Typography>
+                )}
+                <Button fullWidth variant="contained" type="submit" size="large">
+                  Sign In
+                </Button>
+              </Stack>
+            </form>
+          </Box>
+          <Typography variant="body2" color="text.secondary" sx={{ mt: 3 }}>
+            Don't have an account?{' '}
+            <MuiLink component={Link} to="/register" sx={{ color: 'primary.main', textDecoration: 'none', fontWeight: 500 }}>
+              Create one
+            </MuiLink>
+          </Typography>
+        </Box>
+      </Container>
+    </Box>
+  )
 }
-
-export default Login

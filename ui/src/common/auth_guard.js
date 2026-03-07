@@ -1,14 +1,24 @@
-import { useLocation, useNavigate } from '@solidjs/router'
-import createLocalStore from '../../libs'
+export function checkAuth(navigate, location) {
+  const token = localStorage.getItem('access_token')
+  if (!token) {
+    localStorage.setItem('redirect', location.pathname)
+    navigate('/login')
+    return false
+  }
+  return true
+}
 
-export function checkAuth() {
-	const [store, setStore] = createLocalStore()
-	const navigate = useNavigate()
-	const location = useLocation()
+export function isAuthenticated() {
+  return !!localStorage.getItem('access_token')
+}
 
-	if (!store.access_token) {
-		setStore('redirect', location.pathname)
+export function logout(navigate) {
+  localStorage.removeItem('access_token')
+  navigate('/login')
+}
 
-		navigate('/login')
-	}
+export function getRedirectPath() {
+  const path = localStorage.getItem('redirect')
+  localStorage.removeItem('redirect')
+  return path || '/storages'
 }

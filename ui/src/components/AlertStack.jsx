@@ -1,59 +1,60 @@
-import Alert from '@suid/material/Alert'
-import Stack from '@suid/material/Stack'
-import { For, createRoot, createSignal } from 'solid-js'
+import { createContext, useCallback, useContext, useReducer } from 'react'
+import { Alert, Stack, Slide } from '@mui/material'
 
-/**
- * @typedef {"error" | "warning" | "info" | "success"} AlertSeverity
- */
+const AlertContext = createContext()
 
-/**
- * @typedef {Object} AlertType
- * @property {string} msg
- * @property {AlertSeverity} severity
- */
-
-export const alertStore = createRoot(() => {
-	/**
-	 * @type {[import("solid-js").Accessor<AlertType[]>, import("solid-js").Setter<AlertType[]>]}
-	 */
-	const [alertList, setAlertList] = createSignal([])
-
-	/**
-	 *
-	 * @param {string} msg
-	 * @param {AlertSeverity} severity
-	 * @returns
-	 */
-	const addAlert = (msg, severity) => {
-		setAlertList((alertList) => [{ msg, severity }, ...alertList])
-
-		setTimeout(() => setAlertList((alertList) => alertList.slice(0, -1)), 5e3)
-	}
-
-	return { alertList, addAlert }
-})
-
-const AlertStack = () => {
-	const { alertList } = alertStore
-
-	return (
-		<Stack
-			sx={{
-				position: 'fixed',
-				zIndex: 99999,
-				right: '1rem',
-				top: '5rem',
-				maxWidth: 360,
-				width: '30vw',
-				minWidth: 240,
-			}}
-			spacing={1}
-		>
-			<For each={alertList()}>
-				{(alert) => <Alert severity={alert.severity}>{alert.msg}</Alert>}
-			</For>
-		</Stack>
-	)
+function alertReducer(state, action) {
+  switch (action.type) {
+    case 'ADD':
+      return [action.payload, ...state]
+    case 'REMOVE':
+      return state.filter((a) => a.id !== action.id)
+    default:
+      return state
+  }
 }
 
-export default AlertStack
+export function AlertProvider({ children }) {
+  const [alerts, dispatch] = useReducer(alertReducer, [])
+
+  const addAlert = useCallback((message, severity = 'info', { persistent = false } = {}) => {
+    const id = Date.now() + Math.random()
+    dispatch({ type: 'ADD', payload: { id, message, severity } })
+    if (!persistent) {
+      setTimeout(() => dispatch({ type: 'REMOVE', id }), 5000)
+    }
+  }, [])
+
+  return (
+    <AlertContext.Provider value={addAlert}>
+      {children}
+      <Stack
+        spacing={1}
+        sx={{
+          position: 'fixed',
+          top: 64,
+          right: 20,
+          zIndex: 99999,
+          width: 340,
+          maxWidth: 'calc(100vw - 40px)',
+        }}
+      >
+        {alerts.map((alert) => (
+          <Slide key={alert.id} direction="left" in mountOnEnter unmountOnExit>
+            <Alert
+              severity={alert.severity}
+              onClose={() => dispatch({ type: 'REMOVE', id: alert.id })}
+              sx={{ fontSize: '0.8125rem' }}
+            >
+              {alert.message}
+            </Alert>
+          </Slide>
+        ))}
+      </Stack>
+    </AlertContext.Provider>
+  )
+}
+
+export function useAlert() {
+  return useContext(AlertContext)
+}

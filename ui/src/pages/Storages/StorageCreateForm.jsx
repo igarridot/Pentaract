@@ -1,124 +1,55 @@
-import Divider from '@suid/material/Divider'
-import Box from '@suid/material/Box'
-import Button from '@suid/material/Button'
-import TextField from '@suid/material/TextField'
-import Typography from '@suid/material/Typography'
-import { createSignal } from 'solid-js'
-import { useNavigate } from '@solidjs/router'
-import Stack from '@suid/material/Stack'
-import IconButton from '@suid/material/IconButton'
-import HelpOutlineIcon from '@suid/icons-material/HelpOutline'
-import ChevronLeftIcon from '@suid/icons-material/ChevronLeft'
-
+import { useState } from 'react'
+import { useNavigate } from 'react-router-dom'
+import { Box, Typography, TextField, Button, Stack } from '@mui/material'
 import API from '../../api'
-import { alertStore } from '../../components/AlertStack'
+import { useAlert } from '../../components/AlertStack'
 
-const StorageCreateForm = () => {
-	const [chatIdErr, setChatIdErr] = createSignal(null)
-	const { addAlert } = alertStore
-	const navigate = useNavigate()
+export default function StorageCreateForm() {
+  const navigate = useNavigate()
+  const addAlert = useAlert()
+  const [name, setName] = useState('')
+  const [chatId, setChatId] = useState('')
 
-	/**
-	 *
-	 * @param {SubmitEvent} event
-	 */
-	const handleSubmit = async (event) => {
-		event.preventDefault()
+  const handleSubmit = async (e) => {
+    e.preventDefault()
+    try {
+      await API.storages.create(name, parseInt(chatId, 10))
+      addAlert('Storage created', 'success')
+      navigate('/storages')
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
 
-		const data = new FormData(event.currentTarget)
-
-		const name = data.get('name')
-		const chatId = parseInt(data.get('chat_id'))
-
-		await API.storages.createStorage(name, chatId)
-
-		addAlert(`Created storage "${name}"`, 'success')
-
-		navigate('/storages')
-	}
-
-	/**
-	 *
-	 * @param {SubmitEvent} event
-	 */
-	const validateChatId = (event) => {
-		event.preventDefault()
-		const value = event.currentTarget.value
-
-		let err = null
-
-		if (value > 0) {
-			err = 'Chat id must be a valid negative integer'
-		} else if (value === '') {
-			err = 'Chat id is required and must be a valid negative integer'
-		}
-
-		setChatIdErr(err)
-	}
-
-	return (
-		<Stack sx={{ maxWidth: 540, minWidth: 320, mx: 'auto' }}>
-			<Box>
-				<Button
-					onClick={() => navigate('/storages')}
-					variant="outlined"
-					startIcon={<ChevronLeftIcon />}
-				>
-					Back
-				</Button>
-			</Box>
-
-			<Box
-				component="form"
-				onSubmit={handleSubmit}
-				sx={{
-					py: 2,
-					mx: 'auto',
-					maxWidth: 400,
-					display: 'flex',
-					flexDirection: 'column',
-					alignItems: 'center',
-					'& > :not(style)': { my: 1.5 },
-				}}
-			>
-				<Typography variant="h5">
-					Register new storage
-					<a
-						href="https://github.com/Dominux/Pentaract/wiki/Creating-storages"
-						target="_blank"
-					>
-						<IconButton color="warning" sx={{ py: 0 }}>
-							<HelpOutlineIcon />
-						</IconButton>
-					</a>
-				</Typography>
-				<Divider />
-				<TextField
-					id="name"
-					name="name"
-					label="Name"
-					variant="standard"
-					fullWidth
-					required
-				/>
-				<TextField
-					id="chat_id"
-					name="chat_id"
-					label="Chat id"
-					type="number"
-					variant="standard"
-					onChange={validateChatId}
-					helperText={chatIdErr}
-					error={typeof chatIdErr() === 'string'}
-					fullWidth
-					required
-				/>
-				<Button type="submit" variant="contained" color="secondary">
-					Register
-				</Button>
-			</Box>
-		</Stack>
-	)
+  return (
+    <Box>
+      <Typography variant="h5" sx={{ mb: 3 }}>Create Storage</Typography>
+      <Box sx={{
+        bgcolor: 'background.paper',
+        borderRadius: 3,
+        border: '1px solid',
+        borderColor: 'divider',
+        p: 3,
+        maxWidth: 480,
+      }}>
+        <form onSubmit={handleSubmit}>
+          <Stack spacing={2.5}>
+            <TextField
+              fullWidth placeholder="Storage name" value={name}
+              onChange={(e) => setName(e.target.value)} required
+            />
+            <TextField
+              fullWidth placeholder="Telegram Chat ID" value={chatId}
+              onChange={(e) => setChatId(e.target.value)} required
+              type="number"
+              helperText="The numeric ID of the Telegram channel"
+            />
+            <Button variant="contained" type="submit" disabled={!name || !chatId}>
+              Create Storage
+            </Button>
+          </Stack>
+        </form>
+      </Box>
+    </Box>
+  )
 }
-
-export default StorageCreateForm

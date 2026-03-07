@@ -1,41 +1,37 @@
-version: "3.9"
-
-volumes:
-  pentaract-db-volume:
-    name: pentaract-db-volume
-
-networks:
-  pentaract-network:
-    name: pentaract-network
-
 services:
   pentaract:
-    container_name: pentaract
-    image: pentaract
     build: .
-    env_file:
-      - .env
     ports:
-      - ${PORT}:8000
+      - "${PORT:-8000}:8000"
+    env_file: .env
     restart: unless-stopped
     depends_on:
-      - db
-    networks:
-      - pentaract-network
+      db:
+        condition: service_healthy
 
   db:
-    container_name: pentaract_db
-    image: postgres:15.0-alpine
+    image: public.ecr.aws/docker/library/postgres:15-alpine
     environment:
-      POSTGRES_USER: ${DATABASE_USER}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD}
-    restart: unless-stopped
+      POSTGRES_USER: ${DATABASE_USER:-pentaract}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-pentaract}
+      POSTGRES_DB: ${DATABASE_NAME:-pentaract}
     healthcheck:
-      test: pg_isready --username=${DATABASE_USER} --dbname=${DATABASE_NAME}
+      test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-pentaract}"]
       interval: 10s
       timeout: 5s
-      retries: 10
+      retries: 5
     volumes:
-      - pentaract-db-volume:/var/lib/postgresql/data
-    networks:
-      - pentaract-network
+      - ./persistent_data/db:/var/lib/postgresql/data
+
+  # Development service: compile and test inside containers
+  dev:
+    build:
+      context: .
+      dockerfile: Dockerfile.dev
+    volumes:
+      - .:/app
+      - ./persistent_data/go-mod-cache:/go/pkg/mod
+      - ./persistent_data/go-build-cache:/root/.cache/go-build
+    working_dir: /app
+    profiles:
+      - dev

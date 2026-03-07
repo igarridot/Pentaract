@@ -1,278 +1,367 @@
-import { useBeforeLeave, useNavigate, useParams } from '@solidjs/router'
-import { Show, createSignal, mapArray, onCleanup, onMount } from 'solid-js'
-import List from '@suid/material/List'
-import MenuItem from '@suid/material/MenuItem'
-import ListItemIcon from '@suid/material/ListItemIcon'
-import ListItemText from '@suid/material/ListItemText'
-import UploadFileIcon from '@suid/icons-material/UploadFile'
-import UploadFolderIcon from '@suid/icons-material/DriveFolderUpload'
-import FolderOpenIcon from '@suid/icons-material/FolderOpen'
-import LockIcon from '@suid/icons-material/Lock'
-import Grid from '@suid/material/Grid'
-import Stack from '@suid/material/Stack'
-import Typography from '@suid/material/Typography'
-import Divider from '@suid/material/Divider'
-import Fab from '@suid/material/Fab'
-import ToggleButton from '@suid/material/ToggleButton'
-import ToggleButtonGroup from '@suid/material/ToggleButtonGroup'
-import AddIcon from '@suid/icons-material/Add'
-
+import { useState, useEffect, useCallback, useRef } from 'react'
+import { useParams, useNavigate, useLocation, useBlocker } from 'react-router-dom'
+import {
+  Typography, List, Box, TextField, InputAdornment,
+  MenuItem, Divider, Breadcrumbs, Link as MuiLink, Button,
+} from '@mui/material'
+import {
+  Search as SearchIcon,
+  CreateNewFolder as FolderAddIcon,
+  Upload as UploadIcon,
+} from '@mui/icons-material'
 import API from '../../api'
+import { useAlert } from '../../components/AlertStack'
 import FSListItem from '../../components/FSListItem'
-import Menu from '../../components/Menu'
+import FileInfo from '../../components/FileInfo'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
-import { alertStore } from '../../components/AlertStack'
-import Access from '../../components/Access'
-import GrantAccess from '../../components/GrantAccess'
+import ActionConfirmDialog from '../../components/ActionConfirmDialog'
+import NavigationBlockDialog from '../../components/NavigationBlockDialog'
+import FloatingMenu from '../../components/Menu'
+import UploadProgress from '../../components/UploadProgress'
+import MoveDialog from '../../components/MoveDialog'
 
-const Files = () => {
-	const { addAlert } = alertStore
-	/**
-	 * @type {[import("solid-js").Accessor<import("../../api").FSElement[]>, any]}
-	 */
-	const [fsLayer, setFsLayer] = createSignal([])
-	/**
-	 * @type {[import("solid-js").Accessor<import("../../api").Storage>, any]}
-	 */
-	const [storage, setStorage] = createSignal()
-	const [isAccessPage, setIsAccessPage] = createSignal(false)
-	const [isCreateFolderDialogOpen, setIsCreateFolderDialogOpen] =
-		createSignal(false)
-	const [isGrantAccessButtonVisible, setIsGrantButtonAccessVisible] =
-		createSignal(false)
-	const [isGrantAccessVisible, setIsGrantAccessVisible] = createSignal(false)
-	/**
-	 * @type {[import("solid-js").Accessor<import("../api").UserWithAccess[]>, any]}
-	 */
-	const [users, setUsers] = createSignal([])
-	const navigate = useNavigate()
-	const params = useParams()
-	const basePath = `/storages/${params.id}/files`
-
-	let uploadFileInputElement
-
-	const fetchUsersWithAccess = async () => {
-		try {
-			const users = await API.access.listUsersWithAccess(params.id)
-			setUsers(users)
-			setIsGrantButtonAccessVisible(true)
-		} catch (err) {
-			addAlert('You do not have permissions to manage access', 'error')
-			console.error(err)
-			setIsGrantButtonAccessVisible(false)
-		}
-	}
-
-	const fetchStorage = async () => {
-		const storage = await API.storages.getStorage(params.id)
-		setStorage(storage)
-	}
-
-	const fetchFSLayer = async (path = params.path) => {
-		const fsLayerRes = await API.files.getFSLayer(params.id, path)
-
-		if (path.length) {
-			const parentPath = path.split('/').slice(0, -1).join('/')
-			const backToParent = { is_file: false, name: '..', path: parentPath }
-
-			fsLayerRes.splice(0, 0, backToParent)
-		}
-
-		setFsLayer(fsLayerRes)
-	}
-
-	const reload = async () => {
-		if (window.location.pathname.startsWith(basePath)) {
-			console.log(window.location.pathname)
-			await fetchFSLayer()
-		}
-	}
-
-	onMount(() => {
-		Promise.all([fetchStorage(), fetchFSLayer()]).then()
-
-		// Either me or the solidjs-router creator is dumb af so I have to use this sht
-		window.addEventListener('popstate', reload, false)
-	})
-
-	onCleanup(() => window.removeEventListener('popstate', reload, false))
-
-	useBeforeLeave(async (e) => {
-		if (e.to.startsWith(basePath)) {
-			let newPath = e.to.slice(basePath.length)
-
-			if (newPath.startsWith('/')) {
-				newPath = newPath.slice(1)
-			}
-
-			await fetchFSLayer(newPath)
-		}
-	})
-
-	const openCreateFolderDialog = () => {
-		setIsCreateFolderDialogOpen(true)
-	}
-	const closeCreateFolderDialog = () => {
-		setIsCreateFolderDialogOpen(false)
-	}
-
-	/**
-	 *
-	 * @param {string} folderName
-	 */
-	const createFolder = async (folderName) => {
-		const basePath = params.path.endsWith('/')
-			? params.path.slice(0, -1)
-			: params.path
-
-		await API.files.createFolder(params.id, basePath, folderName)
-		addAlert(`Created folder "${folderName}"`, 'success')
-		await fetchFSLayer()
-	}
-
-	const uploadFileClickHandler = () => {
-		uploadFileInputElement.click()
-	}
-
-	/**
-	 *
-	 * @param {Event} event
-	 */
-	const uploadFile = async (event) => {
-		const file = event.target.files[0]
-		if (file === undefined) {
-			return
-		}
-
-		event.target.value = null
-
-		await API.files.uploadFile(params.id, params.path, file)
-		addAlert(`Uploaded file "${file.name}"`, 'success')
-		await fetchFSLayer()
-	}
-
-	return (
-		<>
-			<Stack container>
-				<Grid container sx={{ mb: 2 }}>
-					<Grid item xs={4}>
-						<Typography variant="h4">{storage()?.name}</Typography>
-					</Grid>
-
-					<Grid item xs={4}>
-						<ToggleButtonGroup
-							exclusive
-							value={isAccessPage()}
-							color="primary"
-							onChange={(_, val) => setIsAccessPage(val)}
-							sx={{ display: 'flex', justifyContent: 'center' }}
-						>
-							<ToggleButton value={false}>
-								<FolderOpenIcon fontSize="small" />
-								&nbsp; Files
-							</ToggleButton>
-							<ToggleButton value={true}>
-								<LockIcon fontSize="small" />
-								&nbsp; Access
-							</ToggleButton>
-						</ToggleButtonGroup>
-					</Grid>
-
-					<Grid
-						item
-						xs={4}
-						sx={{ display: 'flex', justifyContent: 'flex-end' }}
-					>
-						<Show
-							when={!isAccessPage()}
-							fallback={
-								<Show when={isGrantAccessButtonVisible()}>
-									<Fab
-										variant="extended"
-										color="secondary"
-										onClick={() => setIsGrantAccessVisible(true)}
-									>
-										<AddIcon sx={{ mr: 1 }} />
-										Grant access
-									</Fab>
-									<GrantAccess
-										isVisible={isGrantAccessVisible()}
-										afterGrant={fetchUsersWithAccess}
-										onClose={() => setIsGrantAccessVisible(false)}
-									/>
-								</Show>
-							}
-						>
-							<Menu button_title="Create">
-								<MenuItem onClick={openCreateFolderDialog}>
-									<ListItemIcon>
-										<UploadFolderIcon />
-									</ListItemIcon>
-									<ListItemText>Create folder</ListItemText>
-								</MenuItem>
-								<MenuItem onClick={uploadFileClickHandler}>
-									<ListItemIcon>
-										<UploadFileIcon />
-									</ListItemIcon>
-									<ListItemText>Upload file</ListItemText>
-								</MenuItem>
-								<MenuItem
-									onClick={() => navigate(`/storages/${params.id}/upload_to`)}
-								>
-									<ListItemIcon>
-										<UploadFileIcon />
-									</ListItemIcon>
-									<ListItemText>Upload file to</ListItemText>
-								</MenuItem>
-							</Menu>
-						</Show>
-					</Grid>
-				</Grid>
-
-				<Show
-					when={!isAccessPage()}
-					fallback={
-						<Access
-							setIsGrantAccessVisible={setIsGrantAccessVisible}
-							users={users()}
-							onMount={fetchUsersWithAccess}
-							refetchUsers={fetchUsersWithAccess}
-						/>
-					}
-				>
-					<Grid>
-						<Show when={fsLayer().length} fallback={<>Not files yet</>}>
-							<List sx={{ minWidth: 320, maxWidth: 540, mx: 'auto' }}>
-								<Divider />
-								{mapArray(fsLayer, (fsElement) => (
-									<>
-										<FSListItem
-											fsElement={fsElement}
-											storageId={params.id}
-											onDelete={fetchFSLayer}
-										/>
-										<Divider />
-									</>
-								))}
-							</List>
-						</Show>
-					</Grid>
-
-					<CreateFolderDialog
-						isOpened={isCreateFolderDialogOpen()}
-						onCreate={createFolder}
-						onClose={closeCreateFolderDialog}
-					/>
-					<input
-						ref={uploadFileInputElement}
-						type="file"
-						style="display: none"
-						onChange={uploadFile}
-					/>
-				</Show>
-			</Stack>
-		</>
-	)
+function createUploadId() {
+  const cryptoObj = globalThis.crypto
+  if (cryptoObj?.randomUUID) return cryptoObj.randomUUID()
+  if (cryptoObj?.getRandomValues) {
+    const bytes = cryptoObj.getRandomValues(new Uint8Array(16))
+    bytes[6] = (bytes[6] & 0x0f) | 0x40
+    bytes[8] = (bytes[8] & 0x3f) | 0x80
+    const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+  }
+  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
 }
 
-export default Files
+export default function Files() {
+  const { id: storageId } = useParams()
+  const location = useLocation()
+  const navigate = useNavigate()
+  const addAlert = useAlert()
+
+  const prefix = `/storages/${storageId}/files/`
+  const currentPath = location.pathname.startsWith(prefix)
+    ? location.pathname.slice(prefix.length)
+    : ''
+
+  const [items, setItems] = useState([])
+  const [search, setSearch] = useState('')
+  const [searchResults, setSearchResults] = useState(null)
+  const [infoFile, setInfoFile] = useState(null)
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState(null)
+  const [moveTarget, setMoveTarget] = useState(null)
+  const [uploadState, setUploadState] = useState(null)
+  const cancelProgressRef = useRef(null)
+  const uploadIdRef = useRef(null)
+
+  const loadTree = useCallback(async () => {
+    try {
+      const data = await API.files.tree(storageId, currentPath)
+      setItems(data || [])
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }, [storageId, currentPath])
+
+  useEffect(() => {
+    loadTree()
+    setSearchResults(null)
+    setSearch('')
+  }, [loadTree])
+
+  useEffect(() => {
+    return () => {
+      if (cancelProgressRef.current) cancelProgressRef.current()
+    }
+  }, [])
+
+  const isUploading = uploadState?.status === 'uploading'
+
+  useEffect(() => {
+    if (!isUploading) return
+    const handler = (e) => {
+      e.preventDefault()
+      e.returnValue = ''
+    }
+    window.addEventListener('beforeunload', handler)
+    return () => window.removeEventListener('beforeunload', handler)
+  }, [isUploading])
+
+  const blocker = useBlocker(isUploading)
+
+  const handleSearch = async (e) => {
+    e.preventDefault()
+    if (!search) {
+      setSearchResults(null)
+      return
+    }
+    try {
+      const data = await API.files.search(storageId, currentPath, search)
+      setSearchResults(data || [])
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
+
+  const handleCreateFolder = async (name) => {
+    try {
+      await API.files.createFolder(storageId, currentPath, name)
+      addAlert('Folder created', 'success')
+      loadTree()
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
+
+  const handleUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+
+    const filename = file.name
+    const uploadId = createUploadId()
+    uploadIdRef.current = uploadId
+    setUploadState({ filename, totalBytes: file.size, uploadedBytes: 0, totalChunks: 0, uploadedChunks: 0, status: 'uploading' })
+
+    const cancel = API.files.subscribeProgress(uploadId, (data) => {
+      setUploadState((prev) => ({
+        ...prev,
+        filename,
+        totalBytes: data.total_bytes || prev?.totalBytes || file.size,
+        uploadedBytes: data.uploaded_bytes || 0,
+        totalChunks: data.total || prev?.totalChunks || 0,
+        uploadedChunks: data.uploaded || 0,
+        status: data.status,
+      }))
+      if (data.status === 'done') {
+        uploadIdRef.current = null
+        addAlert('File uploaded', 'success')
+        loadTree()
+        setTimeout(() => setUploadState(null), 2000)
+      }
+      if (data.status === 'error') {
+        uploadIdRef.current = null
+        addAlert('Upload failed unexpectedly. Please try again.', 'error', { persistent: true })
+        setTimeout(() => setUploadState(null), 3000)
+      }
+    })
+    cancelProgressRef.current = cancel
+
+    try {
+      await API.files.upload(storageId, currentPath.replace(/\/+$/, ''), file, uploadId)
+    } catch (err) {
+      if (uploadIdRef.current === uploadId) {
+        setUploadState(null)
+        uploadIdRef.current = null
+        addAlert(`Upload interrupted: ${err.message}`, 'error', { persistent: true })
+      }
+    }
+    e.target.value = ''
+  }
+
+  const handleCancelUpload = async () => {
+    const id = uploadIdRef.current
+    if (!id) return
+    try {
+      if (cancelProgressRef.current) cancelProgressRef.current()
+      await API.files.cancelUpload(id)
+      addAlert('Upload cancelled', 'info')
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+    setUploadState(null)
+    uploadIdRef.current = null
+    loadTree()
+  }
+
+  const handleDownload = async (item) => {
+    try {
+      let blob, filename
+      if (item.is_file) {
+        blob = await API.files.download(storageId, item.path)
+        filename = item.name
+      } else {
+        blob = await API.files.downloadDir(storageId, item.path)
+        filename = item.name + '.zip'
+      }
+      const url = URL.createObjectURL(blob)
+      const a = document.createElement('a')
+      a.href = url
+      a.download = filename
+      a.click()
+      URL.revokeObjectURL(url)
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
+
+  const handleDelete = async () => {
+    try {
+      const path = (deleteTarget.path || deleteTarget.name).replace(/\/+$/, '')
+      await API.files.delete(storageId, path)
+      addAlert('Deleted', 'success')
+      setDeleteTarget(null)
+      loadTree()
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
+
+  const handleMove = async (item, newPath) => {
+    try {
+      const oldPath = item.is_file
+        ? (item.path || item.name)
+        : (item.path || item.name).replace(/\/$/, '')
+      await API.files.move(storageId, oldPath, newPath)
+      addAlert('Moved successfully', 'success')
+      setMoveTarget(null)
+      loadTree()
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
+
+  const pathParts = currentPath.split('/').filter(Boolean)
+  const breadcrumbs = [
+    <MuiLink
+      key="root"
+      underline="hover"
+      color="inherit"
+      sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
+      onClick={() => navigate(prefix)}
+    >
+      Root
+    </MuiLink>,
+    ...pathParts.map((part, i) => {
+      const pathTo = prefix + pathParts.slice(0, i + 1).join('/') + '/'
+      return (
+        <MuiLink
+          key={pathTo}
+          underline="hover"
+          color="inherit"
+          sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
+          onClick={() => navigate(pathTo)}
+        >
+          {part}
+        </MuiLink>
+      )
+    }),
+  ]
+
+  const displayItems = searchResults || items
+
+  return (
+    <Box>
+      <Breadcrumbs sx={{ mb: 2 }}>{breadcrumbs}</Breadcrumbs>
+
+      {uploadState && (
+        <UploadProgress
+          filename={uploadState.filename}
+          totalBytes={uploadState.totalBytes}
+          uploadedBytes={uploadState.uploadedBytes}
+          totalChunks={uploadState.totalChunks}
+          uploadedChunks={uploadState.uploadedChunks}
+          status={uploadState.status}
+          onCancel={handleCancelUpload}
+        />
+      )}
+
+      <Box component="form" onSubmit={handleSearch} sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
+        <TextField
+          size="small"
+          placeholder="Search files..."
+          value={search}
+          onChange={(e) => setSearch(e.target.value)}
+          InputProps={{
+            startAdornment: (
+              <InputAdornment position="start">
+                <SearchIcon sx={{ fontSize: 18, color: 'text.secondary' }} />
+              </InputAdornment>
+            ),
+          }}
+          sx={{ width: 260 }}
+        />
+        {searchResults && (
+          <Button
+            size="small"
+            onClick={() => { setSearchResults(null); setSearch('') }}
+            sx={{ color: 'text.secondary', fontSize: '0.8125rem' }}
+          >
+            Clear
+          </Button>
+        )}
+      </Box>
+
+      <Box sx={{
+        bgcolor: 'background.paper',
+        borderRadius: 3,
+        border: '1px solid',
+        borderColor: 'divider',
+        overflow: 'hidden',
+      }}>
+        <List disablePadding>
+          {displayItems.map((item, i) => (
+            <Box key={item.path || item.name}>
+              {i > 0 && <Divider />}
+              <FSListItem
+                item={item}
+                storageId={storageId}
+                currentPath={currentPath}
+                onInfo={setInfoFile}
+                onDelete={setDeleteTarget}
+                onDownload={handleDownload}
+                onMove={setMoveTarget}
+              />
+            </Box>
+          ))}
+          {displayItems.length === 0 && (
+            <Box sx={{ p: 4, textAlign: 'center' }}>
+              <Typography color="text.secondary" variant="body2">
+                {searchResults ? 'No results found' : 'Empty folder'}
+              </Typography>
+            </Box>
+          )}
+        </List>
+      </Box>
+
+      <FloatingMenu>
+        {(close) => [
+          <MenuItem key="folder" onClick={() => { close(); setFolderDialogOpen(true) }}>
+            <FolderAddIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> New Folder
+          </MenuItem>,
+          <MenuItem key="upload" component="label">
+            <UploadIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> Upload File
+            <input type="file" hidden onChange={(e) => { close(); handleUpload(e) }} />
+          </MenuItem>,
+        ]}
+      </FloatingMenu>
+
+      <FileInfo file={infoFile} open={!!infoFile} onClose={() => setInfoFile(null)} />
+
+      <CreateFolderDialog
+        open={folderDialogOpen}
+        onCreate={handleCreateFolder}
+        onClose={() => setFolderDialogOpen(false)}
+      />
+
+      <ActionConfirmDialog
+        open={!!deleteTarget}
+        entity={deleteTarget?.name || 'item'}
+        action="Delete"
+        description={`Are you sure you want to delete "${deleteTarget?.name}"?`}
+        onConfirm={handleDelete}
+        onCancel={() => setDeleteTarget(null)}
+      />
+
+      <NavigationBlockDialog blocker={blocker} />
+
+      <MoveDialog
+        open={!!moveTarget}
+        item={moveTarget}
+        storageId={storageId}
+        onMove={handleMove}
+        onClose={() => setMoveTarget(null)}
+      />
+    </Box>
+  )
+}

@@ -1,108 +1,56 @@
-import Button from '@suid/material/Button'
-import TextField from '@suid/material/TextField'
-import Dialog from '@suid/material/Dialog'
-import DialogActions from '@suid/material/DialogActions'
-import DialogContent from '@suid/material/DialogContent'
-import DialogTitle from '@suid/material/DialogTitle'
-import Select from '@suid/material/Select'
-import MenuItem from '@suid/material/MenuItem'
-import FormControl from '@suid/material/FormControl'
-import InputLabel from '@suid/material/InputLabel'
-import { useParams } from '@solidjs/router'
+import { useState, useEffect } from 'react'
+import {
+  Dialog, DialogTitle, DialogContent, DialogActions,
+  Button, TextField, FormControl, InputLabel, Select, MenuItem,
+} from '@mui/material'
 
-import AccessTypeChip, { makeAccessTypeUserFriendly } from './AccessTypeChip'
-import API from '../api'
-import { alertStore } from './AlertStack'
+export default function GrantAccess({ open, onClose, onGrant, editUser }) {
+  const [email, setEmail] = useState('')
+  const [accessType, setAccessType] = useState('r')
 
-/**
- * @typedef {Object} GrantAccessProps
- * @property {boolean} isVisible
- * @property {() => void} onClose
- * @property {() => void} afterGrant
- * @property {string | undefined} email
- */
+  useEffect(() => {
+    if (editUser) {
+      setEmail(editUser.email)
+      setAccessType(editUser.access_type)
+    } else {
+      setEmail('')
+      setAccessType('r')
+    }
+  }, [editUser, open])
 
-/**
- *
- * @param {GrantAccessProps} props
- */
-const GrantAccess = (props) => {
-	const { addAlert } = alertStore
-	const params = useParams()
-	const getAction = () => (props.email?.length ? 'Change' : 'Grant')
+  const handleSubmit = () => {
+    onGrant(email, accessType)
+    onClose()
+  }
 
-	/**
-	 *
-	 * @param {SubmitEvent} event
-	 */
-	const onGrant = async (event) => {
-		event.preventDefault()
-
-		const data = new FormData(event.currentTarget)
-		const email = props.email || data.get('email')
-		const access_type = data.get('access_type')
-
-		await API.access.grantAccess(params.id, email, access_type)
-
-		props.onClose()
-		addAlert(
-			`Granted "${makeAccessTypeUserFriendly(
-				access_type
-			)}" access to the user with email "${email}"`,
-			'success'
-		)
-
-		props.afterGrant()
-	}
-
-	return (
-		<>
-			<Dialog open={props.isVisible} onClose={props.onClose}>
-				<form onSubmit={onGrant}>
-					<DialogTitle>{getAction} access</DialogTitle>
-					<DialogContent>
-						<TextField
-							required
-							defaultValue={props.email}
-							disabled={props.email}
-							margin="normal"
-							id="email"
-							label="User's email"
-							type="email"
-							name="email"
-							fullWidth
-							variant="standard"
-						/>
-
-						<FormControl fullWidth>
-							<InputLabel id="email-select-label">Access Type</InputLabel>
-							<Select
-								variant="standard"
-								labelId="email-select-label"
-								label="Access Type"
-								name="access_type"
-							>
-								{['R', 'W', 'A'].map((at) => (
-									<MenuItem value={at}>
-										<AccessTypeChip at={at} />
-									</MenuItem>
-								))}
-							</Select>
-						</FormControl>
-					</DialogContent>
-					<DialogActions>
-						<Button type="submit" color="success">
-							{getAction}
-						</Button>
-
-						<Button onClick={props.onClose} color="error">
-							Cancel
-						</Button>
-					</DialogActions>
-				</form>
-			</Dialog>
-		</>
-	)
+  return (
+    <Dialog open={open} onClose={onClose} maxWidth="xs" fullWidth>
+      <DialogTitle>{editUser ? 'Change Access' : 'Grant Access'}</DialogTitle>
+      <DialogContent>
+        <TextField
+          fullWidth
+          margin="dense"
+          placeholder="Email address"
+          value={email}
+          onChange={(e) => setEmail(e.target.value)}
+          disabled={!!editUser}
+          sx={{ mb: 2 }}
+        />
+        <FormControl fullWidth>
+          <InputLabel>Access Type</InputLabel>
+          <Select value={accessType} onChange={(e) => setAccessType(e.target.value)} label="Access Type">
+            <MenuItem value="r">Viewer (Read)</MenuItem>
+            <MenuItem value="w">Editor (Write)</MenuItem>
+            <MenuItem value="a">Admin</MenuItem>
+          </Select>
+        </FormControl>
+      </DialogContent>
+      <DialogActions>
+        <Button onClick={onClose} color="inherit">Cancel</Button>
+        <Button onClick={handleSubmit} variant="contained" disabled={!email}>
+          {editUser ? 'Update' : 'Grant'}
+        </Button>
+      </DialogActions>
+    </Dialog>
+  )
 }
-
-export default GrantAccess

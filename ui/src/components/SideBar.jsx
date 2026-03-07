@@ -1,67 +1,37 @@
-import Drawer from '@suid/material/Drawer'
-import List from '@suid/material/List'
-import Divider from '@suid/material/Divider'
-import IconButton from '@suid/material/IconButton'
-import ChevronLeftIcon from '@suid/icons-material/ChevronLeft'
-import ChevronRightIcon from '@suid/icons-material/ChevronRight'
-import ListItem from '@suid/material/ListItem'
-import ListItemButton from '@suid/material/ListItemButton'
-import { createSignal } from 'solid-js'
-import StorageIcon from '@suid/icons-material/Storage'
-import SmartToyIcon from '@suid/icons-material/SmartToyOutlined'
-
+import { Drawer, List, Toolbar, Box } from '@mui/material'
+import { Storage as StorageIcon, SmartToy as WorkerIcon } from '@mui/icons-material'
 import SideBarItem from './SideBarItem'
 
-const initOpen = window.innerWidth > 840
+const DRAWER_WIDTH = 220
 
-const SideBar = () => {
-	const [open, setOpen] = createSignal(initOpen)
-
-	const toggleDrawerOpen = () => {
-		setOpen((open) => !open)
-	}
-
-	return (
-		<Drawer
-			variant="permanent"
-			open
-			classes={{
-				paper: open()
-					? 'drawer-paper drawer-paper-opened'
-					: 'drawer-paper drawer-paper-closed',
-			}}
-		>
-			<List>
-				<ListItem disablePadding sx={{ display: 'block' }}>
-					<ListItemButton
-						sx={{
-							justifyContent: open() ? 'end' : 'center',
-							py: 0.5,
-							px: 1,
-						}}
-						onClick={toggleDrawerOpen}
-					>
-						<IconButton>
-							{open() ? <ChevronLeftIcon /> : <ChevronRightIcon />}
-						</IconButton>
-					</ListItemButton>
-				</ListItem>
-			</List>
-			<Divider />
-			<List>
-				<SideBarItem text="Storages" link="/storages" isFull={open()}>
-					<StorageIcon />
-				</SideBarItem>
-				<SideBarItem
-					text="Storage workers"
-					link="/storage_workers"
-					isFull={open()}
-				>
-					<SmartToyIcon />
-				</SideBarItem>
-			</List>
-		</Drawer>
-	)
+export default function SideBar({ open }) {
+  return (
+    <Drawer
+      variant="permanent"
+      sx={{
+        width: open ? DRAWER_WIDTH : 60,
+        flexShrink: 0,
+        '& .MuiDrawer-paper': {
+          width: open ? DRAWER_WIDTH : 60,
+          boxSizing: 'border-box',
+          overflowX: 'hidden',
+          transition: 'width 0.25s cubic-bezier(0.4, 0, 0.2, 1)',
+          backgroundColor: (theme) => theme.palette.mode === 'dark'
+            ? 'rgba(28,28,30,0.6)'
+            : 'rgba(255,255,255,0.6)',
+          backdropFilter: 'saturate(180%) blur(20px)',
+          borderRight: '1px solid',
+          borderColor: 'divider',
+        },
+      }}
+    >
+      <Toolbar sx={{ minHeight: '52px !important' }} />
+      <Box sx={{ px: 0.5, pt: 1 }}>
+        <List disablePadding>
+          <SideBarItem to="/storages" icon={<StorageIcon />} label="Storages" showLabel={open} />
+          <SideBarItem to="/storage_workers" icon={<WorkerIcon />} label="Workers" showLabel={open} />
+        </List>
+      </Box>
+    </Drawer>
+  )
 }
-
-export default SideBar

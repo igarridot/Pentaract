@@ -1,24 +1,26 @@
 {
-  "name": "vite-template-solid",
-  "version": "0.0.0",
-  "description": "",
+  "name": "pentaract-ui",
+  "private": true,
+  "version": "1.0.0",
+  "type": "module",
   "scripts": {
-    "start": "vite",
     "dev": "vite",
     "build": "vite build",
-    "serve": "vite preview"
-  },
-  "license": "MIT",
-  "devDependencies": {
-    "solid-devtools": "^0.27.3",
-    "vite": "^4.3.9",
-    "vite-plugin-solid": "^2.7.0"
+    "preview": "vite preview"
   },
   "dependencies": {
-    "@solidjs/router": "^0.9.1",
-    "@suid/icons-material": "^0.6.11",
-    "@suid/material": "^0.15.1",
-    "@suid/vite-plugin": "^0.1.5",
-    "solid-js": "^1.8.4"
+    "@emotion/react": "^11.11.4",
+    "@emotion/styled": "^11.11.5",
+    "@mui/icons-material": "^5.15.14",
+    "@mui/material": "^5.15.14",
+    "react": "^18.2.0",
+    "react-dom": "^18.2.0",
+    "react-router-dom": "^6.22.3"
+  },
+  "devDependencies": {
+    "@types/react": "^18.2.66",
+    "@types/react-dom": "^18.2.22",
+    "@vitejs/plugin-react": "^4.2.1",
+    "vite": "^5.2.0"
   }
 }
