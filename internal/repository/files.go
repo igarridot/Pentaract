@@ -165,7 +165,7 @@ func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, s
 
 	pattern := "%" + searchPath + "%"
 	rows, err := r.pool.Query(ctx,
-		`SELECT DISTINCT path, true AS is_file
+		`SELECT path, size
 		FROM files
 		WHERE storage_id = $1
 			AND path LIKE $2 || '%'
@@ -183,8 +183,15 @@ func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, s
 	var results []domain.SearchFSElement
 	for rows.Next() {
 		var el domain.SearchFSElement
-		if err := rows.Scan(&el.Path, &el.IsFile); err != nil {
+		if err := rows.Scan(&el.Path, &el.Size); err != nil {
 			return nil, err
+		}
+		el.IsFile = true
+		// Derive name from the last segment of the path
+		if idx := strings.LastIndex(el.Path, "/"); idx >= 0 {
+			el.Name = el.Path[idx+1:]
+		} else {
+			el.Name = el.Path
 		}
 		results = append(results, el)
 	}
