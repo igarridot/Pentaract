@@ -306,6 +306,39 @@ func (r *FilesRepo) ListFilesUnderPath(ctx context.Context, storageID uuid.UUID,
 	return files, rows.Err()
 }
 
+// DirStats returns total uploaded file bytes and exact Telegram chunk count under a directory prefix.
+func (r *FilesRepo) DirStats(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error) {
+	if path != "" && !strings.HasSuffix(path, "/") {
+		path += "/"
+	}
+
+	likePath := path + "%"
+	var totalBytes int64
+	var totalChunks int64
+	err := r.pool.QueryRow(ctx,
+		`SELECT
+			COALESCE((SELECT SUM(f.size)
+				FROM files f
+				WHERE f.storage_id = $1
+					AND f.path LIKE $2
+					AND f.is_uploaded = true
+					AND f.path NOT LIKE '%/.folder'), 0) AS total_bytes,
+			COALESCE((SELECT COUNT(fc.id)
+				FROM file_chunks fc
+				JOIN files f ON f.id = fc.file_id
+				WHERE f.storage_id = $1
+					AND f.path LIKE $2
+					AND f.is_uploaded = true
+					AND f.path NOT LIKE '%/.folder'), 0) AS total_chunks`,
+		storageID, likePath,
+	).Scan(&totalBytes, &totalChunks)
+	if err != nil {
+		return 0, 0, err
+	}
+
+	return totalBytes, totalChunks, nil
+}
+
 // Move renames a file or moves all files under a folder prefix to a new path.
 func (r *FilesRepo) Move(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error {
 	// Move single file

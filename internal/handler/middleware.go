@@ -16,18 +16,28 @@ func AuthMiddleware(secretKey string) func(http.Handler) http.Handler {
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			header := r.Header.Get("Authorization")
-			if header == "" {
-				http.Error(w, `{"error":"not authenticated"}`, http.StatusUnauthorized)
-				return
+
+			token := ""
+			if header != "" {
+				parts := strings.SplitN(header, " ", 2)
+				if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
+					http.Error(w, `{"error":"invalid authorization header"}`, http.StatusUnauthorized)
+					return
+				}
+				token = parts[1]
+			} else {
+				token = r.URL.Query().Get("access_token")
+				if token == "" {
+					http.Error(w, `{"error":"not authenticated"}`, http.StatusUnauthorized)
+					return
+				}
+				if !strings.Contains(r.URL.Path, "/files/download/") && !strings.Contains(r.URL.Path, "/files/download_dir/") {
+					http.Error(w, `{"error":"not authenticated"}`, http.StatusUnauthorized)
+					return
+				}
 			}
 
-			parts := strings.SplitN(header, " ", 2)
-			if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-				http.Error(w, `{"error":"invalid authorization header"}`, http.StatusUnauthorized)
-				return
-			}
-
-			user, err := appjwt.Validate(parts[1], secretKey)
+			user, err := appjwt.Validate(token, secretKey)
 			if err != nil {
 				http.Error(w, `{"error":"invalid or expired token"}`, http.StatusUnauthorized)
 				return

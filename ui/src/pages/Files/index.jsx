@@ -18,6 +18,7 @@ import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import NavigationBlockDialog from '../../components/NavigationBlockDialog'
 import FloatingMenu from '../../components/Menu'
 import UploadProgress from '../../components/UploadProgress'
+import DownloadProgress from '../../components/DownloadProgress'
 import MoveDialog from '../../components/MoveDialog'
 
 function createUploadId() {
@@ -52,8 +53,11 @@ export default function Files() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [moveTarget, setMoveTarget] = useState(null)
   const [uploadState, setUploadState] = useState(null)
+  const [downloadState, setDownloadState] = useState(null)
   const cancelProgressRef = useRef(null)
+  const cancelDownloadProgressRef = useRef(null)
   const uploadIdRef = useRef(null)
+  const downloadIdRef = useRef(null)
 
   const loadTree = useCallback(async () => {
     try {
@@ -73,6 +77,7 @@ export default function Files() {
   useEffect(() => {
     return () => {
       if (cancelProgressRef.current) cancelProgressRef.current()
+      if (cancelDownloadProgressRef.current) cancelDownloadProgressRef.current()
     }
   }, [])
 
@@ -181,8 +186,52 @@ export default function Files() {
         blob = await API.files.download(storageId, item.path)
         filename = item.name
       } else {
-        blob = await API.files.downloadDir(storageId, item.path)
+        if (cancelDownloadProgressRef.current) cancelDownloadProgressRef.current()
+        const downloadId = createUploadId()
+        downloadIdRef.current = downloadId
         filename = item.name + '.zip'
+        setDownloadState({
+          filename,
+          totalBytes: 0,
+          downloadedBytes: 0,
+          totalChunks: 0,
+          downloadedChunks: 0,
+          status: 'downloading',
+        })
+        const cancel = API.files.subscribeDownloadProgress(downloadId, (data) => {
+          setDownloadState((prev) => ({
+            ...prev,
+            filename,
+            totalBytes: data.total_bytes || prev?.totalBytes || 0,
+            downloadedBytes: data.downloaded_bytes || 0,
+            totalChunks: data.total || prev?.totalChunks || 0,
+            downloadedChunks: data.downloaded || 0,
+            status: data.status,
+          }))
+
+          if (data.status === 'done') {
+            cancel()
+            cancelDownloadProgressRef.current = null
+            downloadIdRef.current = null
+            setTimeout(() => setDownloadState(null), 2000)
+          }
+          if (data.status === 'error') {
+            cancel()
+            cancelDownloadProgressRef.current = null
+            downloadIdRef.current = null
+            addAlert('Download failed unexpectedly. Please try again.', 'error', { persistent: true })
+            setTimeout(() => setDownloadState(null), 3000)
+          }
+        })
+        cancelDownloadProgressRef.current = cancel
+
+        const url = API.files.downloadDirUrl(storageId, item.path, downloadId)
+        const a = document.createElement('a')
+        a.href = url
+        a.download = filename
+        a.rel = 'noopener'
+        a.click()
+        return
       }
       const url = URL.createObjectURL(blob)
       const a = document.createElement('a')
@@ -191,6 +240,15 @@ export default function Files() {
       a.click()
       URL.revokeObjectURL(url)
     } catch (err) {
+      if (!item.is_file) {
+        if (downloadIdRef.current && cancelDownloadProgressRef.current) {
+          cancelDownloadProgressRef.current()
+          cancelDownloadProgressRef.current = null
+          downloadIdRef.current = null
+        }
+        setDownloadState((prev) => (prev ? { ...prev, status: 'error' } : null))
+        setTimeout(() => setDownloadState(null), 3000)
+      }
       addAlert(err.message, 'error')
     }
   }
@@ -263,6 +321,16 @@ export default function Files() {
           uploadedChunks={uploadState.uploadedChunks}
           status={uploadState.status}
           onCancel={handleCancelUpload}
+        />
+      )}
+      {downloadState && (
+        <DownloadProgress
+          filename={downloadState.filename}
+          totalBytes={downloadState.totalBytes}
+          downloadedBytes={downloadState.downloadedBytes}
+          totalChunks={downloadState.totalChunks}
+          downloadedChunks={downloadState.downloadedChunks}
+          status={downloadState.status}
         />
       )}
 

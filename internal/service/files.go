@@ -145,13 +145,22 @@ func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, 
 }
 
 // DownloadDir writes all files under a directory as a zip archive to the given writer.
-func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer) (string, error) {
+func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *DownloadProgress) (string, error) {
 	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
 	if err != nil {
 		return "", err
 	}
 	if !ok {
 		return "", domain.ErrForbidden()
+	}
+
+	if progress != nil {
+		totalBytes, totalChunks, err := s.filesRepo.DirStats(ctx, storageID, dirPath)
+		if err != nil {
+			return "", err
+		}
+		progress.TotalBytes = totalBytes
+		progress.TotalChunks = totalChunks
 	}
 
 	files, err := s.filesRepo.ListFilesUnderPath(ctx, storageID, dirPath)
@@ -190,7 +199,7 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 		}
 
 		// Stream chunks directly into the zip entry — no full file buffering
-		if err := s.manager.DownloadToWriter(ctx, &file, entry); err != nil {
+		if err := s.manager.DownloadToWriter(ctx, &file, entry, progress); err != nil {
 			return "", err
 		}
 	}
@@ -209,4 +218,3 @@ func (s *FilesService) Move(ctx context.Context, userID, storageID uuid.UUID, ol
 
 	return s.filesRepo.Move(ctx, storageID, oldPath, newPath)
 }
-
