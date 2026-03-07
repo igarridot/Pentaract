@@ -6,6 +6,7 @@ import {
   LightMode as LightIcon,
   DarkMode as DarkIcon,
   SettingsBrightness as AutoIcon,
+  Feedback as FeedbackIcon,
 } from '@mui/icons-material'
 import { Link, useNavigate } from 'react-router-dom'
 import { logout } from '../common/auth_guard'
@@ -72,6 +73,16 @@ export default function Header({ onToggleSidebar }) {
             </MenuItem>
           ))}
         </Menu>
+        <IconButton
+          component="a"
+          href="https://github.com/igarridot/Pentaract/issues"
+          target="_blank"
+          rel="noopener noreferrer"
+          sx={{ color: 'text.secondary', mr: 0.5 }}
+          title="Send feedback"
+        >
+          <FeedbackIcon fontSize="small" />
+        </IconButton>
         <IconButton onClick={() => logout(navigate)} sx={{ color: 'text.secondary' }}>
           <LogoutIcon fontSize="small" />
         </IconButton>
