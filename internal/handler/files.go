@@ -1,7 +1,10 @@
 package handler
 
 import (
+	"context"
 	"fmt"
+	"io"
+	"log"
 	"mime"
 	"net/http"
 	"net/url"
@@ -17,18 +20,26 @@ import (
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
+type uploadTracker struct {
+	progress  *service.UploadProgress
+	cancel    context.CancelFunc
+	storageID uuid.UUID
+	filePath  string
+	err       error // set when upload finishes with error
+	done      bool  // set when upload finishes
+}
+
 type FilesHandler struct {
 	svc *service.FilesService
 
-	// In-flight upload progress tracking
-	mu       sync.RWMutex
-	progress map[string]*service.UploadProgress // keyed by upload ID
+	mu      sync.RWMutex
+	uploads map[string]*uploadTracker
 }
 
 func NewFilesHandler(svc *service.FilesService) *FilesHandler {
 	return &FilesHandler{
-		svc:      svc,
-		progress: make(map[string]*service.UploadProgress),
+		svc:     svc,
+		uploads: make(map[string]*uploadTracker),
 	}
 }
 
@@ -72,16 +83,15 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Parse multipart: files larger than 32MB are spilled to disk by Go automatically
 	mr, err := r.MultipartReader()
 	if err != nil {
 		writeError(w, domain.ErrBadRequest("multipart form required"))
 		return
 	}
 
-	var path, filename string
+	var path, filename, uploadID string
 	var fileSize int64
-	var fileReader *partReader
+	var filePart io.ReadCloser
 
 	for {
 		part, err := mr.NextPart()
@@ -93,62 +103,133 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			buf := make([]byte, 4096)
 			n, _ := part.Read(buf)
 			path = string(buf[:n])
+		case "upload_id":
+			buf := make([]byte, 256)
+			n, _ := part.Read(buf)
+			uploadID = string(buf[:n])
 		case "file":
 			filename = part.FileName()
-			fileReader = &partReader{part: part}
-			// Content-Length is not available per-part; use the header as hint
+			filePart = part
 			fileSize = r.ContentLength
 			if fileSize < 0 {
 				fileSize = 0
 			}
 		}
-		if fileReader != nil && filename != "" {
-			break // we have what we need, start streaming
+		if filePart != nil && filename != "" {
+			break
 		}
 	}
 
-	if fileReader == nil || filename == "" {
+	if filePart == nil || filename == "" {
 		writeError(w, domain.ErrBadRequest("file is required"))
 		return
 	}
-	defer fileReader.part.Close()
 
 	fullPath := filename
 	if path != "" {
 		fullPath = path + "/" + filename
 	}
 
-	// Create progress tracker
-	uploadID := uuid.New().String()
-	progress := &service.UploadProgress{}
-	h.mu.Lock()
-	h.progress[uploadID] = progress
-	h.mu.Unlock()
-	defer func() {
-		// Keep progress around briefly so the SSE client can read the final state
-		time.AfterFunc(30*time.Second, func() {
-			h.mu.Lock()
-			delete(h.progress, uploadID)
-			h.mu.Unlock()
-		})
+	// Pipe the multipart body to the upload goroutine.
+	pr, pw := io.Pipe()
+
+	// Channel to signal when body copy is done.
+	copyDone := make(chan struct{})
+
+	// Copy the multipart part data into the pipe in a goroutine.
+	go func() {
+		defer close(copyDone)
+		_, err := io.Copy(pw, filePart)
+		filePart.Close()
+		pw.CloseWithError(err)
 	}()
 
-	created, err := h.svc.Upload(r.Context(), user.ID, storageID, fullPath, fileSize, fileReader, progress)
-	if err != nil {
-		writeError(w, err)
-		return
+	uploadCtx, cancel := context.WithCancel(context.Background())
+
+	if uploadID == "" {
+		uploadID = uuid.New().String()
+	}
+	progress := &service.UploadProgress{TotalBytes: fileSize}
+	tracker := &uploadTracker{
+		progress:  progress,
+		cancel:    cancel,
+		storageID: storageID,
+		filePath:  fullPath,
 	}
 
-	writeJSON(w, http.StatusCreated, map[string]interface{}{
-		"id":        created.ID,
-		"path":      created.Path,
-		"size":      created.Size,
+	h.mu.Lock()
+	h.uploads[uploadID] = tracker
+	h.mu.Unlock()
+
+	// Start upload in background
+	go func() {
+		defer func() {
+			time.AfterFunc(30*time.Second, func() {
+				h.mu.Lock()
+				delete(h.uploads, uploadID)
+				h.mu.Unlock()
+			})
+		}()
+
+		_, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress)
+
+		h.mu.Lock()
+		tracker.done = true
+		tracker.err = uploadErr
+		h.mu.Unlock()
+
+		if uploadErr != nil {
+			log.Printf("[upload] failed file=%s: %v", fullPath, uploadErr)
+			pr.Close()
+		}
+	}()
+
+	// Respond immediately with upload_id so the client can track progress.
+	writeJSON(w, http.StatusAccepted, map[string]interface{}{
 		"upload_id": uploadID,
 	})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
+
+	// Keep the handler alive until the body is fully read into the pipe.
+	// This prevents Go's HTTP server from closing r.Body prematurely.
+	<-copyDone
 }
 
 func (h *FilesHandler) UploadTo(w http.ResponseWriter, r *http.Request) {
 	h.Upload(w, r)
+}
+
+// CancelUpload cancels an in-flight upload and cleans up.
+func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
+	user := GetAuthUser(r.Context())
+	uploadID := chi.URLParam(r, "uploadID")
+
+	h.mu.RLock()
+	tracker, exists := h.uploads[uploadID]
+	h.mu.RUnlock()
+
+	if !exists {
+		writeError(w, domain.ErrNotFound("upload"))
+		return
+	}
+
+	tracker.cancel()
+
+	log.Printf("[cancel] cancelling upload %s file=%s", uploadID, tracker.filePath)
+
+	go func() {
+		// Wait briefly for the upload goroutine to stop
+		time.Sleep(1 * time.Second)
+		if err := h.svc.Delete(context.Background(), user.ID, tracker.storageID, tracker.filePath); err != nil {
+			log.Printf("[cancel] WARNING: cleanup failed for %s: %v", tracker.filePath, err)
+		} else {
+			log.Printf("[cancel] cleanup done for %s", tracker.filePath)
+		}
+	}()
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // UploadProgress returns an SSE stream with upload progress updates.
@@ -177,7 +258,7 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		}
 
 		h.mu.RLock()
-		p, exists := h.progress[uploadID]
+		tracker, exists := h.uploads[uploadID]
 		h.mu.RUnlock()
 
 		if !exists {
@@ -186,17 +267,34 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 
+		p := tracker.progress
 		total := p.TotalChunks
 		uploaded := p.UploadedChunks.Load()
+		totalBytes := p.TotalBytes
+		uploadedBytes := p.UploadedBytes.Load()
 
-		fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"status\":\"uploading\"}\n\n", total, uploaded)
-		flusher.Flush()
+		h.mu.RLock()
+		isDone := tracker.done
+		uploadErr := tracker.err
+		h.mu.RUnlock()
 
-		if total > 0 && uploaded >= total {
-			fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"status\":\"done\"}\n\n", total, uploaded)
+		if isDone && uploadErr != nil {
+			fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"error\"}\n\n",
+				total, uploaded, totalBytes, uploadedBytes)
 			flusher.Flush()
 			return
 		}
+
+		if isDone && uploadErr == nil {
+			fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"done\"}\n\n",
+				total, uploaded, totalBytes, uploadedBytes)
+			flusher.Flush()
+			return
+		}
+
+		fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"uploading\"}\n\n",
+			total, uploaded, totalBytes, uploadedBytes)
+		flusher.Flush()
 	}
 }
 
@@ -306,16 +404,4 @@ func extractWildcardPath(r *http.Request) string {
 		path = decoded
 	}
 	return path
-}
-
-// partReader wraps a multipart.Part as an io.Reader.
-type partReader struct {
-	part interface {
-		Read([]byte) (int, error)
-		Close() error
-	}
-}
-
-func (pr *partReader) Read(p []byte) (int, error) {
-	return pr.part.Read(p)
 }

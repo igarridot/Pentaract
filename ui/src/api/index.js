@@ -36,17 +36,18 @@ const API = {
     createFolder: (storageId, path, folder_name) =>
       apiRequest(`/storages/${storageId}/files/create_folder`, 'POST', { path, folder_name }),
 
-    upload: (storageId, path, file) => {
+    upload: (storageId, path, file, uploadId) => {
       const formData = new FormData()
-      formData.append('file', file)
       formData.append('path', path || '')
+      if (uploadId) formData.append('upload_id', uploadId)
+      formData.append('file', file)
       return apiMultipartRequest(`/storages/${storageId}/files/upload`, 'POST', formData)
     },
 
     uploadTo: (storageId, path, file) => {
       const formData = new FormData()
-      formData.append('file', file)
       formData.append('path', path || '')
+      formData.append('file', file)
       return apiMultipartRequest(`/storages/${storageId}/files/upload_to`, 'POST', formData)
     },
 
@@ -68,6 +69,9 @@ const API = {
 
     delete: (storageId, path) =>
       apiRequest(`/storages/${storageId}/files/${path}`, 'DELETE'),
+
+    cancelUpload: (uploadId) =>
+      apiRequest(`/upload_cancel/${uploadId}`, 'POST'),
 
     // Subscribe to upload progress via SSE. Returns an EventSource.
     subscribeProgress: (uploadId, onProgress) => {

@@ -44,6 +44,8 @@ func NewStorageManager(
 type UploadProgress struct {
 	TotalChunks    int32
 	UploadedChunks atomic.Int32
+	TotalBytes     int64
+	UploadedBytes  atomic.Int64
 }
 
 // Upload reads from reader chunk by chunk (streaming), uploads to Telegram in parallel,
@@ -56,6 +58,15 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 
 	log.Printf("[upload] starting file=%s storage=%s (chat=%s)", file.Path, storage.Name, storage.Name)
 
+	// Calculate total chunks from file size if known
+	if progress != nil && progress.TotalBytes > 0 {
+		total := int32(progress.TotalBytes / chunkSize)
+		if progress.TotalBytes%chunkSize != 0 {
+			total++
+		}
+		progress.TotalChunks = total
+	}
+
 	type chunkResult struct {
 		TelegramFileID    string
 		TelegramMessageID int64
@@ -65,14 +76,61 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 	var mu sync.Mutex
 	var results []chunkResult
 
+	// cleanupResults deletes any chunks already uploaded to Telegram.
+	cleanupResults := func() {
+		mu.Lock()
+		uploaded := make([]chunkResult, len(results))
+		copy(uploaded, results)
+		mu.Unlock()
+
+		if len(uploaded) > 0 {
+			log.Printf("[upload] cancelled/failed file=%s, cleaning up %d chunks from telegram", file.Path, len(uploaded))
+			cleanupChunks := make([]domain.FileChunk, len(uploaded))
+			for i, r := range uploaded {
+				cleanupChunks[i] = domain.FileChunk{
+					TelegramMessageID: r.TelegramMessageID,
+				}
+			}
+			go m.DeleteFromTelegram(context.Background(), *storage, cleanupChunks)
+		}
+	}
+
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(5)
 
+	// Close the reader when context is cancelled so io.ReadFull unblocks.
+	cancelled := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			if rc, ok := reader.(io.Closer); ok {
+				rc.Close()
+			}
+		case <-cancelled:
+		}
+	}()
+	defer close(cancelled)
+
 	position := int16(0)
+	var readCancelled bool
 	for {
+		// Check context before blocking on read
+		select {
+		case <-ctx.Done():
+			readCancelled = true
+		default:
+		}
+		if readCancelled {
+			break
+		}
+
 		buf := make([]byte, chunkSize)
 		n, readErr := io.ReadFull(reader, buf)
 		if n == 0 && readErr != nil {
+			// Check if the read failed due to cancellation
+			if ctx.Err() != nil {
+				readCancelled = true
+			}
 			break
 		}
 		chunkData := buf[:n]
@@ -103,12 +161,16 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 
 			if progress != nil {
 				progress.UploadedChunks.Add(1)
+				progress.UploadedBytes.Add(int64(len(chunkData)))
 			}
 
 			return nil
 		})
 
 		if readErr != nil {
+			if ctx.Err() != nil {
+				readCancelled = true
+			}
 			break
 		}
 	}
@@ -117,8 +179,15 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		progress.TotalChunks = int32(position)
 	}
 
-	if err := g.Wait(); err != nil {
-		return err
+	waitErr := g.Wait()
+
+	// If cancelled or failed, clean up uploaded chunks from Telegram
+	if readCancelled || waitErr != nil {
+		cleanupResults()
+		if waitErr != nil {
+			return waitErr
+		}
+		return ctx.Err()
 	}
 
 	// Create chunk records
@@ -133,6 +202,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 	}
 
 	if err := m.filesRepo.CreateChunks(ctx, fileChunks); err != nil {
+		cleanupResults()
 		return fmt.Errorf("saving chunks: %w", err)
 	}
 

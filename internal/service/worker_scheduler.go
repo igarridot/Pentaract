@@ -24,7 +24,10 @@ func NewWorkerScheduler(workersRepo *repository.StorageWorkersRepo, rateLimit in
 }
 
 // GetToken blocks until a worker token is available for the given storage.
+// It queries the DB for the next available slot and waits accordingly
+// instead of polling every second.
 func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*repository.WorkerToken, error) {
+	logged := false
 	for {
 		select {
 		case <-ctx.Done():
@@ -40,11 +43,21 @@ func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*r
 			return wt, nil
 		}
 
-		log.Printf("No workers available for storage %s, retrying in 1s...", storageID)
+		// All workers are at rate limit. Query when the next slot opens.
+		waitDur, err := s.workersRepo.NextAvailableIn(ctx, storageID, s.rateLimit)
+		if err != nil || waitDur <= 0 {
+			waitDur = 2 * time.Second
+		}
+
+		if !logged {
+			log.Printf("[scheduler] all workers at rate limit (%d/min) for storage %s, waiting %s", s.rateLimit, storageID, waitDur.Round(time.Millisecond))
+			logged = true
+		}
+
 		select {
 		case <-ctx.Done():
 			return nil, ctx.Err()
-		case <-time.After(1 * time.Second):
+		case <-time.After(waitDur):
 		}
 	}
 }

@@ -38,6 +38,7 @@ export default function Files() {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [uploadState, setUploadState] = useState(null)
   const cancelProgressRef = useRef(null)
+  const uploadIdRef = useRef(null)
 
   const loadTree = useCallback(async () => {
     try {
@@ -106,31 +107,61 @@ export default function Files() {
     if (!file) return
 
     const filename = file.name
-    setUploadState({ filename, total: 0, uploaded: 0, status: 'uploading' })
+    const uploadId = crypto.randomUUID()
+    uploadIdRef.current = uploadId
+    setUploadState({ filename, totalBytes: file.size, uploadedBytes: 0, totalChunks: 0, uploadedChunks: 0, status: 'uploading' })
 
-    try {
-      const result = await API.files.upload(storageId, currentPath, file)
-
-      // Subscribe to progress if upload_id was returned
-      if (result && result.upload_id) {
-        const cancel = API.files.subscribeProgress(result.upload_id, (data) => {
-          setUploadState((prev) => ({ ...prev, ...data, filename }))
-          if (data.status === 'done') {
-            setTimeout(() => setUploadState(null), 2000)
-          }
-        })
-        cancelProgressRef.current = cancel
-      } else {
-        setUploadState(null)
+    // Subscribe to SSE progress immediately (before the upload POST completes)
+    const cancel = API.files.subscribeProgress(uploadId, (data) => {
+      setUploadState((prev) => ({
+        ...prev,
+        filename,
+        totalBytes: data.total_bytes || prev?.totalBytes || file.size,
+        uploadedBytes: data.uploaded_bytes || 0,
+        totalChunks: data.total || prev?.totalChunks || 0,
+        uploadedChunks: data.uploaded || 0,
+        status: data.status,
+      }))
+      if (data.status === 'done') {
+        uploadIdRef.current = null
+        addAlert('File uploaded', 'success')
+        loadTree()
+        setTimeout(() => setUploadState(null), 2000)
       }
+      if (data.status === 'error') {
+        uploadIdRef.current = null
+        addAlert('Upload failed', 'error')
+        setTimeout(() => setUploadState(null), 3000)
+      }
+    })
+    cancelProgressRef.current = cancel
 
-      addAlert('File uploaded', 'success')
-      loadTree()
+    // Start upload (this blocks until file body is fully sent)
+    try {
+      await API.files.upload(storageId, currentPath, file, uploadId)
     } catch (err) {
-      setUploadState(null)
-      addAlert(err.message, 'error')
+      if (uploadIdRef.current === uploadId) {
+        setUploadState(null)
+        uploadIdRef.current = null
+        addAlert(err.message, 'error')
+      }
     }
     e.target.value = ''
+  }
+
+  const handleCancelUpload = async () => {
+    const id = uploadIdRef.current
+    if (!id) return
+    try {
+      if (cancelProgressRef.current) cancelProgressRef.current()
+      await API.files.cancelUpload(id)
+      addAlert('Upload cancelled', 'info')
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+    setUploadState(null)
+    uploadIdRef.current = null
+    loadTree()
   }
 
   const handleDownload = async (item) => {
@@ -195,9 +226,12 @@ export default function Files() {
       {uploadState && (
         <UploadProgress
           filename={uploadState.filename}
-          total={uploadState.total}
-          uploaded={uploadState.uploaded}
+          totalBytes={uploadState.totalBytes}
+          uploadedBytes={uploadState.uploadedBytes}
+          totalChunks={uploadState.totalChunks}
+          uploadedChunks={uploadState.uploadedChunks}
           status={uploadState.status}
+          onCancel={handleCancelUpload}
         />
       )}
 

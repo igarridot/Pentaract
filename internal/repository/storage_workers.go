@@ -3,6 +3,7 @@ package repository
 import (
 	"context"
 	"errors"
+	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -135,4 +136,30 @@ func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, 
 		return nil, err
 	}
 	return &WorkerToken{Token: token, Name: name}, nil
+}
+
+// NextAvailableIn returns the duration until the next worker slot becomes available.
+// It finds the oldest usage entry that, when it expires (after 1 minute), frees a slot.
+func (r *StorageWorkersRepo) NextAvailableIn(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error) {
+	// Find the earliest created_at among workers that are at or above the rate limit.
+	// That entry expires after 1 minute, freeing a slot.
+	var earliest time.Time
+	err := r.pool.QueryRow(ctx,
+		`SELECT MIN(swu.created_at)
+		FROM storage_workers_usages swu
+		JOIN storage_workers sw ON sw.id = swu.worker_id
+		WHERE sw.storage_id = $1
+		AND swu.created_at >= now() - interval '1 minute'`,
+		storageID,
+	).Scan(&earliest)
+	if err != nil || earliest.IsZero() {
+		return 0, err
+	}
+	// The slot opens when this entry is older than 1 minute
+	available := earliest.Add(time.Minute).Sub(time.Now())
+	if available < 0 {
+		return 0, nil
+	}
+	// Add a small buffer to avoid racing
+	return available + 100*time.Millisecond, nil
 }
