@@ -194,6 +194,53 @@ func TestFilesServiceMainFlows(t *testing.T) {
 	}
 }
 
+func TestFilesServiceCreateFolderNormalizesPath(t *testing.T) {
+	userID := uuid.New()
+	storageID := uuid.New()
+	var gotPath string
+
+	repo := &fakeFilesRepo{
+		createFolderFn: func(ctx context.Context, storageID uuid.UUID, path string) error {
+			gotPath = path
+			return nil
+		},
+	}
+	access := &fakeFilesAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return true, nil
+		},
+	}
+	svc := NewFilesServiceWithDeps(repo, access, &fakeFilesManager{}, &fakeStorageRepo{}, nil)
+
+	if err := svc.CreateFolder(context.Background(), userID, storageID, "/base/sub/", "/child/"); err != nil {
+		t.Fatalf("create folder failed: %v", err)
+	}
+	if gotPath != "base/sub/child" {
+		t.Fatalf("expected normalized path base/sub/child, got %q", gotPath)
+	}
+}
+
+func TestFilesServiceCreateFolderRejectsInvalidName(t *testing.T) {
+	repo := &fakeFilesRepo{
+		createFolderFn: func(ctx context.Context, storageID uuid.UUID, path string) error {
+			return nil
+		},
+	}
+	access := &fakeFilesAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return true, nil
+		},
+	}
+	svc := NewFilesServiceWithDeps(repo, access, &fakeFilesManager{}, &fakeStorageRepo{}, nil)
+
+	if err := svc.CreateFolder(context.Background(), uuid.New(), uuid.New(), "base", "a/b"); err == nil {
+		t.Fatalf("expected bad request for folder name with slash")
+	}
+	if err := svc.CreateFolder(context.Background(), uuid.New(), uuid.New(), "base", "///"); err == nil {
+		t.Fatalf("expected bad request for empty folder name after trimming")
+	}
+}
+
 func TestFilesServiceForbiddenAndErrors(t *testing.T) {
 	repo := &fakeFilesRepo{
 		createFolderFn: func(ctx context.Context, storageID uuid.UUID, path string) error { return nil },
