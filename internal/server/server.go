@@ -121,17 +121,24 @@ func serveUI(r chi.Router) {
 		return
 	}
 	indexPath := filepath.Join(absUI, "index.html")
-	safePrefix := absUI + string(os.PathSeparator)
 
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 		requested := filepath.Clean(r.URL.Path)
 		requested = strings.TrimPrefix(requested, "/")
 
 		absPath, err := filepath.Abs(filepath.Join(absUI, requested))
-		if err == nil && (absPath == absUI || strings.HasPrefix(absPath, safePrefix)) {
-			if info, statErr := os.Stat(absPath); statErr == nil && !info.IsDir() {
-				http.ServeFile(w, r, absPath)
-				return
+		if err == nil {
+			rel, relErr := filepath.Rel(absUI, absPath)
+			insideUI := relErr == nil &&
+				rel != "" &&
+				rel != ".." &&
+				!strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+
+			if insideUI {
+				if info, statErr := os.Stat(absPath); statErr == nil && !info.IsDir() {
+					http.ServeFile(w, r, absPath)
+					return
+				}
 			}
 		}
 
