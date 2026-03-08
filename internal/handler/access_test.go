@@ -114,4 +114,16 @@ func TestAccessHandlerErrors(t *testing.T) {
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("expected 400, got %d", w.Code)
 	}
+
+	w = httptest.NewRecorder()
+	h.List(w, withStorageReq(http.MethodGet, "", storageID))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("list expected 403 on service error, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.GrantCandidates(w, withStorageReq(http.MethodGet, "", storageID))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("candidates expected 403 on service error, got %d", w.Code)
+	}
 }

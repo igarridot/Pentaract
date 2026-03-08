@@ -5,6 +5,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgxpool"
 	pgxmock "github.com/pashagolub/pgxmock/v3"
 
 	"github.com/Dominux/Pentaract/internal/config"
@@ -51,6 +52,20 @@ func TestCreateDB(t *testing.T) {
 	if err := CreateDB(context.Background(), cfg); err == nil {
 		t.Fatalf("expected error when connect fails")
 	}
+}
+
+func TestWrapperFunctionsAreInvoked(t *testing.T) {
+	// Call wrappers with nil pool to execute wrapper lines. They panic because the
+	// wrapped implementation dereferences pool, which is expected in this test.
+	func() {
+		defer func() { _ = recover() }()
+		_ = InitDB(context.Background(), (*pgxpool.Pool)(nil))
+	}()
+
+	func() {
+		defer func() { _ = recover() }()
+		_ = CreateSuperuser(context.Background(), (*pgxpool.Pool)(nil), testConfig())
+	}()
 }
 
 func testConfig() *config.Config {

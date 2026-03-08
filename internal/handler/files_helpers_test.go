@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -84,5 +85,34 @@ func TestExtractWildcardPath(t *testing.T) {
 	got := extractWildcardPath(req)
 	if got != "foo/bar" {
 		t.Fatalf("unexpected wildcard path: %q", got)
+	}
+}
+
+func TestSetupDownloadTrackerAndFinish(t *testing.T) {
+	h := NewFilesHandlerWithService(&mockFilesService{})
+	storageID := uuid.New()
+	req := httptest.NewRequest(http.MethodGet, "/?download_id=d1", nil)
+
+	ctx, tracker, cleanup := h.setupDownloadTracker(req, storageID)
+	defer cleanup()
+	if ctx == nil || tracker == nil {
+		t.Fatalf("expected tracker context and tracker")
+	}
+
+	h.mu.RLock()
+	_, ok := h.downloads["d1"]
+	h.mu.RUnlock()
+	if !ok {
+		t.Fatalf("expected tracker to be registered")
+	}
+
+	expectedErr := errors.New("x")
+	h.finishTracker(tracker, expectedErr)
+	h.mu.RLock()
+	done := tracker.done
+	gotErr := tracker.err
+	h.mu.RUnlock()
+	if !done || gotErr != expectedErr {
+		t.Fatalf("unexpected tracker final state: done=%v err=%v", done, gotErr)
 	}
 }

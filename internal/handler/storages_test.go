@@ -83,3 +83,36 @@ func TestStoragesHandlerFlows(t *testing.T) {
 		t.Fatalf("delete expected 204, got %d", w.Code)
 	}
 }
+
+func TestStoragesHandlerValidationErrors(t *testing.T) {
+	h := NewStoragesHandlerWithService(&mockStoragesService{
+		createFn: func(ctx context.Context, userID uuid.UUID, name string, chatID int64) (*domain.Storage, error) {
+			return nil, nil
+		},
+		listFn: func(ctx context.Context, userID uuid.UUID) ([]domain.StorageWithInfo, error) { return nil, nil },
+		getFn: func(ctx context.Context, userID uuid.UUID, storageID uuid.UUID) (*domain.Storage, error) {
+			return nil, nil
+		},
+		deleteFn: func(ctx context.Context, userID uuid.UUID, storageID uuid.UUID, progress *service.DeleteProgress) error {
+			return nil
+		},
+	})
+
+	w := httptest.NewRecorder()
+	h.Create(w, makeStorageReq(http.MethodPost, `{`, ""))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("create expected 400 for invalid JSON, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.Get(w, makeStorageReq(http.MethodGet, "", "bad-uuid"))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("get expected 400 for bad storageID, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.Delete(w, makeStorageReq(http.MethodDelete, "", "bad-uuid"))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("delete expected 400 for bad storageID, got %d", w.Code)
+	}
+}

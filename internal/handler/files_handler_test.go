@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -199,6 +200,54 @@ func TestFilesHandlerDownloadAttachment(t *testing.T) {
 	}
 }
 
+func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	rangeCalled := false
+	h := NewFilesHandlerWithService(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
+		},
+		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			return 11, nil
+		},
+		downloadFileRangeToWriter: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error {
+			rangeCalled = true
+			_, _ = io.WriteString(w, "abc")
+			return nil
+		},
+	})
+
+	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
+	req.Header.Set("Range", "bytes=0-2")
+	w := httptest.NewRecorder()
+	h.Download(w, req)
+	if w.Code != http.StatusPartialContent || !rangeCalled || w.Body.String() != "abc" {
+		t.Fatalf("inline range download failed: code=%d called=%v body=%q", w.Code, rangeCalled, w.Body.String())
+	}
+}
+
+func TestFilesHandlerDownloadInlineInvalidRange(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	h := NewFilesHandlerWithService(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
+		},
+		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			return 11, nil
+		},
+	})
+
+	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
+	req.Header.Set("Range", "bytes=10-5")
+	w := httptest.NewRecorder()
+	h.Download(w, req)
+	if w.Code != http.StatusRequestedRangeNotSatisfiable {
+		t.Fatalf("expected 416 on invalid range, got %d", w.Code)
+	}
+}
+
 func TestFilesHandlerDownloadAndUploadValidation(t *testing.T) {
 	h := NewFilesHandlerWithService(&mockFilesService{})
 	storageID := uuid.New().String()
@@ -213,6 +262,48 @@ func TestFilesHandlerDownloadAndUploadValidation(t *testing.T) {
 	h.Upload(w, makeFilesReq(http.MethodPost, "/", "plain body", storageID, ""))
 	if w.Code != http.StatusBadRequest {
 		t.Fatalf("upload expected 400 for non-multipart, got %d", w.Code)
+	}
+}
+
+func TestFilesHandlerUploadSuccess(t *testing.T) {
+	uploadDone := make(chan struct{})
+	h := NewFilesHandlerWithService(&mockFilesService{
+		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress) (*domain.File, error) {
+			defer close(uploadDone)
+			b, _ := io.ReadAll(reader)
+			if path != "folder/a.txt" || string(b) != "hello" {
+				t.Fatalf("unexpected upload payload: path=%s body=%q", path, string(b))
+			}
+			return &domain.File{ID: uuid.New(), Path: path}, nil
+		},
+	})
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("path", "folder")
+	_ = mw.WriteField("upload_id", "upload-1")
+	part, err := mw.CreateFormFile("file", "a.txt")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	_, _ = io.WriteString(part, "hello")
+	_ = mw.Close()
+
+	req := makeFilesReq(http.MethodPost, "/", "", uuid.New().String(), "")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Body = io.NopCloser(bytes.NewReader(body.Bytes()))
+	req.ContentLength = int64(body.Len())
+
+	w := httptest.NewRecorder()
+	h.Upload(w, req)
+	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), `"upload_id":"upload-1"`) {
+		t.Fatalf("unexpected upload response: code=%d body=%s", w.Code, w.Body.String())
+	}
+
+	select {
+	case <-uploadDone:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("upload service was not called")
 	}
 }
 
@@ -363,6 +454,18 @@ func TestFilesHandlerMoveAndCreateFolder(t *testing.T) {
 	if w.Code != http.StatusCreated || folderPath != "root" || folderName != "docs" {
 		t.Fatalf("create folder expected 201 with args, got %d path=%s name=%s", w.Code, folderPath, folderName)
 	}
+
+	w = httptest.NewRecorder()
+	h.Move(w, makeFilesReq(http.MethodPost, "/", `{"old_path":"","new_path":"b"}`, storageID, ""))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("move expected 400 for empty old_path, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.CreateFolder(w, makeFilesReq(http.MethodPost, "/", `{"path":"root","folder_name":""}`, storageID, ""))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("create folder expected 400 for empty folder_name, got %d", w.Code)
+	}
 }
 
 func TestFilesHandlerDownloadDir(t *testing.T) {
@@ -377,5 +480,25 @@ func TestFilesHandlerDownloadDir(t *testing.T) {
 	h.DownloadDir(w, makeFilesReq(http.MethodGet, "/", "", storageID, "root/docs"))
 	if w.Code != http.StatusOK || w.Body.String() != "zipdata" {
 		t.Fatalf("download dir expected 200/zipdata, got %d/%q", w.Code, w.Body.String())
+	}
+}
+
+func TestFilesHandlerDownloadInlineNonVideo(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	h := NewFilesHandlerWithService(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "doc.txt", Size: 5}, nil
+		},
+		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			_, _ = io.WriteString(w, "hello")
+			return nil
+		},
+	})
+
+	w := httptest.NewRecorder()
+	h.Download(w, makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "doc.txt"))
+	if w.Code != http.StatusOK || w.Body.String() != "hello" {
+		t.Fatalf("inline non-video download expected 200/hello, got %d/%q", w.Code, w.Body.String())
 	}
 }

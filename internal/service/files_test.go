@@ -255,3 +255,18 @@ func TestFilesServiceForbiddenAndErrors(t *testing.T) {
 		t.Fatalf("expected forbidden")
 	}
 }
+
+func TestFilesServiceWorkersStatus(t *testing.T) {
+	svc := NewFilesServiceWithDeps(nil, nil, nil, nil, nil)
+	if got := svc.WorkersStatus(uuid.New()); got != "active" {
+		t.Fatalf("expected active with nil scheduler, got %q", got)
+	}
+
+	storageID := uuid.New()
+	scheduler := NewWorkerSchedulerWithRepo(nil, 1)
+	scheduler.waiting[storageID] = 1
+	svc = NewFilesServiceWithDeps(nil, nil, nil, nil, scheduler)
+	if got := svc.WorkersStatus(storageID); got != "waiting_rate_limit" {
+		t.Fatalf("expected waiting_rate_limit, got %q", got)
+	}
+}

@@ -140,6 +140,33 @@ func TestUsersHandlerDeleteManagedBadRequest(t *testing.T) {
 	}
 }
 
+func TestUsersHandlerValidationErrors(t *testing.T) {
+	h := NewUsersHandlerWithService(&mockUsersService{
+		registerFn: func(ctx context.Context, email, pass string) (*domain.User, error) { return nil, nil },
+		updatePasswordFn: func(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error {
+			return nil
+		},
+	})
+
+	w := httptest.NewRecorder()
+	req := httptest.NewRequest(http.MethodPost, "/users", bytes.NewBufferString(`{`))
+	h.Register(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("register expected 400 for invalid JSON, got %d", w.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodPut, "/users/not-a-uuid/password", bytes.NewBufferString(`{"password":"x"}`))
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("userID", "not-a-uuid")
+	req = req.WithContext(context.WithValue(req.Context(), chi.RouteCtxKey, rctx))
+	req = withAuth(req, &appjwt.AuthUser{Email: "admin@example.com"})
+	w = httptest.NewRecorder()
+	h.UpdatePassword(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("update password expected 400 for invalid uuid, got %d", w.Code)
+	}
+}
+
 func TestUsersHandlerListManagedError(t *testing.T) {
 	h := NewUsersHandlerWithService(&mockUsersService{
 		listManagedFn: func(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error) {

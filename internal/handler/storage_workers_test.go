@@ -110,3 +110,45 @@ func TestStorageWorkersParseOptionalUUID(t *testing.T) {
 		t.Fatalf("expected bad request for invalid uuid")
 	}
 }
+
+func TestStorageWorkersHandlerValidationErrors(t *testing.T) {
+	h := NewStorageWorkersHandlerWithService(&mockStorageWorkersService{
+		createFn: func(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
+			return nil, nil
+		},
+		listFn: func(ctx context.Context, userID uuid.UUID) ([]domain.StorageWorker, error) { return nil, nil },
+		updateFn: func(ctx context.Context, id, userID uuid.UUID, name string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
+			return nil, nil
+		},
+		deleteFn:     func(ctx context.Context, id, userID uuid.UUID) error { return nil },
+		hasWorkersFn: func(ctx context.Context, storageID uuid.UUID) (bool, error) { return false, nil },
+	})
+
+	w := httptest.NewRecorder()
+	h.Create(w, makeWorkerReq(http.MethodPost, `{`, nil))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("create expected 400 for invalid JSON, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.Update(w, makeWorkerReq(http.MethodPut, `{"name":"x"}`, map[string]string{"workerID": "bad"}))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("update expected 400 for invalid workerID, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.Delete(w, makeWorkerReq(http.MethodDelete, "", map[string]string{"workerID": "bad"}))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("delete expected 400 for invalid workerID, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	req := makeWorkerReq(http.MethodGet, "", nil)
+	q := req.URL.Query()
+	q.Set("storage_id", "bad")
+	req.URL.RawQuery = q.Encode()
+	h.HasWorkers(w, req)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("hasWorkers expected 400 for invalid storage_id, got %d", w.Code)
+	}
+}

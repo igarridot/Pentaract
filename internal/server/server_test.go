@@ -8,6 +8,8 @@ import (
 	"testing"
 
 	"github.com/go-chi/chi/v5"
+
+	"github.com/Dominux/Pentaract/internal/config"
 )
 
 func withTempWorkdir(t *testing.T, fn func()) {
@@ -77,4 +79,23 @@ func TestServeUIFallsBackToIndexOnMissingAsset(t *testing.T) {
 			t.Fatalf("expected index fallback, got %q", body)
 		}
 	})
+}
+
+func TestNewBuildsRouterAndHandlesRequest(t *testing.T) {
+	cfg := &config.Config{
+		SecretKey:              "secret",
+		AccessTokenExpireInSec: 3600,
+		SuperuserEmail:         "admin@example.com",
+		TelegramAPIBaseURL:     "http://localhost",
+		TelegramRateLimit:      10,
+	}
+	h := New(cfg, nil)
+
+	req := httptest.NewRequest(http.MethodPost, "/api/auth/login", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+
+	if rr.Code != http.StatusBadRequest {
+		t.Fatalf("expected bad request from empty login body, got %d", rr.Code)
+	}
 }
