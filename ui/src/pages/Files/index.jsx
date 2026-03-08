@@ -180,7 +180,7 @@ export default function Files() {
         uploadProgressCancelsRef.current.get(uploadId)?.()
         uploadProgressCancelsRef.current.delete(uploadId)
         uploadAbortControllersRef.current.delete(uploadId)
-        addAlert('Upload failed unexpectedly. Please try again.', 'error', { persistent: true })
+        addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
         setTimeout(() => {
           setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
         }, 3000)
