@@ -44,10 +44,7 @@ func mustPanicContains(t *testing.T, fn func(), contains string) {
 func TestLoadDefaultsAndURLs(t *testing.T) {
 	setRequiredEnv(t)
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() unexpected error: %v", err)
-	}
+	cfg := Load()
 
 	if cfg.Port != 8000 || cfg.Workers != 4 {
 		t.Fatalf("unexpected defaults: port=%d workers=%d", cfg.Port, cfg.Workers)
@@ -79,10 +76,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("DATABASE_HOST", "localhost")
 	t.Setenv("DATABASE_PORT", "15432")
 
-	cfg, err := Load()
-	if err != nil {
-		t.Fatalf("Load() unexpected error: %v", err)
-	}
+	cfg := Load()
 
 	if cfg.Port != 9001 || cfg.Workers != 7 || cfg.AccessTokenExpireInSec != 1234 {
 		t.Fatalf("unexpected env overrides: %+v", cfg)
@@ -98,11 +92,11 @@ func TestLoadEnvOverrides(t *testing.T) {
 func TestLoadPanicsOnMissingRequiredEnv(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("SUPERUSER_EMAIL", "")
-	mustPanicContains(t, func() { _, _ = Load() }, "required environment variable SUPERUSER_EMAIL is not set")
+	mustPanicContains(t, func() { Load() }, "required environment variable SUPERUSER_EMAIL is not set")
 }
 
 func TestLoadPanicsOnInvalidInteger(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("PORT", "not-an-int")
-	mustPanicContains(t, func() { _, _ = Load() }, "environment variable PORT must be an integer")
+	mustPanicContains(t, func() { Load() }, "environment variable PORT must be an integer")
 }

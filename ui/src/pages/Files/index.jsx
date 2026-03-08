@@ -10,6 +10,7 @@ import {
   Upload as UploadIcon,
 } from '@mui/icons-material'
 import API from '../../api'
+import { createOperationId } from '../../common/operation_id'
 import { useAlert } from '../../components/AlertStack'
 import FSListItem from '../../components/FSListItem'
 import FileInfo from '../../components/FileInfo'
@@ -21,19 +22,7 @@ import UploadProgress from '../../components/UploadProgress'
 import DownloadProgress from '../../components/DownloadProgress'
 import DeleteProgress from '../../components/DeleteProgress'
 import MoveDialog from '../../components/MoveDialog'
-
-function createUploadId() {
-  const cryptoObj = globalThis.crypto
-  if (cryptoObj?.randomUUID) return cryptoObj.randomUUID()
-  if (cryptoObj?.getRandomValues) {
-    const bytes = cryptoObj.getRandomValues(new Uint8Array(16))
-    bytes[6] = (bytes[6] & 0x0f) | 0x40
-    bytes[8] = (bytes[8] & 0x3f) | 0x80
-    const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-  }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
+import MediaPreviewDialog from '../../components/MediaPreviewDialog'
 
 export default function Files() {
   const { id: storageId } = useParams()
@@ -50,17 +39,17 @@ export default function Files() {
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState(null)
   const [infoFile, setInfoFile] = useState(null)
+  const [previewFile, setPreviewFile] = useState(null)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [moveTarget, setMoveTarget] = useState(null)
-  const [uploadState, setUploadState] = useState(null)
-  const [downloadState, setDownloadState] = useState(null)
+  const [uploadStates, setUploadStates] = useState([])
+  const [downloadStates, setDownloadStates] = useState([])
   const [deleteState, setDeleteState] = useState(null)
-  const cancelProgressRef = useRef(null)
-  const cancelDownloadProgressRef = useRef(null)
+  const uploadProgressCancelsRef = useRef(new Map())
+  const uploadAbortControllersRef = useRef(new Map())
+  const downloadProgressCancelsRef = useRef(new Map())
   const cancelDeleteProgressRef = useRef(null)
-  const uploadIdRef = useRef(null)
-  const downloadIdRef = useRef(null)
 
   const loadTree = useCallback(async () => {
     try {
@@ -79,13 +68,23 @@ export default function Files() {
 
   useEffect(() => {
     return () => {
-      if (cancelProgressRef.current) cancelProgressRef.current()
-      if (cancelDownloadProgressRef.current) cancelDownloadProgressRef.current()
+      uploadProgressCancelsRef.current.forEach((_, uploadId) => {
+        API.files.cancelUpload(uploadId).catch(() => {})
+      })
+      uploadProgressCancelsRef.current.forEach((cancel) => cancel())
+      uploadProgressCancelsRef.current.clear()
+      uploadAbortControllersRef.current.forEach((controller) => controller.abort())
+      uploadAbortControllersRef.current.clear()
+      downloadProgressCancelsRef.current.forEach((_, downloadId) => {
+        API.files.cancelDownload(downloadId).catch(() => {})
+      })
+      downloadProgressCancelsRef.current.forEach((cancel) => cancel())
+      downloadProgressCancelsRef.current.clear()
       if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
     }
   }, [])
 
-  const isUploading = uploadState?.status === 'uploading'
+  const isUploading = uploadStates.some((u) => u.status === 'uploading')
 
   useEffect(() => {
     if (!isUploading) return
@@ -98,6 +97,14 @@ export default function Files() {
   }, [isUploading])
 
   const blocker = useBlocker(isUploading)
+
+  const updateUploadState = useCallback((id, updater) => {
+    setUploadStates((prev) => prev.map((u) => (u.id === id ? updater(u) : u)))
+  }, [])
+
+  const updateDownloadState = useCallback((id, updater) => {
+    setDownloadStates((prev) => prev.map((d) => (d.id === id ? updater(d) : d)))
+  }, [])
 
   const handleSearch = async (e) => {
     e.preventDefault()
@@ -128,12 +135,20 @@ export default function Files() {
     if (!file) return
 
     const filename = file.name
-    const uploadId = createUploadId()
-    uploadIdRef.current = uploadId
-    setUploadState({ filename, totalBytes: file.size, uploadedBytes: 0, totalChunks: 0, uploadedChunks: 0, status: 'uploading' })
+    const uploadId = createOperationId()
+    setUploadStates((prev) => [...prev, {
+      id: uploadId,
+      filename,
+      totalBytes: file.size,
+      uploadedBytes: 0,
+      totalChunks: 0,
+      uploadedChunks: 0,
+      status: 'uploading',
+      workersStatus: 'active',
+    }])
 
     const cancel = API.files.subscribeProgress(uploadId, (data) => {
-      setUploadState((prev) => ({
+      updateUploadState(uploadId, (prev) => ({
         ...prev,
         filename,
         totalBytes: data.total_bytes || prev?.totalBytes || file.size,
@@ -144,90 +159,115 @@ export default function Files() {
         workersStatus: data.workers_status || prev?.workersStatus || 'active',
       }))
       if (data.status === 'done') {
-        uploadIdRef.current = null
+        uploadProgressCancelsRef.current.get(uploadId)?.()
+        uploadProgressCancelsRef.current.delete(uploadId)
+        uploadAbortControllersRef.current.delete(uploadId)
         addAlert('File uploaded', 'success')
         loadTree()
-        setTimeout(() => setUploadState(null), 2000)
+        setTimeout(() => {
+          setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
+        }, 2000)
       }
       if (data.status === 'error') {
-        uploadIdRef.current = null
+        uploadProgressCancelsRef.current.get(uploadId)?.()
+        uploadProgressCancelsRef.current.delete(uploadId)
+        uploadAbortControllersRef.current.delete(uploadId)
         addAlert('Upload failed unexpectedly. Please try again.', 'error', { persistent: true })
-        setTimeout(() => setUploadState(null), 3000)
+        setTimeout(() => {
+          setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
+        }, 3000)
       }
     })
-    cancelProgressRef.current = cancel
+    uploadProgressCancelsRef.current.set(uploadId, cancel)
+    const controller = new AbortController()
+    uploadAbortControllersRef.current.set(uploadId, controller)
 
     try {
-      await API.files.upload(storageId, currentPath.replace(/\/+$/, ''), file, uploadId)
+      await API.files.upload(storageId, currentPath.replace(/\/+$/, ''), file, uploadId, { signal: controller.signal })
     } catch (err) {
-      if (uploadIdRef.current === uploadId) {
-        setUploadState(null)
-        uploadIdRef.current = null
+      if (err?.name !== 'AbortError') {
+        updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
         addAlert(`Upload interrupted: ${err.message}`, 'error', { persistent: true })
       }
+      uploadProgressCancelsRef.current.get(uploadId)?.()
+      uploadProgressCancelsRef.current.delete(uploadId)
+      uploadAbortControllersRef.current.delete(uploadId)
+      setTimeout(() => {
+        setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
+      }, 1500)
     }
     e.target.value = ''
   }
 
-  const handleCancelUpload = async () => {
-    const id = uploadIdRef.current
-    if (!id) return
+  const handleCancelUpload = async (uploadId) => {
+    if (!uploadId) return
     try {
-      if (cancelProgressRef.current) cancelProgressRef.current()
-      await API.files.cancelUpload(id)
+      uploadProgressCancelsRef.current.get(uploadId)?.()
+      uploadProgressCancelsRef.current.delete(uploadId)
+      uploadAbortControllersRef.current.get(uploadId)?.abort()
+      uploadAbortControllersRef.current.delete(uploadId)
+      await API.files.cancelUpload(uploadId)
       addAlert('Upload cancelled', 'info')
     } catch (err) {
       addAlert(err.message, 'error')
     }
-    setUploadState(null)
-    uploadIdRef.current = null
+    setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
     loadTree()
   }
 
   const handleDownload = async (item) => {
     try {
-      if (cancelDownloadProgressRef.current) cancelDownloadProgressRef.current()
-      const downloadId = createUploadId()
-      downloadIdRef.current = downloadId
+      const downloadId = createOperationId()
       const filename = item.is_file ? item.name : `${item.name}.zip`
 
-        setDownloadState({
-          filename,
-          totalBytes: 0,
-          downloadedBytes: 0,
-          totalChunks: 0,
-          downloadedChunks: 0,
-          status: 'downloading',
-          workersStatus: 'active',
-        })
+      setDownloadStates((prev) => [...prev, {
+        id: downloadId,
+        filename,
+        totalBytes: 0,
+        downloadedBytes: 0,
+        totalChunks: 0,
+        downloadedChunks: 0,
+        status: 'downloading',
+        workersStatus: 'active',
+      }])
 
       const cancel = API.files.subscribeDownloadProgress(downloadId, (data) => {
-        setDownloadState((prev) => ({
+        updateDownloadState(downloadId, (prev) => ({
           ...prev,
           filename,
           totalBytes: data.total_bytes || prev?.totalBytes || 0,
           downloadedBytes: data.downloaded_bytes || 0,
-            totalChunks: data.total || prev?.totalChunks || 0,
-            downloadedChunks: data.downloaded || 0,
-            status: data.status,
-            workersStatus: data.workers_status || prev?.workersStatus || 'active',
-          }))
+          totalChunks: data.total || prev?.totalChunks || 0,
+          downloadedChunks: data.downloaded || 0,
+          status: data.status,
+          workersStatus: data.workers_status || prev?.workersStatus || 'active',
+        }))
 
         if (data.status === 'done') {
-          cancel()
-          cancelDownloadProgressRef.current = null
-          downloadIdRef.current = null
-          setTimeout(() => setDownloadState(null), 2000)
+          downloadProgressCancelsRef.current.get(downloadId)?.()
+          downloadProgressCancelsRef.current.delete(downloadId)
+          setTimeout(() => {
+            setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
+          }, 2000)
         }
         if (data.status === 'error') {
-          cancel()
-          cancelDownloadProgressRef.current = null
-          downloadIdRef.current = null
+          downloadProgressCancelsRef.current.get(downloadId)?.()
+          downloadProgressCancelsRef.current.delete(downloadId)
           addAlert('Download failed unexpectedly. Please try again.', 'error', { persistent: true })
-          setTimeout(() => setDownloadState(null), 3000)
+          setTimeout(() => {
+            setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
+          }, 3000)
+        }
+        if (data.status === 'cancelled') {
+          downloadProgressCancelsRef.current.get(downloadId)?.()
+          downloadProgressCancelsRef.current.delete(downloadId)
+          addAlert('Download cancelled', 'info')
+          setTimeout(() => {
+            setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
+          }, 1500)
         }
       })
-      cancelDownloadProgressRef.current = cancel
+      downloadProgressCancelsRef.current.set(downloadId, cancel)
 
       const url = item.is_file
         ? API.files.downloadFileUrl(storageId, item.path, downloadId)
@@ -239,21 +279,46 @@ export default function Files() {
       a.rel = 'noopener'
       a.click()
     } catch (err) {
-      if (downloadIdRef.current && cancelDownloadProgressRef.current) {
-        cancelDownloadProgressRef.current()
-        cancelDownloadProgressRef.current = null
-        downloadIdRef.current = null
-      }
-      setDownloadState((prev) => (prev ? { ...prev, status: 'error' } : null))
-      setTimeout(() => setDownloadState(null), 3000)
       addAlert(err.message, 'error')
     }
+  }
+
+  const handleCancelDownload = async (downloadId) => {
+    if (!downloadId) return
+    try {
+      await API.files.cancelDownload(downloadId)
+      downloadProgressCancelsRef.current.get(downloadId)?.()
+      downloadProgressCancelsRef.current.delete(downloadId)
+      updateDownloadState(downloadId, (prev) => (prev ? { ...prev, status: 'cancelled' } : prev))
+      addAlert('Download cancelled', 'info')
+      setTimeout(() => {
+        setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
+      }, 1500)
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
+
+  const getMediaType = (name) => {
+    const ext = name?.split('.').pop()?.toLowerCase() || ''
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image'
+    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext)) return 'video'
+    return null
+  }
+
+  const handlePreview = (item) => {
+    const mediaType = getMediaType(item.name)
+    if (!mediaType) {
+      handleDownload(item)
+      return
+    }
+    setPreviewFile(item)
   }
 
   const handleDelete = async () => {
     try {
       const path = (deleteTarget.path || deleteTarget.name).replace(/\/+$/, '')
-      const deleteId = createUploadId()
+      const deleteId = createOperationId()
       if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
       setDeleteState({
         label: deleteTarget?.name || path,
@@ -347,8 +412,9 @@ export default function Files() {
     <Box>
       <Breadcrumbs sx={{ mb: 2 }}>{breadcrumbs}</Breadcrumbs>
 
-      {uploadState && (
+      {uploadStates.map((uploadState) => (
         <UploadProgress
+          key={uploadState.id}
           filename={uploadState.filename}
           totalBytes={uploadState.totalBytes}
           uploadedBytes={uploadState.uploadedBytes}
@@ -356,11 +422,12 @@ export default function Files() {
           uploadedChunks={uploadState.uploadedChunks}
           status={uploadState.status}
           workersStatus={uploadState.workersStatus}
-          onCancel={handleCancelUpload}
+          onCancel={() => handleCancelUpload(uploadState.id)}
         />
-      )}
-      {downloadState && (
+      ))}
+      {downloadStates.map((downloadState) => (
         <DownloadProgress
+          key={downloadState.id}
           filename={downloadState.filename}
           totalBytes={downloadState.totalBytes}
           downloadedBytes={downloadState.downloadedBytes}
@@ -368,8 +435,9 @@ export default function Files() {
           downloadedChunks={downloadState.downloadedChunks}
           status={downloadState.status}
           workersStatus={downloadState.workersStatus}
+          onCancel={() => handleCancelDownload(downloadState.id)}
         />
-      )}
+      ))}
       {deleteState && (
         <DeleteProgress
           label={deleteState.label}
@@ -420,8 +488,8 @@ export default function Files() {
               <FSListItem
                 item={item}
                 storageId={storageId}
-                currentPath={currentPath}
                 onInfo={setInfoFile}
+                onPreview={handlePreview}
                 onDelete={setDeleteTarget}
                 onDownload={handleDownload}
                 onMove={setMoveTarget}
@@ -451,6 +519,19 @@ export default function Files() {
       </FloatingMenu>
 
       <FileInfo file={infoFile} open={!!infoFile} onClose={() => setInfoFile(null)} />
+      <MediaPreviewDialog
+        open={!!previewFile}
+        file={previewFile}
+        mediaType={getMediaType(previewFile?.name)}
+        src={previewFile ? API.files.previewFileUrl(storageId, previewFile.path) : ''}
+        onClose={() => setPreviewFile(null)}
+        onDownload={() => {
+          if (!previewFile) return
+          const file = previewFile
+          setPreviewFile(null)
+          handleDownload(file)
+        }}
+      />
 
       <CreateFolderDialog
         open={folderDialogOpen}

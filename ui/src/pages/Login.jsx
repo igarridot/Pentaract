@@ -1,9 +1,9 @@
 import { useState } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
-import { Box, Container, TextField, Button, Typography, Stack, Link as MuiLink } from '@mui/material'
+import { TextField, Button, Typography, Stack, Link as MuiLink } from '@mui/material'
 import API from '../api'
 import { isAuthenticated, getRedirectPath } from '../common/auth_guard'
-import AppIcon from '../components/AppIcon'
+import AuthLayout from '../components/AuthLayout'
 
 export default function Login() {
   const navigate = useNavigate()
@@ -29,60 +29,37 @@ export default function Login() {
   }
 
   return (
-    <Box sx={{
-      minHeight: '100vh',
-      display: 'flex',
-      alignItems: 'center',
-      justifyContent: 'center',
-      bgcolor: 'background.default',
-    }}>
-      <Container maxWidth="xs">
-        <Box sx={{ display: 'flex', flexDirection: 'column', alignItems: 'center' }}>
-          <AppIcon sx={{ fontSize: 56, color: 'primary.main', mb: 1 }} />
-          <Typography variant="h4" sx={{ mb: 0.5 }}>Pentaract</Typography>
-          <Typography variant="body2" color="text.secondary" sx={{ mb: 4 }}>
-            Sign in to your account
-          </Typography>
-          <Box
-            sx={{
-              width: '100%',
-              bgcolor: 'background.paper',
-              borderRadius: 4,
-              p: 4,
-              boxShadow: 2,
-              border: '1px solid',
-              borderColor: 'divider',
-            }}
-          >
-            <form onSubmit={handleSubmit}>
-              <Stack spacing={2.5}>
-                <TextField
-                  fullWidth label="Email" type="email" value={email}
-                  onChange={(e) => setEmail(e.target.value)} required
-                />
-                <TextField
-                  fullWidth label="Password" type="password" value={password}
-                  onChange={(e) => setPassword(e.target.value)} required
-                />
-                {error && (
-                  <Typography color="error" variant="body2" sx={{ fontSize: '0.8rem' }}>
-                    {error}
-                  </Typography>
-                )}
-                <Button fullWidth variant="contained" type="submit" size="large">
-                  Sign In
-                </Button>
-              </Stack>
-            </form>
-          </Box>
-          <Typography variant="body2" color="text.secondary" sx={{ mt: 3 }}>
-            Don't have an account?{' '}
-            <MuiLink component={Link} to="/register" sx={{ color: 'primary.main', textDecoration: 'none', fontWeight: 500 }}>
-              Create one
-            </MuiLink>
-          </Typography>
-        </Box>
-      </Container>
-    </Box>
+    <AuthLayout
+      subtitle="Sign in to your account"
+      footer={
+        <Typography variant="body2" color="text.secondary" sx={{ mt: 3 }}>
+          Don't have an account?{' '}
+          <MuiLink component={Link} to="/register" sx={{ color: 'primary.main', textDecoration: 'none', fontWeight: 500 }}>
+            Create one
+          </MuiLink>
+        </Typography>
+      }
+    >
+      <form onSubmit={handleSubmit}>
+        <Stack spacing={2.5}>
+          <TextField
+            fullWidth label="Email" type="email" value={email}
+            onChange={(e) => setEmail(e.target.value)} required
+          />
+          <TextField
+            fullWidth label="Password" type="password" value={password}
+            onChange={(e) => setPassword(e.target.value)} required
+          />
+          {error && (
+            <Typography color="error" variant="body2" sx={{ fontSize: '0.8rem' }}>
+              {error}
+            </Typography>
+          )}
+          <Button fullWidth variant="contained" type="submit" size="large">
+            Sign In
+          </Button>
+        </Stack>
+      </form>
+    </AuthLayout>
   )
 }

@@ -1,33 +1,17 @@
-import { useEffect, useRef } from 'react'
 import { Box, LinearProgress, Typography, IconButton } from '@mui/material'
 import { Close as CloseIcon } from '@mui/icons-material'
 import { convertSize } from '../common/size_converter'
+import { useTransferSpeed } from '../common/use_transfer_speed'
 
 export default function UploadProgress({ filename, totalBytes, uploadedBytes, totalChunks, uploadedChunks, status, workersStatus, onCancel }) {
   const percent = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0
   const isActive = status === 'uploading'
   const isError = status === 'error'
+  const speed = useTransferSpeed(uploadedBytes)
 
-  const speedRef = useRef({ lastBytes: 0, lastTime: Date.now(), speed: 0 })
-
-  useEffect(() => {
-    const now = Date.now()
-    const s = speedRef.current
-    const elapsed = (now - s.lastTime) / 1000
-    if (elapsed > 0.3 && uploadedBytes > s.lastBytes) {
-      s.speed = (uploadedBytes - s.lastBytes) / elapsed
-      s.lastBytes = uploadedBytes
-      s.lastTime = now
-    }
-  }, [uploadedBytes])
-
-  const speed = speedRef.current.speed
-  const speedText = speed > 0 ? `${convertSize(speed)}/s` : ''
+  const speedText = speed > 0 && isActive ? `${convertSize(speed)}/s` : ''
   const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
-
-  const chunkText = totalChunks > 0
-    ? `${uploadedChunks}/${totalChunks} chunks`
-    : ''
+  const chunkText = totalChunks > 0 ? `${uploadedChunks}/${totalChunks} chunks` : ''
 
   const progressText = totalBytes > 0
     ? `${convertSize(uploadedBytes)} / ${convertSize(totalBytes)}`
@@ -77,7 +61,7 @@ export default function UploadProgress({ filename, totalBytes, uploadedBytes, to
           {progressText}
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ textAlign: { xs: 'left', sm: 'right' } }}>
-          {[workersText, chunkText && isActive ? chunkText : '', speedText && isActive ? speedText : ''].filter(Boolean).join(' \u00b7 ')}
+          {[workersText, isActive && chunkText, isActive && speedText].filter(Boolean).join(' \u00b7 ')}
         </Typography>
       </Box>
     </Box>

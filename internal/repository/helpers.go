@@ -1,9 +1,12 @@
 package repository
 
 import (
-	"strings"
+	"errors"
+
+	"github.com/jackc/pgx/v5/pgconn"
 )
 
 func isUniqueViolation(err error) bool {
-	return strings.Contains(err.Error(), "23505") || strings.Contains(err.Error(), "unique constraint")
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }
