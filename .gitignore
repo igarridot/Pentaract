@@ -22,6 +22,7 @@ vendor/
 ui/node_modules/
 ui/dist/
 ui/.pnpm-store/
+/.pnpm-store/
 
 # Persistent data (Docker volumes)
 persistent_data/

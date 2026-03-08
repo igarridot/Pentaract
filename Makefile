@@ -9,13 +9,13 @@ down:
 
 # Dev: compile Go inside container
 build:
-	docker compose run --rm dev go build ./...
+	docker compose run --rm dev sh -c "go build ./cmd/... ./internal/..."
 
 check:
-	docker compose run --rm dev go vet ./...
+	docker compose run --rm dev sh -c "go vet ./cmd/... ./internal/..."
 
 test:
-	docker compose --profile dev run --rm dev sh -c "go test ./... && cd ui && npm run test"
+	docker compose --profile dev run --rm dev sh -c "go test ./cmd/... ./internal/... && cd ui && npm run test"
 
 # Dev: install and build UI inside container
 ui-install:
