@@ -102,6 +102,10 @@ func (s *FilesService) DownloadFileToWriter(ctx context.Context, file *domain.Fi
 	return s.manager.DownloadToWriter(ctx, file, w, progress)
 }
 
+func (s *FilesService) DownloadFileRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end int64, progress *DownloadProgress) error {
+	return s.manager.DownloadRangeToWriter(ctx, file, w, start, end, progress)
+}
+
 func (s *FilesService) ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error) {
 	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
 	if err != nil {

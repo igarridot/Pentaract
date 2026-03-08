@@ -10,6 +10,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -64,6 +65,8 @@ type moveFileRequest struct {
 	OldPath string `json:"old_path"`
 	NewPath string `json:"new_path"`
 }
+
+const inlineVideoInitialWindowBytes int64 = 20 * 1024 * 1024 // 20MB
 
 func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
@@ -389,7 +392,39 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", disposition+`; filename="`+filename+`"`)
 
-	if disposition == "inline" {
+	if disposition == "inline" && isInlineVideo(contentType, filename) {
+		w.Header().Set("Accept-Ranges", "bytes")
+		rangeHeader := r.Header.Get("Range")
+		var start, end int64
+		if rangeHeader != "" {
+			var err error
+			start, end, err = parseSingleByteRange(rangeHeader, file.Size)
+			if err != nil {
+				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", file.Size))
+				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+				return
+			}
+		} else {
+			// Force initial partial response so clients progressively request later blocks.
+			start = 0
+			end = minInt64(file.Size-1, inlineVideoInitialWindowBytes-1)
+		}
+
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, file.Size))
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+		w.WriteHeader(http.StatusPartialContent)
+
+		if err := h.svc.DownloadFileRangeToWriter(downloadCtx, file, w, start, end, progress); err != nil {
+			log.Printf("[download-file-range] error: %v", err)
+			if tracker != nil {
+				h.mu.Lock()
+				tracker.done = true
+				tracker.err = err
+				h.mu.Unlock()
+			}
+			return
+		}
+	} else if disposition == "inline" {
 		// Build full media into a temp file to avoid partial/corrupted inline responses on chunk failures.
 		tmpDir := os.TempDir()
 		if err := os.MkdirAll(tmpDir, 0o700); err != nil {
@@ -450,6 +485,70 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		tracker.done = true
 		h.mu.Unlock()
 	}
+}
+
+func parseSingleByteRange(header string, size int64) (int64, int64, error) {
+	if !strings.HasPrefix(header, "bytes=") {
+		return 0, 0, fmt.Errorf("invalid range unit")
+	}
+	rangeSpec := strings.TrimSpace(strings.TrimPrefix(header, "bytes="))
+	if rangeSpec == "" || strings.Contains(rangeSpec, ",") {
+		return 0, 0, fmt.Errorf("multiple/empty ranges not supported")
+	}
+	parts := strings.SplitN(rangeSpec, "-", 2)
+	if len(parts) != 2 {
+		return 0, 0, fmt.Errorf("invalid range format")
+	}
+
+	// Suffix range: bytes=-N
+	if parts[0] == "" {
+		suffix, err := strconv.ParseInt(parts[1], 10, 64)
+		if err != nil || suffix <= 0 {
+			return 0, 0, fmt.Errorf("invalid suffix range")
+		}
+		if suffix > size {
+			suffix = size
+		}
+		return size - suffix, size - 1, nil
+	}
+
+	start, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || start < 0 || start >= size {
+		return 0, 0, fmt.Errorf("invalid range start")
+	}
+
+	// Open range: bytes=N-
+	if parts[1] == "" {
+		return start, size - 1, nil
+	}
+
+	end, err := strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || end < start {
+		return 0, 0, fmt.Errorf("invalid range end")
+	}
+	if end >= size {
+		end = size - 1
+	}
+	return start, end, nil
+}
+
+func isInlineVideo(contentType, filename string) bool {
+	if strings.HasPrefix(strings.ToLower(contentType), "video/") {
+		return true
+	}
+	switch strings.ToLower(filepath.Ext(filename)) {
+	case ".mp4", ".webm", ".ogg", ".mov", ".m4v", ".mkv":
+		return true
+	default:
+		return false
+	}
+}
+
+func minInt64(a, b int64) int64 {
+	if a < b {
+		return a
+	}
+	return b
 }
 
 func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
