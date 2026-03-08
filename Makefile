@@ -1,4 +1,4 @@
-.PHONY: up down build check ui-install ui-build dev-shell
+.PHONY: up down build check test ui-install ui-build dev-shell
 
 # Production
 up:
@@ -13,6 +13,9 @@ build:
 
 check:
 	docker compose run --rm dev go vet ./...
+
+test:
+	docker compose --profile dev run --rm dev sh -c "go test ./... && cd ui && npm run test"
 
 # Dev: install and build UI inside container
 ui-install:
