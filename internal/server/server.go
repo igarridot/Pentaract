@@ -121,6 +121,7 @@ func serveUI(r chi.Router) {
 		return
 	}
 	indexPath := filepath.Join(absUI, "index.html")
+	absUIPrefix := absUI + string(os.PathSeparator)
 
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
 		requested := filepath.Clean(r.URL.Path)
@@ -131,8 +132,10 @@ func serveUI(r chi.Router) {
 			rel, relErr := filepath.Rel(absUI, absPath)
 			insideUI := relErr == nil &&
 				rel != "" &&
+				rel != "." &&
 				rel != ".." &&
-				!strings.HasPrefix(rel, ".."+string(os.PathSeparator))
+				!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) &&
+				strings.HasPrefix(absPath, absUIPrefix)
 
 			if insideUI {
 				if info, statErr := os.Stat(absPath); statErr == nil && !info.IsDir() {
