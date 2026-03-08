@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -10,10 +11,21 @@ import (
 )
 
 type AccessHandler struct {
-	svc *service.AccessService
+	svc accessService
+}
+
+type accessService interface {
+	Grant(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID, email string, accessType domain.AccessType) error
+	List(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID) ([]domain.UserWithAccess, error)
+	Revoke(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID, targetUserID uuid.UUID) error
+	ListGrantCandidates(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID) ([]domain.User, error)
 }
 
 func NewAccessHandler(svc *service.AccessService) *AccessHandler {
+	return NewAccessHandlerWithService(svc)
+}
+
+func NewAccessHandlerWithService(svc accessService) *AccessHandler {
 	return &AccessHandler{svc: svc}
 }
 

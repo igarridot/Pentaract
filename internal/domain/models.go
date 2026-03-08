@@ -75,4 +75,3 @@ type FSElement struct {
 	Size   int64  `json:"size"`
 	IsFile bool   `json:"is_file"`
 }
-

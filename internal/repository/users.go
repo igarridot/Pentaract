@@ -6,16 +6,28 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 type UsersRepo struct {
-	pool *pgxpool.Pool
+	pool usersDB
 }
 
 func NewUsersRepo(pool *pgxpool.Pool) *UsersRepo {
+	return NewUsersRepoWithDB(pool)
+}
+
+type usersDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+func NewUsersRepoWithDB(pool usersDB) *UsersRepo {
 	return &UsersRepo{pool: pool}
 }
 

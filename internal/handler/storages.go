@@ -1,17 +1,31 @@
 package handler
 
 import (
+	"context"
 	"net/http"
+
+	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
 type StoragesHandler struct {
-	svc *service.StoragesService
+	svc storagesService
+}
+
+type storagesService interface {
+	Create(ctx context.Context, userID uuid.UUID, name string, chatID int64) (*domain.Storage, error)
+	List(ctx context.Context, userID uuid.UUID) ([]domain.StorageWithInfo, error)
+	Get(ctx context.Context, userID uuid.UUID, storageID uuid.UUID) (*domain.Storage, error)
+	Delete(ctx context.Context, userID uuid.UUID, storageID uuid.UUID, progress *service.DeleteProgress) error
 }
 
 func NewStoragesHandler(svc *service.StoragesService) *StoragesHandler {
+	return NewStoragesHandlerWithService(svc)
+}
+
+func NewStoragesHandlerWithService(svc storagesService) *StoragesHandler {
 	return &StoragesHandler{svc: svc}
 }
 

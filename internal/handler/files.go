@@ -66,7 +66,7 @@ type downloadTracker struct {
 }
 
 type FilesHandler struct {
-	svc *service.FilesService
+	svc filesService
 
 	mu        sync.RWMutex
 	uploads   map[string]*uploadTracker
@@ -75,7 +75,26 @@ type FilesHandler struct {
 	fileSizes *fileSizeCache
 }
 
+type filesService interface {
+	Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error
+	CreateFolder(ctx context.Context, userID, storageID uuid.UUID, path, folderName string) error
+	Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress) (*domain.File, error)
+	Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error
+	WorkersStatus(storageID uuid.UUID) string
+	GetFileForDownload(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error)
+	ExactFileSize(ctx context.Context, file *domain.File) (int64, error)
+	DownloadFileRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error
+	DownloadFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
+	DownloadDir(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error)
+	ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error)
+	Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
+}
+
 func NewFilesHandler(svc *service.FilesService) *FilesHandler {
+	return NewFilesHandlerWithService(svc)
+}
+
+func NewFilesHandlerWithService(svc filesService) *FilesHandler {
 	return &FilesHandler{
 		svc:       svc,
 		uploads:   make(map[string]*uploadTracker),

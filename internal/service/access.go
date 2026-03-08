@@ -10,11 +10,27 @@ import (
 )
 
 type AccessService struct {
-	accessRepo *repository.AccessRepo
-	usersRepo  *repository.UsersRepo
+	accessRepo accessRepository
+	usersRepo  accessUsersRepository
+}
+
+type accessRepository interface {
+	HasAccess(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error)
+	CreateOrUpdate(ctx context.Context, userID, storageID uuid.UUID, accessType domain.AccessType) error
+	List(ctx context.Context, storageID uuid.UUID) ([]domain.UserWithAccess, error)
+	Delete(ctx context.Context, userID, storageID uuid.UUID) error
+}
+
+type accessUsersRepository interface {
+	GetByEmail(ctx context.Context, email string) (*domain.User, error)
+	ListGrantCandidates(ctx context.Context, storageID, callerID uuid.UUID) ([]domain.User, error)
 }
 
 func NewAccessService(accessRepo *repository.AccessRepo, usersRepo *repository.UsersRepo) *AccessService {
+	return NewAccessServiceWithRepos(accessRepo, usersRepo)
+}
+
+func NewAccessServiceWithRepos(accessRepo accessRepository, usersRepo accessUsersRepository) *AccessService {
 	return &AccessService{
 		accessRepo: accessRepo,
 		usersRepo:  usersRepo,

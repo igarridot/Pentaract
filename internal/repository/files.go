@@ -8,16 +8,27 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 type FilesRepo struct {
-	pool *pgxpool.Pool
+	pool filesDB
 }
 
 func NewFilesRepo(pool *pgxpool.Pool) *FilesRepo {
+	return NewFilesRepoWithDB(pool)
+}
+
+type filesDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}
+
+func NewFilesRepoWithDB(pool filesDB) *FilesRepo {
 	return &FilesRepo{pool: pool}
 }
 

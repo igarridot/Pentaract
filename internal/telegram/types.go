@@ -29,8 +29,8 @@ type ForwardMessageResponse struct {
 
 // TelegramErrorResponse represents a Telegram API error with retry_after.
 type TelegramErrorResponse struct {
-	OK          bool `json:"ok"`
-	ErrorCode   int  `json:"error_code"`
+	OK          bool   `json:"ok"`
+	ErrorCode   int    `json:"error_code"`
 	Description string `json:"description"`
 	Parameters  struct {
 		RetryAfter int `json:"retry_after"`

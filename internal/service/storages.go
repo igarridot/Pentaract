@@ -10,10 +10,30 @@ import (
 )
 
 type StoragesService struct {
-	storagesRepo *repository.StoragesRepo
-	accessRepo   *repository.AccessRepo
-	filesRepo    *repository.FilesRepo
-	manager      *StorageManager
+	storagesRepo storagesRepository
+	accessRepo   storagesAccessRepository
+	filesRepo    storagesFilesRepository
+	manager      storagesManager
+}
+
+type storagesRepository interface {
+	Create(ctx context.Context, name string, chatID int64) (*domain.Storage, error)
+	List(ctx context.Context, userID uuid.UUID) ([]domain.StorageWithInfo, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Storage, error)
+	Delete(ctx context.Context, id uuid.UUID) error
+}
+
+type storagesAccessRepository interface {
+	HasAccess(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error)
+	CreateOrUpdate(ctx context.Context, userID, storageID uuid.UUID, accessType domain.AccessType) error
+}
+
+type storagesFilesRepository interface {
+	ListChunksByStorage(ctx context.Context, storageID uuid.UUID) ([]domain.FileChunk, error)
+}
+
+type storagesManager interface {
+	DeleteFromTelegram(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error
 }
 
 func NewStoragesService(
@@ -21,6 +41,15 @@ func NewStoragesService(
 	accessRepo *repository.AccessRepo,
 	filesRepo *repository.FilesRepo,
 	manager *StorageManager,
+) *StoragesService {
+	return NewStoragesServiceWithDeps(storagesRepo, accessRepo, filesRepo, manager)
+}
+
+func NewStoragesServiceWithDeps(
+	storagesRepo storagesRepository,
+	accessRepo storagesAccessRepository,
+	filesRepo storagesFilesRepository,
+	manager storagesManager,
 ) *StoragesService {
 	return &StoragesService{
 		storagesRepo: storagesRepo,

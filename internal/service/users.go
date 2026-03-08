@@ -12,11 +12,23 @@ import (
 )
 
 type UsersService struct {
-	usersRepo      *repository.UsersRepo
+	usersRepo      usersRepository
 	superuserEmail string
 }
 
+type usersRepository interface {
+	Create(ctx context.Context, email, passwordHash string) (*domain.User, error)
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error)
+	ListNonAdmin(ctx context.Context, adminEmail string) ([]domain.User, error)
+	UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error
+	DeleteManaged(ctx context.Context, id uuid.UUID) error
+}
+
 func NewUsersService(usersRepo *repository.UsersRepo, superuserEmail string) *UsersService {
+	return NewUsersServiceWithRepo(usersRepo, superuserEmail)
+}
+
+func NewUsersServiceWithRepo(usersRepo usersRepository, superuserEmail string) *UsersService {
 	return &UsersService{
 		usersRepo:      usersRepo,
 		superuserEmail: superuserEmail,
