@@ -61,10 +61,7 @@ func (h *StoragesHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if storages == nil {
-		storages = []domain.StorageWithInfo{}
-	}
-	writeJSON(w, http.StatusOK, storages)
+	writeJSON(w, http.StatusOK, nonNilSlice(storages))
 }
 
 func (h *StoragesHandler) Get(w http.ResponseWriter, r *http.Request) {

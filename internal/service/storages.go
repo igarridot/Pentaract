@@ -82,24 +82,16 @@ func (s *StoragesService) List(ctx context.Context, userID uuid.UUID) ([]domain.
 }
 
 func (s *StoragesService) Get(ctx context.Context, userID uuid.UUID, storageID uuid.UUID) (*domain.Storage, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessRead); err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, domain.ErrForbidden()
 	}
 
 	return s.storagesRepo.GetByID(ctx, storageID)
 }
 
 func (s *StoragesService) Delete(ctx context.Context, userID uuid.UUID, storageID uuid.UUID, progress *DeleteProgress) error {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessAdmin)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessAdmin); err != nil {
 		return err
-	}
-	if !ok {
-		return domain.ErrForbidden()
 	}
 
 	storage, err := s.storagesRepo.GetByID(ctx, storageID)

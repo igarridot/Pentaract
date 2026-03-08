@@ -48,3 +48,10 @@ func parseBody(r *http.Request, dst any) error {
 	}
 	return nil
 }
+
+func nonNilSlice[T any](items []T) []T {
+	if items == nil {
+		return []T{}
+	}
+	return items
+}

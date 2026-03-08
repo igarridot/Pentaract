@@ -64,12 +64,8 @@ func NewFilesServiceWithDeps(filesRepo filesRepository, accessRepo filesAccessRe
 }
 
 func (s *FilesService) CreateFolder(ctx context.Context, userID, storageID uuid.UUID, path, folderName string) error {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessWrite)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessWrite); err != nil {
 		return err
-	}
-	if !ok {
-		return domain.ErrForbidden()
 	}
 
 	fullPath := folderName
@@ -81,12 +77,8 @@ func (s *FilesService) CreateFolder(ctx context.Context, userID, storageID uuid.
 }
 
 func (s *FilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *UploadProgress) (*domain.File, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessWrite)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessWrite); err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, domain.ErrForbidden()
 	}
 
 	file, err := s.filesRepo.CreateFileAnyway(ctx, path, size, storageID)
@@ -102,12 +94,8 @@ func (s *FilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, 
 }
 
 func (s *FilesService) GetFileForDownload(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessRead); err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, domain.ErrForbidden()
 	}
 
 	return s.filesRepo.GetByPath(ctx, storageID, path)
@@ -126,36 +114,24 @@ func (s *FilesService) DownloadFileRangeToWriter(ctx context.Context, file *doma
 }
 
 func (s *FilesService) ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessRead); err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, domain.ErrForbidden()
 	}
 
 	return s.filesRepo.ListDir(ctx, storageID, path)
 }
 
 func (s *FilesService) Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessRead); err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, domain.ErrForbidden()
 	}
 
 	return s.filesRepo.Search(ctx, storageID, basePath, searchPath)
 }
 
 func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *DeleteProgress, forceDelete bool) error {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessAdmin)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessAdmin); err != nil {
 		return err
-	}
-	if !ok {
-		return domain.ErrForbidden()
 	}
 
 	// Get chunks before deleting (CASCADE will remove them from DB)
@@ -188,12 +164,8 @@ func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, 
 
 // DownloadDir writes all files under a directory as a zip archive to the given writer.
 func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *DownloadProgress) (string, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessRead); err != nil {
 		return "", err
-	}
-	if !ok {
-		return "", domain.ErrForbidden()
 	}
 
 	if progress != nil {
@@ -250,12 +222,8 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 }
 
 func (s *FilesService) Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessWrite)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessWrite); err != nil {
 		return err
-	}
-	if !ok {
-		return domain.ErrForbidden()
 	}
 
 	return s.filesRepo.Move(ctx, storageID, oldPath, newPath)

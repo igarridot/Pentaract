@@ -64,10 +64,7 @@ func (h *UsersHandler) ListManaged(w http.ResponseWriter, r *http.Request) {
 		writeError(w, err)
 		return
 	}
-	if users == nil {
-		users = []domain.User{}
-	}
-	writeJSON(w, http.StatusOK, users)
+	writeJSON(w, http.StatusOK, nonNilSlice(users))
 }
 
 type updatePasswordRequest struct {

@@ -86,10 +86,7 @@ func (h *StorageWorkersHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if workers == nil {
-		workers = []domain.StorageWorker{}
-	}
-	writeJSON(w, http.StatusOK, workers)
+	writeJSON(w, http.StatusOK, nonNilSlice(workers))
 }
 
 func (h *StorageWorkersHandler) Update(w http.ResponseWriter, r *http.Request) {
