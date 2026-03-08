@@ -30,7 +30,7 @@ function subscribeSSE(url, token, onProgress) {
               try {
                 const data = JSON.parse(line.slice(6))
                 onProgress(data)
-                if (data.status === 'done' || data.status === 'error') {
+                if (data.status === 'done' || data.status === 'error' || data.status === 'cancelled') {
                   stopped = true
                   return
                 }
@@ -116,6 +116,18 @@ const API = {
       return `${base}/storages/${storageId}/files/download/${safePath}?${params.toString()}`
     },
 
+    previewFileUrl: (storageId, path) => {
+      const token = localStorage.getItem('access_token')
+      if (!token) throw new Error('Not authenticated')
+      const base = import.meta.env.VITE_API_BASE || '/api'
+      const safePath = encodeURI(path || '')
+      const params = new URLSearchParams({
+        access_token: token,
+        inline: '1',
+      })
+      return `${base}/storages/${storageId}/files/download/${safePath}?${params.toString()}`
+    },
+
     downloadDirUrl: (storageId, path, downloadId) => {
       const token = localStorage.getItem('access_token')
       if (!token) throw new Error('Not authenticated')
@@ -136,6 +148,9 @@ const API = {
 
     cancelUpload: (uploadId) =>
       apiRequest(`/upload_cancel/${uploadId}`, 'POST'),
+
+    cancelDownload: (downloadId) =>
+      apiRequest(`/download_cancel/${downloadId}`, 'POST'),
 
     subscribeProgress: (uploadId, onProgress) => {
       const token = localStorage.getItem('access_token')

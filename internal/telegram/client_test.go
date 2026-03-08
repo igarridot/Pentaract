@@ -3,6 +3,7 @@ package telegram
 import (
 	"io"
 	"net/http"
+	"net/http/httptest"
 	"strings"
 	"testing"
 
@@ -53,5 +54,30 @@ func TestGenerateChunkFilename(t *testing.T) {
 	want := "ddeb27fb-d9a0-4624-be4d-4615062daed4_3"
 	if got != want {
 		t.Fatalf("expected %q, got %q", want, got)
+	}
+}
+
+func TestDownloadFailsOnFileEndpointHTTPError(t *testing.T) {
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk.bin"):
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`telegram down`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	data, err := c.Download("TOKEN", "file-id")
+	if err == nil {
+		t.Fatalf("expected error, got nil with data=%q", string(data))
+	}
+	if !strings.Contains(err.Error(), "telegram file download error") {
+		t.Fatalf("unexpected error: %v", err)
 	}
 }

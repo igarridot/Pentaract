@@ -21,6 +21,7 @@ import UploadProgress from '../../components/UploadProgress'
 import DownloadProgress from '../../components/DownloadProgress'
 import DeleteProgress from '../../components/DeleteProgress'
 import MoveDialog from '../../components/MoveDialog'
+import MediaPreviewDialog from '../../components/MediaPreviewDialog'
 
 function createUploadId() {
   const cryptoObj = globalThis.crypto
@@ -50,6 +51,7 @@ export default function Files() {
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState(null)
   const [infoFile, setInfoFile] = useState(null)
+  const [previewFile, setPreviewFile] = useState(null)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [moveTarget, setMoveTarget] = useState(null)
@@ -191,15 +193,15 @@ export default function Files() {
       downloadIdRef.current = downloadId
       const filename = item.is_file ? item.name : `${item.name}.zip`
 
-        setDownloadState({
-          filename,
-          totalBytes: 0,
-          downloadedBytes: 0,
-          totalChunks: 0,
-          downloadedChunks: 0,
-          status: 'downloading',
-          workersStatus: 'active',
-        })
+      setDownloadState({
+        filename,
+        totalBytes: 0,
+        downloadedBytes: 0,
+        totalChunks: 0,
+        downloadedChunks: 0,
+        status: 'downloading',
+        workersStatus: 'active',
+      })
 
       const cancel = API.files.subscribeDownloadProgress(downloadId, (data) => {
         setDownloadState((prev) => ({
@@ -207,11 +209,11 @@ export default function Files() {
           filename,
           totalBytes: data.total_bytes || prev?.totalBytes || 0,
           downloadedBytes: data.downloaded_bytes || 0,
-            totalChunks: data.total || prev?.totalChunks || 0,
-            downloadedChunks: data.downloaded || 0,
-            status: data.status,
-            workersStatus: data.workers_status || prev?.workersStatus || 'active',
-          }))
+          totalChunks: data.total || prev?.totalChunks || 0,
+          downloadedChunks: data.downloaded || 0,
+          status: data.status,
+          workersStatus: data.workers_status || prev?.workersStatus || 'active',
+        }))
 
         if (data.status === 'done') {
           cancel()
@@ -225,6 +227,13 @@ export default function Files() {
           downloadIdRef.current = null
           addAlert('Download failed unexpectedly. Please try again.', 'error', { persistent: true })
           setTimeout(() => setDownloadState(null), 3000)
+        }
+        if (data.status === 'cancelled') {
+          cancel()
+          cancelDownloadProgressRef.current = null
+          downloadIdRef.current = null
+          addAlert('Download cancelled', 'info')
+          setTimeout(() => setDownloadState(null), 1500)
         }
       })
       cancelDownloadProgressRef.current = cancel
@@ -248,6 +257,41 @@ export default function Files() {
       setTimeout(() => setDownloadState(null), 3000)
       addAlert(err.message, 'error')
     }
+  }
+
+  const handleCancelDownload = async () => {
+    const id = downloadIdRef.current
+    if (!id) return
+    try {
+      await API.files.cancelDownload(id)
+      if (cancelDownloadProgressRef.current) {
+        cancelDownloadProgressRef.current()
+        cancelDownloadProgressRef.current = null
+      }
+      setDownloadState((prev) => (prev ? { ...prev, status: 'cancelled' } : null))
+      addAlert('Download cancelled', 'info')
+      setTimeout(() => setDownloadState(null), 1500)
+    } catch (err) {
+      addAlert(err.message, 'error')
+    } finally {
+      downloadIdRef.current = null
+    }
+  }
+
+  const getMediaType = (name) => {
+    const ext = name?.split('.').pop()?.toLowerCase() || ''
+    if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image'
+    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext)) return 'video'
+    return null
+  }
+
+  const handlePreview = (item) => {
+    const mediaType = getMediaType(item.name)
+    if (!mediaType) {
+      handleDownload(item)
+      return
+    }
+    setPreviewFile(item)
   }
 
   const handleDelete = async () => {
@@ -368,6 +412,7 @@ export default function Files() {
           downloadedChunks={downloadState.downloadedChunks}
           status={downloadState.status}
           workersStatus={downloadState.workersStatus}
+          onCancel={handleCancelDownload}
         />
       )}
       {deleteState && (
@@ -422,6 +467,7 @@ export default function Files() {
                 storageId={storageId}
                 currentPath={currentPath}
                 onInfo={setInfoFile}
+                onPreview={handlePreview}
                 onDelete={setDeleteTarget}
                 onDownload={handleDownload}
                 onMove={setMoveTarget}
@@ -451,6 +497,19 @@ export default function Files() {
       </FloatingMenu>
 
       <FileInfo file={infoFile} open={!!infoFile} onClose={() => setInfoFile(null)} />
+      <MediaPreviewDialog
+        open={!!previewFile}
+        file={previewFile}
+        mediaType={getMediaType(previewFile?.name)}
+        src={previewFile ? API.files.previewFileUrl(storageId, previewFile.path) : ''}
+        onClose={() => setPreviewFile(null)}
+        onDownload={() => {
+          if (!previewFile) return
+          const file = previewFile
+          setPreviewFile(null)
+          handleDownload(file)
+        }}
+      />
 
       <CreateFolderDialog
         open={folderDialogOpen}
