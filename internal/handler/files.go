@@ -132,12 +132,24 @@ func (h *FilesHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID
 	h.downloads[downloadID] = tracker
 	h.mu.Unlock()
 	return ctx, tracker, func() {
-		time.AfterFunc(5*time.Minute, func() {
-			h.mu.Lock()
-			delete(h.downloads, downloadID)
-			h.mu.Unlock()
-		})
+		h.scheduleDownloadTrackerCleanup(downloadID)
 	}
+}
+
+func (h *FilesHandler) scheduleUploadTrackerCleanup(uploadID string) {
+	time.AfterFunc(5*time.Minute, func() {
+		h.mu.Lock()
+		delete(h.uploads, uploadID)
+		h.mu.Unlock()
+	})
+}
+
+func (h *FilesHandler) scheduleDownloadTrackerCleanup(downloadID string) {
+	time.AfterFunc(5*time.Minute, func() {
+		h.mu.Lock()
+		delete(h.downloads, downloadID)
+		h.mu.Unlock()
+	})
 }
 
 // finishTracker marks a download tracker as done with an optional error.
@@ -315,11 +327,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer func() {
-			time.AfterFunc(5*time.Minute, func() {
-				h.mu.Lock()
-				delete(h.uploads, uploadID)
-				h.mu.Unlock()
-			})
+			h.scheduleUploadTrackerCleanup(uploadID)
 		}()
 
 		_, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress)
@@ -836,10 +844,7 @@ func (h *FilesHandler) Tree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if elements == nil {
-		elements = []domain.FSElement{}
-	}
-	writeJSON(w, http.StatusOK, elements)
+	writeJSON(w, http.StatusOK, nonNilSlice(elements))
 }
 
 func (h *FilesHandler) Search(w http.ResponseWriter, r *http.Request) {
@@ -859,10 +864,7 @@ func (h *FilesHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if results == nil {
-		results = []domain.FSElement{}
-	}
-	writeJSON(w, http.StatusOK, results)
+	writeJSON(w, http.StatusOK, nonNilSlice(results))
 }
 
 func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {

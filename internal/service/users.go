@@ -59,27 +59,41 @@ func (s *UsersService) AdminStatus(user *appjwt.AuthUser) bool {
 	return s.IsAdmin(user)
 }
 
-func (s *UsersService) ListManaged(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error) {
-	if !s.IsAdmin(caller) {
-		return nil, domain.ErrForbidden()
-	}
-	return s.usersRepo.ListNonAdmin(ctx, s.superuserEmail)
-}
-
-func (s *UsersService) UpdatePassword(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error {
+func (s *UsersService) requireAdmin(caller *appjwt.AuthUser) error {
 	if !s.IsAdmin(caller) {
 		return domain.ErrForbidden()
 	}
-	if newPassword == "" {
-		return domain.ErrBadRequest("password is required")
-	}
+	return nil
+}
 
+func (s *UsersService) requireManagedTarget(ctx context.Context, targetUserID uuid.UUID) error {
 	target, err := s.usersRepo.GetByID(ctx, targetUserID)
 	if err != nil {
 		return err
 	}
 	if strings.EqualFold(target.Email, s.superuserEmail) {
 		return domain.ErrForbidden()
+	}
+	return nil
+}
+
+func (s *UsersService) ListManaged(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error) {
+	if err := s.requireAdmin(caller); err != nil {
+		return nil, err
+	}
+	return s.usersRepo.ListNonAdmin(ctx, s.superuserEmail)
+}
+
+func (s *UsersService) UpdatePassword(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error {
+	if err := s.requireAdmin(caller); err != nil {
+		return err
+	}
+	if newPassword == "" {
+		return domain.ErrBadRequest("password is required")
+	}
+
+	if err := s.requireManagedTarget(ctx, targetUserID); err != nil {
+		return err
 	}
 
 	hash, err := password.Hash(newPassword)
@@ -90,15 +104,11 @@ func (s *UsersService) UpdatePassword(ctx context.Context, caller *appjwt.AuthUs
 }
 
 func (s *UsersService) DeleteManaged(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID) error {
-	if !s.IsAdmin(caller) {
-		return domain.ErrForbidden()
-	}
-	target, err := s.usersRepo.GetByID(ctx, targetUserID)
-	if err != nil {
+	if err := s.requireAdmin(caller); err != nil {
 		return err
 	}
-	if strings.EqualFold(target.Email, s.superuserEmail) {
-		return domain.ErrForbidden()
+	if err := s.requireManagedTarget(ctx, targetUserID); err != nil {
+		return err
 	}
 	return s.usersRepo.DeleteManaged(ctx, targetUserID)
 }

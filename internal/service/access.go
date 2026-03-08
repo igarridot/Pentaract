@@ -39,12 +39,8 @@ func NewAccessServiceWithRepos(accessRepo accessRepository, usersRepo accessUser
 
 func (s *AccessService) Grant(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID, email string, accessType domain.AccessType) error {
 	// Check caller has admin access
-	ok, err := s.accessRepo.HasAccess(ctx, callerID, storageID, domain.AccessAdmin)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, callerID, storageID, domain.AccessAdmin); err != nil {
 		return err
-	}
-	if !ok {
-		return domain.ErrForbidden()
 	}
 
 	// Find target user
@@ -62,24 +58,16 @@ func (s *AccessService) Grant(ctx context.Context, callerID uuid.UUID, storageID
 }
 
 func (s *AccessService) List(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID) ([]domain.UserWithAccess, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, callerID, storageID, domain.AccessAdmin)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, callerID, storageID, domain.AccessAdmin); err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, domain.ErrForbidden()
 	}
 
 	return s.accessRepo.List(ctx, storageID)
 }
 
 func (s *AccessService) Revoke(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID, targetUserID uuid.UUID) error {
-	ok, err := s.accessRepo.HasAccess(ctx, callerID, storageID, domain.AccessAdmin)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, callerID, storageID, domain.AccessAdmin); err != nil {
 		return err
-	}
-	if !ok {
-		return domain.ErrForbidden()
 	}
 
 	if targetUserID == callerID {
@@ -90,12 +78,8 @@ func (s *AccessService) Revoke(ctx context.Context, callerID uuid.UUID, storageI
 }
 
 func (s *AccessService) ListGrantCandidates(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID) ([]domain.User, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, callerID, storageID, domain.AccessAdmin)
-	if err != nil {
+	if err := requireStorageAccess(ctx, s.accessRepo, callerID, storageID, domain.AccessAdmin); err != nil {
 		return nil, err
-	}
-	if !ok {
-		return nil, domain.ErrForbidden()
 	}
 
 	return s.usersRepo.ListGrantCandidates(ctx, storageID, callerID)

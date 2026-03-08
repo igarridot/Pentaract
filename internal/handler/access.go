@@ -70,10 +70,7 @@ func (h *AccessHandler) List(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if users == nil {
-		users = []domain.UserWithAccess{}
-	}
-	writeJSON(w, http.StatusOK, users)
+	writeJSON(w, http.StatusOK, nonNilSlice(users))
 }
 
 type revokeAccessRequest struct {
@@ -122,8 +119,5 @@ func (h *AccessHandler) GrantCandidates(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	if users == nil {
-		users = []domain.User{}
-	}
-	writeJSON(w, http.StatusOK, users)
+	writeJSON(w, http.StatusOK, nonNilSlice(users))
 }

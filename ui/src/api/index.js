@@ -64,6 +64,22 @@ function subscribeAuthSSE(path, onProgress) {
   return subscribeSSE(`${API_BASE}${path}`, token, onProgress)
 }
 
+function subscribeTransferProgress(endpoint, idName, idValue, onProgress) {
+  return subscribeAuthSSE(`/${endpoint}?${idName}=${encodeURIComponent(idValue)}`, onProgress)
+}
+
+function cancelTransfer(endpoint, idValue) {
+  return apiRequest(`/${endpoint}/${idValue}`, 'POST')
+}
+
+function filesPath(storageId, suffix = '') {
+  return `/storages/${storageId}/files${suffix}`
+}
+
+function filesDownloadAuthUrl(storageId, mode, path, params = {}) {
+  return buildAuthUrl(filesPath(storageId, `/${mode}/${encodeURI(path || '')}`), params)
+}
+
 const API = {
   auth: {
     login: (email, password) => apiRequest('/auth/login', 'POST', { email, password }, false),
@@ -106,56 +122,54 @@ const API = {
 
   files: {
     createFolder: (storageId, path, folder_name) =>
-      apiRequest(`/storages/${storageId}/files/create_folder`, 'POST', { path, folder_name }),
+      apiRequest(filesPath(storageId, '/create_folder'), 'POST', { path, folder_name }),
 
     move: (storageId, oldPath, newPath) =>
-      apiRequest(`/storages/${storageId}/files/move`, 'POST', { old_path: oldPath, new_path: newPath }),
+      apiRequest(filesPath(storageId, '/move'), 'POST', { old_path: oldPath, new_path: newPath }),
 
     upload: (storageId, path, file, uploadId, options = {}) => {
       const formData = new FormData()
       formData.append('path', path || '')
       if (uploadId) formData.append('upload_id', uploadId)
       formData.append('file', file)
-      return apiMultipartRequest(`/storages/${storageId}/files/upload`, 'POST', formData, true, options)
+      return apiMultipartRequest(filesPath(storageId, '/upload'), 'POST', formData, true, options)
     },
 
     tree: (storageId, path) =>
-      apiRequest(`/storages/${storageId}/files/tree/${path || ''}`),
+      apiRequest(filesPath(storageId, `/tree/${path || ''}`)),
 
     downloadFileUrl: (storageId, path, downloadId) =>
-      buildAuthUrl(`/storages/${storageId}/files/download/${encodeURI(path || '')}`, { download_id: downloadId }),
+      filesDownloadAuthUrl(storageId, 'download', path, { download_id: downloadId }),
 
     previewFileUrl: (storageId, path) =>
-      buildAuthUrl(`/storages/${storageId}/files/download/${encodeURI(path || '')}`, { inline: '1' }),
+      filesDownloadAuthUrl(storageId, 'download', path, { inline: '1' }),
 
     downloadDirUrl: (storageId, path, downloadId) =>
-      buildAuthUrl(`/storages/${storageId}/files/download_dir/${encodeURI(path || '')}`, { download_id: downloadId }),
+      filesDownloadAuthUrl(storageId, 'download_dir', path, { download_id: downloadId }),
 
     search: (storageId, basePath, searchPath) =>
-      apiRequest(`/storages/${storageId}/files/search/${basePath || ''}?search_path=${encodeURIComponent(searchPath)}`),
+      apiRequest(`${filesPath(storageId, `/search/${basePath || ''}`)}?search_path=${encodeURIComponent(searchPath)}`),
 
     delete: (storageId, path, deleteId, forceDelete = false) => {
       const params = new URLSearchParams()
       if (deleteId) params.set('delete_id', deleteId)
       if (forceDelete) params.set('force_delete', '1')
       const query = params.toString()
-      return apiRequest(`/storages/${storageId}/files/${path}${query ? `?${query}` : ''}`, 'DELETE')
+      return apiRequest(`${filesPath(storageId, `/${path}`)}${query ? `?${query}` : ''}`, 'DELETE')
     },
 
-    cancelUpload: (uploadId) =>
-      apiRequest(`/upload_cancel/${uploadId}`, 'POST'),
+    cancelUpload: (uploadId) => cancelTransfer('upload_cancel', uploadId),
 
-    cancelDownload: (downloadId) =>
-      apiRequest(`/download_cancel/${downloadId}`, 'POST'),
+    cancelDownload: (downloadId) => cancelTransfer('download_cancel', downloadId),
 
     subscribeProgress: (uploadId, onProgress) =>
-      subscribeAuthSSE(`/upload_progress?upload_id=${uploadId}`, onProgress),
+      subscribeTransferProgress('upload_progress', 'upload_id', uploadId, onProgress),
 
     subscribeDownloadProgress: (downloadId, onProgress) =>
-      subscribeAuthSSE(`/download_progress?download_id=${downloadId}`, onProgress),
+      subscribeTransferProgress('download_progress', 'download_id', downloadId, onProgress),
 
     subscribeDeleteProgress: (deleteId, onProgress) =>
-      subscribeAuthSSE(`/delete_progress?delete_id=${deleteId}`, onProgress),
+      subscribeTransferProgress('delete_progress', 'delete_id', deleteId, onProgress),
   },
 }
 
