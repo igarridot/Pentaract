@@ -14,7 +14,7 @@ COPY . .
 RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o pentaract ./cmd/pentaract
 
 # Stage 2: Build UI
-FROM public.ecr.aws/docker/library/node:22-slim AS ui
+FROM public.ecr.aws/docker/library/node:latest AS ui
 
 WORKDIR /app
 COPY ui/package.json ui/pnpm-lock.yaml* ./
@@ -25,7 +25,7 @@ ENV VITE_API_BASE=/api
 RUN pnpm run build
 
 # Stage 3: Runtime
-FROM public.ecr.aws/docker/library/alpine:3.21
+FROM public.ecr.aws/docker/library/alpine:latest
 
 RUN apk add --no-cache ca-certificates
 

@@ -1,6 +1,6 @@
 services:
   init-perms:
-    image: public.ecr.aws/docker/library/alpine:3.20
+    image: public.ecr.aws/docker/library/alpine:latest
     command: >
       sh -c "
       mkdir -p /data/db /data/go-mod-cache /data/go-build-cache &&
@@ -10,7 +10,10 @@ services:
       - ./persistent_data:/data
 
   pentaract:
-    image: norbega/pentaract:latest
+    #image: norbega/pentaract:latest
+    build:
+      context: .
+      dockerfile: Dockerfile
     pull_policy: always
     ports:
       - "${PORT:-8000}:8000"
@@ -21,7 +24,7 @@ services:
         condition: service_healthy
 
   db:
-    image: public.ecr.aws/docker/library/postgres:15-alpine
+    image: public.ecr.aws/docker/library/postgres:latest
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-pentaract}"]
       interval: 10s
