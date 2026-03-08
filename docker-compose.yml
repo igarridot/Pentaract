@@ -10,10 +10,7 @@ services:
       - ./persistent_data:/data
 
   pentaract:
-    #image: norbega/pentaract:latest
-    build:
-      context: .
-      dockerfile: Dockerfile
+    image: norbega/pentaract:latest
     pull_policy: always
     ports:
       - "${PORT:-8000}:8000"
