@@ -2,7 +2,17 @@ import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, Typography,
 } from '@mui/material'
 
-export default function ActionConfirmDialog({ open, entity, action, description, onConfirm, onCancel }) {
+export default function ActionConfirmDialog({
+  open,
+  entity,
+  action,
+  description,
+  onConfirm,
+  onCancel,
+  children = null,
+  confirmDisabled = false,
+  confirmLabel,
+}) {
   return (
     <Dialog open={open} onClose={onCancel} maxWidth="xs" fullWidth>
       <DialogTitle>{action} {entity}</DialogTitle>
@@ -10,11 +20,12 @@ export default function ActionConfirmDialog({ open, entity, action, description,
         <Typography variant="body2" color="text.secondary">
           {description}
         </Typography>
+        {children}
       </DialogContent>
       <DialogActions>
         <Button onClick={onCancel} color="inherit">Cancel</Button>
-        <Button onClick={onConfirm} color="error" variant="contained">
-          {action}
+        <Button onClick={onConfirm} color="error" variant="contained" disabled={confirmDisabled}>
+          {confirmLabel || action}
         </Button>
       </DialogActions>
     </Dialog>

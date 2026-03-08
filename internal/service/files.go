@@ -112,7 +112,7 @@ func (s *FilesService) Search(ctx context.Context, userID, storageID uuid.UUID, 
 	return s.filesRepo.Search(ctx, storageID, basePath, searchPath)
 }
 
-func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *DeleteProgress) error {
+func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *DeleteProgress, forceDelete bool) error {
 	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessWrite)
 	if err != nil {
 		return err
@@ -133,8 +133,9 @@ func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, 
 		return err
 	}
 
-	// Delete from Telegram first. DB delete is allowed only after Telegram cleanup succeeds.
-	if len(chunks) > 0 {
+	// Delete from Telegram first unless force delete was explicitly requested.
+	// Force delete removes only DB records and may leave orphaned Telegram chunks.
+	if !forceDelete && len(chunks) > 0 {
 		if err := s.manager.DeleteFromTelegram(ctx, *storage, chunks, progress); err != nil {
 			return err
 		}

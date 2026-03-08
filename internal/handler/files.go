@@ -345,7 +345,7 @@ func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(1 * time.Second)
-		if err := h.svc.Delete(context.Background(), user.ID, tracker.storageID, tracker.filePath, nil); err != nil {
+		if err := h.svc.Delete(context.Background(), user.ID, tracker.storageID, tracker.filePath, nil, false); err != nil {
 			log.Printf("[cancel] WARNING: cleanup failed for %s: %v", tracker.filePath, err)
 		} else {
 			log.Printf("[cancel] cleanup done for %s", tracker.filePath)
@@ -862,6 +862,11 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	deleteID := r.URL.Query().Get("delete_id")
+	forceDelete, err := strconv.ParseBool(r.URL.Query().Get("force_delete"))
+	if err != nil && r.URL.Query().Get("force_delete") != "" {
+		writeError(w, domain.ErrBadRequest("invalid force_delete value"))
+		return
+	}
 	var tracker *deleteTracker
 	if deleteID != "" {
 		tracker = startDeleteTracker(deleteID, storageID)
@@ -873,7 +878,7 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		progress = tracker.progress
 	}
 
-	if err := h.svc.Delete(r.Context(), user.ID, storageID, path, progress); err != nil {
+	if err := h.svc.Delete(r.Context(), user.ID, storageID, path, progress, forceDelete); err != nil {
 		if tracker != nil {
 			markDeleteTrackerDone(tracker, err)
 		}

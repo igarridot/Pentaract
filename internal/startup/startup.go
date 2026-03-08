@@ -4,7 +4,6 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"strings"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgxpool"
@@ -20,16 +19,21 @@ func CreateDB(ctx context.Context, cfg *config.Config) error {
 	}
 	defer conn.Close(ctx)
 
+	var exists bool
+	err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, cfg.DatabaseName).Scan(&exists)
+	if err != nil {
+		return fmt.Errorf("checking database existence: %w", err)
+	}
+	if exists {
+		log.Printf("Database %s already exists", cfg.DatabaseName)
+		return nil
+	}
+
 	safeName := pgx.Identifier{cfg.DatabaseName}.Sanitize()
 	_, err = conn.Exec(ctx, "CREATE DATABASE "+safeName)
 	if err != nil {
-		if strings.Contains(err.Error(), "already exists") {
-			log.Printf("Database %s already exists", cfg.DatabaseName)
-			return nil
-		}
 		return fmt.Errorf("creating database: %w", err)
 	}
-
 	log.Printf("Database %s created", cfg.DatabaseName)
 	return nil
 }

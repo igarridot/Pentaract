@@ -129,8 +129,13 @@ const API = {
     search: (storageId, basePath, searchPath) =>
       apiRequest(`/storages/${storageId}/files/search/${basePath || ''}?search_path=${encodeURIComponent(searchPath)}`),
 
-    delete: (storageId, path, deleteId) =>
-      apiRequest(`/storages/${storageId}/files/${path}${deleteId ? `?delete_id=${encodeURIComponent(deleteId)}` : ''}`, 'DELETE'),
+    delete: (storageId, path, deleteId, forceDelete = false) => {
+      const params = new URLSearchParams()
+      if (deleteId) params.set('delete_id', deleteId)
+      if (forceDelete) params.set('force_delete', '1')
+      const query = params.toString()
+      return apiRequest(`/storages/${storageId}/files/${path}${query ? `?${query}` : ''}`, 'DELETE')
+    },
 
     cancelUpload: (uploadId) =>
       apiRequest(`/upload_cancel/${uploadId}`, 'POST'),
