@@ -28,14 +28,5 @@ autodiscovery:
   scmid: github
   actionid: dependencies
   crawlers:
-    golang:
-      rootdir: "."
-    npm:
-      rootdir: "."
-    dockerfile:
-      rootdir: "."
     dockercompose:
       rootdir: "."
-    githubaction:
-      spec:
-        rootdir: "."
