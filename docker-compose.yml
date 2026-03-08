@@ -10,7 +10,8 @@ services:
       - ./persistent_data:/data
 
   pentaract:
-    build: .
+    image: norbega/pentaract:latest
+    pull_policy: always
     ports:
       - "${PORT:-8000}:8000"
     env_file: .env
