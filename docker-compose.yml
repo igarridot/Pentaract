@@ -43,6 +43,10 @@ services:
     build:
       context: .
       dockerfile: Dockerfile.dev
+    env_file: .env
+    ports:
+      - "${PORT:-8000}:8000"
+      - "3000:3000"
     volumes:
       - .:/app
       - ./persistent_data/go-mod-cache:/go/pkg/mod
