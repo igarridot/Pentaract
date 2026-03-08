@@ -32,8 +32,8 @@ func (c *Config) DatabaseURLWithoutDB() string {
 		c.DatabaseUser, c.DatabasePassword, c.DatabaseHost, c.DatabasePort)
 }
 
-func Load() (*Config, error) {
-	cfg := &Config{
+func Load() *Config {
+	return &Config{
 		Port:                   getEnvInt("PORT", 8000),
 		Workers:                getEnvInt("WORKERS", 4),
 		SuperuserEmail:         mustGetEnv("SUPERUSER_EMAIL"),
@@ -48,7 +48,6 @@ func Load() (*Config, error) {
 		DatabaseHost:           getEnv("DATABASE_HOST", "db"),
 		DatabasePort:           getEnvInt("DATABASE_PORT", 5432),
 	}
-	return cfg, nil
 }
 
 func mustGetEnv(key string) string {

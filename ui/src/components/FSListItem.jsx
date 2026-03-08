@@ -10,11 +10,11 @@ import {
 } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
 
-export default function FSListItem({ item, storageId, currentPath, onInfo, onPreview, onDelete, onDownload, onMove }) {
+export default function FSListItem({ item, storageId, onInfo, onPreview, onDelete, onDownload, onMove }) {
   const navigate = useNavigate()
   const [anchorEl, setAnchorEl] = useState(null)
   const ext = item.name?.split('.').pop()?.toLowerCase() || ''
-  const isPreviewable = item.is_file && ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'ogg', 'mov', 'm4v', 'mkv'].includes(ext)
+  const isPreviewable = item.is_file && ['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg', 'mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext)
 
   const handleClick = () => {
     if (item.is_file) {

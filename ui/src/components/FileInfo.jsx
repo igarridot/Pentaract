@@ -17,7 +17,7 @@ export default function FileInfo({ file, open, onClose }) {
       <DialogTitle>File Info</DialogTitle>
       <DialogContent>
         {rows.map((row) => (
-          <Box key={row.label} sx={{ display: 'flex', py: 1, borderBottom: '1px solid rgba(0,0,0,0.05)', '&:last-child': { borderBottom: 'none' } }}>
+          <Box key={row.label} sx={{ display: 'flex', py: 1, borderBottom: '1px solid', borderColor: 'divider', '&:last-child': { borderBottom: 'none' } }}>
             <Typography variant="body2" color="text.secondary" sx={{ width: 64, flexShrink: 0, fontWeight: 500 }}>
               {row.label}
             </Typography>

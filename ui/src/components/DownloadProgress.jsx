@@ -1,6 +1,6 @@
-import { useEffect, useRef } from 'react'
 import { Box, LinearProgress, Typography, Button } from '@mui/material'
 import { convertSize } from '../common/size_converter'
+import { useTransferSpeed } from '../common/use_transfer_speed'
 
 export default function DownloadProgress({ filename, totalBytes, downloadedBytes, totalChunks, downloadedChunks, status, workersStatus, onCancel }) {
   const percent = totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0
@@ -8,21 +8,8 @@ export default function DownloadProgress({ filename, totalBytes, downloadedBytes
   const isError = status === 'error'
   const isCancelled = status === 'cancelled'
   const pendingChunks = totalChunks > 0 ? Math.max(totalChunks - downloadedChunks, 0) : null
+  const speed = useTransferSpeed(downloadedBytes)
 
-  const speedRef = useRef({ lastBytes: 0, lastTime: Date.now(), speed: 0 })
-
-  useEffect(() => {
-    const now = Date.now()
-    const s = speedRef.current
-    const elapsed = (now - s.lastTime) / 1000
-    if (elapsed > 0.3 && downloadedBytes >= s.lastBytes) {
-      s.speed = (downloadedBytes - s.lastBytes) / elapsed
-      s.lastBytes = downloadedBytes
-      s.lastTime = now
-    }
-  }, [downloadedBytes])
-
-  const speed = speedRef.current.speed
   const speedText = speed > 0 && isActive ? `${convertSize(speed)}/s` : ''
   const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
   const chunkText = totalChunks > 0

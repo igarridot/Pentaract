@@ -168,15 +168,9 @@ func (c *Client) DeleteMessage(token string, chatID int64, messageID int64) erro
 	return fmt.Errorf("telegram deleteMessage failed after %d retries", maxRetries)
 }
 
-// Download retrieves a file from Telegram by its file_id.
+// Download retrieves a file from Telegram by its file_id honoring request cancellation.
 // Automatically retries on 429 (Too Many Requests).
-func (c *Client) Download(token string, telegramFileID string) ([]byte, error) {
-	return c.DownloadCtx(context.Background(), token, telegramFileID)
-}
-
-// DownloadCtx retrieves a file from Telegram by its file_id honoring request cancellation.
-// Automatically retries on 429 (Too Many Requests).
-func (c *Client) DownloadCtx(ctx context.Context, token string, telegramFileID string) ([]byte, error) {
+func (c *Client) Download(ctx context.Context, token string, telegramFileID string) ([]byte, error) {
 	// Step 1: Get file path (with retry on 429)
 	var filePath string
 	getFileURL := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", c.baseURL, token, telegramFileID)

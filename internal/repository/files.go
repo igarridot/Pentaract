@@ -158,12 +158,13 @@ func (r *FilesRepo) ListDir(ctx context.Context, storageID uuid.UUID, path strin
 	return elements, rows.Err()
 }
 
-func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.SearchFSElement, error) {
+func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error) {
 	if basePath != "" && !strings.HasSuffix(basePath, "/") {
 		basePath += "/"
 	}
 
-	pattern := "%" + searchPath + "%"
+	escaped := strings.NewReplacer("%", `\%`, "_", `\_`).Replace(searchPath)
+	pattern := "%" + escaped + "%"
 	rows, err := r.pool.Query(ctx,
 		`SELECT path, size
 		FROM files
@@ -180,9 +181,9 @@ func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, s
 	}
 	defer rows.Close()
 
-	var results []domain.SearchFSElement
+	var results []domain.FSElement
 	for rows.Next() {
-		var el domain.SearchFSElement
+		var el domain.FSElement
 		if err := rows.Scan(&el.Path, &el.Size); err != nil {
 			return nil, err
 		}
@@ -198,6 +199,19 @@ func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, s
 	return results, rows.Err()
 }
 
+func scanChunks(rows pgx.Rows) ([]domain.FileChunk, error) {
+	defer rows.Close()
+	var chunks []domain.FileChunk
+	for rows.Next() {
+		var c domain.FileChunk
+		if err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.TelegramMessageID, &c.Position); err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
 // ListChunksByPath returns all chunks for files matching an exact path or folder prefix.
 func (r *FilesRepo) ListChunksByPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FileChunk, error) {
 	rows, err := r.pool.Query(ctx,
@@ -211,17 +225,7 @@ func (r *FilesRepo) ListChunksByPath(ctx context.Context, storageID uuid.UUID, p
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var chunks []domain.FileChunk
-	for rows.Next() {
-		var c domain.FileChunk
-		if err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.TelegramMessageID, &c.Position); err != nil {
-			return nil, err
-		}
-		chunks = append(chunks, c)
-	}
-	return chunks, rows.Err()
+	return scanChunks(rows)
 }
 
 // ListChunksByStorage returns all chunks for uploaded files in a storage.
@@ -237,17 +241,7 @@ func (r *FilesRepo) ListChunksByStorage(ctx context.Context, storageID uuid.UUID
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var chunks []domain.FileChunk
-	for rows.Next() {
-		var c domain.FileChunk
-		if err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.TelegramMessageID, &c.Position); err != nil {
-			return nil, err
-		}
-		chunks = append(chunks, c)
-	}
-	return chunks, rows.Err()
+	return scanChunks(rows)
 }
 
 func (r *FilesRepo) Delete(ctx context.Context, storageID uuid.UUID, path string) error {
@@ -271,7 +265,7 @@ func (r *FilesRepo) CreateChunks(ctx context.Context, chunks []domain.FileChunk)
 	}
 
 	valueStrings := make([]string, 0, len(chunks))
-	valueArgs := make([]interface{}, 0, len(chunks)*4)
+	valueArgs := make([]any, 0, len(chunks)*4)
 	for i, c := range chunks {
 		base := i * 4
 		valueStrings = append(valueStrings, fmt.Sprintf("($%d, $%d, $%d, $%d)", base+1, base+2, base+3, base+4))
@@ -291,17 +285,7 @@ func (r *FilesRepo) ListChunks(ctx context.Context, fileID uuid.UUID) ([]domain.
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
-
-	var chunks []domain.FileChunk
-	for rows.Next() {
-		var c domain.FileChunk
-		if err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.TelegramMessageID, &c.Position); err != nil {
-			return nil, err
-		}
-		chunks = append(chunks, c)
-	}
-	return chunks, rows.Err()
+	return scanChunks(rows)
 }
 
 // ListFilesUnderPath returns all uploaded files under a directory prefix.

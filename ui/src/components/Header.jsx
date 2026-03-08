@@ -21,7 +21,7 @@ const modeOptions = [
 
 export default function Header({ onToggleSidebar }) {
   const navigate = useNavigate()
-  const { setting, setSetting, resolvedMode } = useThemeMode()
+  const { setting, setSetting } = useThemeMode()
   const [anchorEl, setAnchorEl] = useState(null)
 
   const currentIcon = setting === 'dark' ? <DarkIcon fontSize="small" />

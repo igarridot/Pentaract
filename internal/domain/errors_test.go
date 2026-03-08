@@ -14,7 +14,7 @@ func TestAppErrorFactories(t *testing.T) {
 	}{
 		{"already exists", ErrAlreadyExists("storage"), http.StatusConflict, "storage already exists"},
 		{"not found", ErrNotFound("file"), http.StatusNotFound, "file not found"},
-		{"not authenticated", ErrNotAuthenticated(), http.StatusUnauthorized, "not authenticated"},
+		{"unauthorized", ErrUnauthorized("not authenticated"), http.StatusUnauthorized, "not authenticated"},
 		{"forbidden", ErrForbidden(), http.StatusForbidden, "forbidden"},
 		{"bad request", ErrBadRequest("bad"), http.StatusBadRequest, "bad"},
 		{"internal", ErrInternal("boom"), http.StatusInternalServerError, "boom"},

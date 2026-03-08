@@ -22,8 +22,8 @@ func ErrNotFound(what string) *AppError {
 	return &AppError{Code: http.StatusNotFound, Message: fmt.Sprintf("%s not found", what)}
 }
 
-func ErrNotAuthenticated() *AppError {
-	return &AppError{Code: http.StatusUnauthorized, Message: "not authenticated"}
+func ErrUnauthorized(msg string) *AppError {
+	return &AppError{Code: http.StatusUnauthorized, Message: msg}
 }
 
 func ErrForbidden() *AppError {
