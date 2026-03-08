@@ -16,27 +16,27 @@ async function parseResponse(resp) {
   return JSON.parse(text)
 }
 
-export async function apiRequest(path, method = 'GET', body = null, auth = true) {
+export async function apiRequest(path, method = 'GET', body = null, auth = true, options = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (auth) {
     const token = getAuthToken()
     if (token) headers['Authorization'] = token
   }
 
-  const opts = { method, headers }
+  const opts = { method, headers, ...options }
   if (body) opts.body = JSON.stringify(body)
 
   const resp = await fetch(`${API_BASE}${path}`, opts)
   return parseResponse(resp)
 }
 
-export async function apiMultipartRequest(path, method, formData, auth = true) {
+export async function apiMultipartRequest(path, method, formData, auth = true, options = {}) {
   const headers = {}
   if (auth) {
     const token = getAuthToken()
     if (token) headers['Authorization'] = token
   }
 
-  const resp = await fetch(`${API_BASE}${path}`, { method, headers, body: formData })
+  const resp = await fetch(`${API_BASE}${path}`, { method, headers, body: formData, ...options })
   return parseResponse(resp)
 }

@@ -93,12 +93,12 @@ const API = {
     move: (storageId, oldPath, newPath) =>
       apiRequest(`/storages/${storageId}/files/move`, 'POST', { old_path: oldPath, new_path: newPath }),
 
-    upload: (storageId, path, file, uploadId) => {
+    upload: (storageId, path, file, uploadId, options = {}) => {
       const formData = new FormData()
       formData.append('path', path || '')
       if (uploadId) formData.append('upload_id', uploadId)
       formData.append('file', file)
-      return apiMultipartRequest(`/storages/${storageId}/files/upload`, 'POST', formData)
+      return apiMultipartRequest(`/storages/${storageId}/files/upload`, 'POST', formData, true, options)
     },
 
     tree: (storageId, path) =>
