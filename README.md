@@ -1,6 +1,9 @@
 # Pentaract
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/igarridot/Pentaract/tests.yml?style=plastic&logo=github)](https://github.com/igarridot/Pentaract/actions/workflows/tests.yml)
+[<img alt="Dockerhub latest" src="https://img.shields.io/badge/dockerhub-latest-blue?logo=docker&style=plastic">](https://hub.docker.com/r/norbega/pentaract)
+[<img alt="Docker Image Size (tag)" src="https://img.shields.io/docker/image-size/norbega/pentaract/latest?style=plastic&logo=docker&color=gold">](https://hub.docker.com/r/thedominux/pentaract/tags?page=1&name=latest)
+[<img alt="Any platform" src="https://img.shields.io/badge/platform-any-green?style=plastic&logo=linux&logoColor=white">](https://github.com/igarridot/Pentaract)
 
 Pentaract is a self-hosted cloud storage that uses **Telegram as the storage backend**.
 Files are split into **20 MB chunks**, uploaded through Telegram bot workers, and reassembled on download.
