@@ -19,6 +19,7 @@ import NavigationBlockDialog from '../../components/NavigationBlockDialog'
 import FloatingMenu from '../../components/Menu'
 import UploadProgress from '../../components/UploadProgress'
 import DownloadProgress from '../../components/DownloadProgress'
+import DeleteProgress from '../../components/DeleteProgress'
 import MoveDialog from '../../components/MoveDialog'
 
 function createUploadId() {
@@ -54,8 +55,10 @@ export default function Files() {
   const [moveTarget, setMoveTarget] = useState(null)
   const [uploadState, setUploadState] = useState(null)
   const [downloadState, setDownloadState] = useState(null)
+  const [deleteState, setDeleteState] = useState(null)
   const cancelProgressRef = useRef(null)
   const cancelDownloadProgressRef = useRef(null)
+  const cancelDeleteProgressRef = useRef(null)
   const uploadIdRef = useRef(null)
   const downloadIdRef = useRef(null)
 
@@ -78,6 +81,7 @@ export default function Files() {
     return () => {
       if (cancelProgressRef.current) cancelProgressRef.current()
       if (cancelDownloadProgressRef.current) cancelDownloadProgressRef.current()
+      if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
     }
   }, [])
 
@@ -137,6 +141,7 @@ export default function Files() {
         totalChunks: data.total || prev?.totalChunks || 0,
         uploadedChunks: data.uploaded || 0,
         status: data.status,
+        workersStatus: data.workers_status || prev?.workersStatus || 'active',
       }))
       if (data.status === 'done') {
         uploadIdRef.current = null
@@ -186,14 +191,15 @@ export default function Files() {
       downloadIdRef.current = downloadId
       const filename = item.is_file ? item.name : `${item.name}.zip`
 
-      setDownloadState({
-        filename,
-        totalBytes: 0,
-        downloadedBytes: 0,
-        totalChunks: 0,
-        downloadedChunks: 0,
-        status: 'downloading',
-      })
+        setDownloadState({
+          filename,
+          totalBytes: 0,
+          downloadedBytes: 0,
+          totalChunks: 0,
+          downloadedChunks: 0,
+          status: 'downloading',
+          workersStatus: 'active',
+        })
 
       const cancel = API.files.subscribeDownloadProgress(downloadId, (data) => {
         setDownloadState((prev) => ({
@@ -201,10 +207,11 @@ export default function Files() {
           filename,
           totalBytes: data.total_bytes || prev?.totalBytes || 0,
           downloadedBytes: data.downloaded_bytes || 0,
-          totalChunks: data.total || prev?.totalChunks || 0,
-          downloadedChunks: data.downloaded || 0,
-          status: data.status,
-        }))
+            totalChunks: data.total || prev?.totalChunks || 0,
+            downloadedChunks: data.downloaded || 0,
+            status: data.status,
+            workersStatus: data.workers_status || prev?.workersStatus || 'active',
+          }))
 
         if (data.status === 'done') {
           cancel()
@@ -246,11 +253,49 @@ export default function Files() {
   const handleDelete = async () => {
     try {
       const path = (deleteTarget.path || deleteTarget.name).replace(/\/+$/, '')
-      await API.files.delete(storageId, path)
+      const deleteId = createUploadId()
+      if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
+      setDeleteState({
+        label: deleteTarget?.name || path,
+        totalChunks: 0,
+        deletedChunks: 0,
+        status: 'deleting',
+        workersStatus: 'active',
+      })
+
+      const cancel = API.files.subscribeDeleteProgress(deleteId, (data) => {
+        setDeleteState((prev) => ({
+          ...prev,
+          totalChunks: data.total || prev?.totalChunks || 0,
+          deletedChunks: data.deleted || 0,
+          status: data.status,
+          workersStatus: data.workers_status || prev?.workersStatus || 'active',
+        }))
+
+        if (data.status === 'done') {
+          cancel()
+          cancelDeleteProgressRef.current = null
+          setTimeout(() => setDeleteState(null), 1500)
+        }
+        if (data.status === 'error') {
+          cancel()
+          cancelDeleteProgressRef.current = null
+          setTimeout(() => setDeleteState(null), 3000)
+        }
+      })
+      cancelDeleteProgressRef.current = cancel
+
+      await API.files.delete(storageId, path, deleteId)
       addAlert('Deleted', 'success')
       setDeleteTarget(null)
       loadTree()
     } catch (err) {
+      if (cancelDeleteProgressRef.current) {
+        cancelDeleteProgressRef.current()
+        cancelDeleteProgressRef.current = null
+      }
+      setDeleteState((prev) => (prev ? { ...prev, status: 'error' } : null))
+      setTimeout(() => setDeleteState(null), 3000)
       addAlert(err.message, 'error')
     }
   }
@@ -310,6 +355,7 @@ export default function Files() {
           totalChunks={uploadState.totalChunks}
           uploadedChunks={uploadState.uploadedChunks}
           status={uploadState.status}
+          workersStatus={uploadState.workersStatus}
           onCancel={handleCancelUpload}
         />
       )}
@@ -321,6 +367,16 @@ export default function Files() {
           totalChunks={downloadState.totalChunks}
           downloadedChunks={downloadState.downloadedChunks}
           status={downloadState.status}
+          workersStatus={downloadState.workersStatus}
+        />
+      )}
+      {deleteState && (
+        <DeleteProgress
+          label={deleteState.label}
+          totalChunks={deleteState.totalChunks}
+          deletedChunks={deleteState.deletedChunks}
+          status={deleteState.status}
+          workersStatus={deleteState.workersStatus}
         />
       )}
 
