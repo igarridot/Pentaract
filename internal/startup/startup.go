@@ -20,7 +20,8 @@ func CreateDB(ctx context.Context, cfg *config.Config) error {
 	}
 	defer conn.Close(ctx)
 
-	_, err = conn.Exec(ctx, fmt.Sprintf("CREATE DATABASE %s", cfg.DatabaseName))
+	safeName := pgx.Identifier{cfg.DatabaseName}.Sanitize()
+	_, err = conn.Exec(ctx, "CREATE DATABASE "+safeName)
 	if err != nil {
 		if strings.Contains(err.Error(), "already exists") {
 			log.Printf("Database %s already exists", cfg.DatabaseName)

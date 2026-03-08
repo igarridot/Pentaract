@@ -20,11 +20,7 @@ import (
 func main() {
 	ctx := context.Background()
 
-	// Load config
-	cfg, err := config.Load()
-	if err != nil {
-		log.Fatalf("Failed to load config: %v", err)
-	}
+	cfg := config.Load()
 
 	// Create database if not exists
 	if err := startup.CreateDB(ctx, cfg); err != nil {

@@ -1,8 +1,7 @@
-const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
 
-export function getAuthToken() {
-  const token = localStorage.getItem('access_token')
-  return token ? `Bearer ${token}` : null
+export function getRawToken() {
+  return localStorage.getItem('access_token')
 }
 
 async function parseResponse(resp) {
@@ -19,8 +18,8 @@ async function parseResponse(resp) {
 export async function apiRequest(path, method = 'GET', body = null, auth = true, options = {}) {
   const headers = { 'Content-Type': 'application/json' }
   if (auth) {
-    const token = getAuthToken()
-    if (token) headers['Authorization'] = token
+    const token = getRawToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
   }
 
   const opts = { method, headers, ...options }
@@ -33,8 +32,8 @@ export async function apiRequest(path, method = 'GET', body = null, auth = true,
 export async function apiMultipartRequest(path, method, formData, auth = true, options = {}) {
   const headers = {}
   if (auth) {
-    const token = getAuthToken()
-    if (token) headers['Authorization'] = token
+    const token = getRawToken()
+    if (token) headers['Authorization'] = `Bearer ${token}`
   }
 
   const resp = await fetch(`${API_BASE}${path}`, { method, headers, body: formData, ...options })

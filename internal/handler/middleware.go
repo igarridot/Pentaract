@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"strings"
 
+	"github.com/Dominux/Pentaract/internal/domain"
 	appjwt "github.com/Dominux/Pentaract/internal/jwt"
 )
 
@@ -21,25 +22,25 @@ func AuthMiddleware(secretKey string) func(http.Handler) http.Handler {
 			if header != "" {
 				parts := strings.SplitN(header, " ", 2)
 				if len(parts) != 2 || !strings.EqualFold(parts[0], "bearer") {
-					http.Error(w, `{"error":"invalid authorization header"}`, http.StatusUnauthorized)
+					writeError(w, domain.ErrUnauthorized("invalid authorization header"))
 					return
 				}
 				token = parts[1]
 			} else {
 				token = r.URL.Query().Get("access_token")
 				if token == "" {
-					http.Error(w, `{"error":"not authenticated"}`, http.StatusUnauthorized)
+					writeError(w, domain.ErrUnauthorized("not authenticated"))
 					return
 				}
 				if !strings.Contains(r.URL.Path, "/files/download/") && !strings.Contains(r.URL.Path, "/files/download_dir/") {
-					http.Error(w, `{"error":"not authenticated"}`, http.StatusUnauthorized)
+					writeError(w, domain.ErrUnauthorized("not authenticated"))
 					return
 				}
 			}
 
 			user, err := appjwt.Validate(token, secretKey)
 			if err != nil {
-				http.Error(w, `{"error":"invalid or expired token"}`, http.StatusUnauthorized)
+				writeError(w, domain.ErrUnauthorized("invalid or expired token"))
 				return
 			}
 

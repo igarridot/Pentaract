@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
 	"log"
@@ -22,13 +23,37 @@ import (
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
+// fileSizeCache caches exact file sizes to avoid re-downloading the last
+// Telegram chunk on every range request (seeking).
+type fileSizeCache struct {
+	mu    sync.RWMutex
+	sizes map[uuid.UUID]int64
+}
+
+func newFileSizeCache() *fileSizeCache {
+	return &fileSizeCache{sizes: make(map[uuid.UUID]int64)}
+}
+
+func (c *fileSizeCache) get(fileID uuid.UUID) (int64, bool) {
+	c.mu.RLock()
+	defer c.mu.RUnlock()
+	size, ok := c.sizes[fileID]
+	return size, ok
+}
+
+func (c *fileSizeCache) set(fileID uuid.UUID, size int64) {
+	c.mu.Lock()
+	c.sizes[fileID] = size
+	c.mu.Unlock()
+}
+
 type uploadTracker struct {
 	progress  *service.UploadProgress
 	cancel    context.CancelFunc
 	storageID uuid.UUID
 	filePath  string
-	err       error // set when upload finishes with error
-	done      bool  // set when upload finishes
+	err       error
+	done      bool
 }
 
 type downloadTracker struct {
@@ -46,6 +71,8 @@ type FilesHandler struct {
 	mu        sync.RWMutex
 	uploads   map[string]*uploadTracker
 	downloads map[string]*downloadTracker
+
+	fileSizes *fileSizeCache
 }
 
 func NewFilesHandler(svc *service.FilesService) *FilesHandler {
@@ -53,6 +80,7 @@ func NewFilesHandler(svc *service.FilesService) *FilesHandler {
 		svc:       svc,
 		uploads:   make(map[string]*uploadTracker),
 		downloads: make(map[string]*downloadTracker),
+		fileSizes: newFileSizeCache(),
 	}
 }
 
@@ -67,6 +95,69 @@ type moveFileRequest struct {
 }
 
 const streamRangeWindowBytes int64 = 20 * 1024 * 1024 // 20MB
+
+// setupDownloadTracker creates a download tracker from the request's download_id param.
+// Returns the context to use, the tracker (may be nil), and a cleanup function to defer.
+func (h *FilesHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID) (context.Context, *downloadTracker, func()) {
+	downloadID := r.URL.Query().Get("download_id")
+	if downloadID == "" {
+		return r.Context(), nil, func() {}
+	}
+	ctx, cancel := context.WithCancel(r.Context())
+	tracker := &downloadTracker{
+		storageID: storageID,
+		progress:  &service.DownloadProgress{},
+		cancel:    cancel,
+	}
+	h.mu.Lock()
+	h.downloads[downloadID] = tracker
+	h.mu.Unlock()
+	return ctx, tracker, func() {
+		time.AfterFunc(5*time.Minute, func() {
+			h.mu.Lock()
+			delete(h.downloads, downloadID)
+			h.mu.Unlock()
+		})
+	}
+}
+
+// finishTracker marks a download tracker as done with an optional error.
+func (h *FilesHandler) finishTracker(tracker *downloadTracker, err error) {
+	if tracker == nil {
+		return
+	}
+	h.mu.Lock()
+	tracker.done = true
+	tracker.err = err
+	h.mu.Unlock()
+}
+
+// setupSSE configures response headers for Server-Sent Events and returns the flusher.
+func setupSSE(w http.ResponseWriter) (http.Flusher, bool) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		return nil, false
+	}
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	return flusher, true
+}
+
+// writeSSE marshals data as JSON and writes it as an SSE event.
+func writeSSE(w http.ResponseWriter, flusher http.Flusher, data any) {
+	b, err := json.Marshal(data)
+	if err != nil {
+		return
+	}
+	fmt.Fprintf(w, "data: %s\n\n", b)
+	flusher.Flush()
+}
+
+// sanitizeFilename returns a safe Content-Disposition filename value.
+func sanitizeFilename(name string) string {
+	return strings.NewReplacer(`"`, `'`, "\n", "", "\r", "").Replace(name)
+}
 
 func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
@@ -176,13 +267,9 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		fullPath = path + "/" + filename
 	}
 
-	// Pipe the multipart body to the upload goroutine.
 	pr, pw := io.Pipe()
-
-	// Channel to signal when body copy is done.
 	copyDone := make(chan struct{})
 
-	// Copy the multipart part data into the pipe in a goroutine.
 	go func() {
 		defer close(copyDone)
 		_, err := io.Copy(pw, filePart)
@@ -207,7 +294,6 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	h.uploads[uploadID] = tracker
 	h.mu.Unlock()
 
-	// Start upload in background
 	go func() {
 		defer func() {
 			time.AfterFunc(5*time.Minute, func() {
@@ -230,16 +316,12 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		}
 	}()
 
-	// Respond immediately with upload_id so the client can track progress.
-	writeJSON(w, http.StatusAccepted, map[string]interface{}{
-		"upload_id": uploadID,
-	})
+	writeJSON(w, http.StatusAccepted, map[string]any{"upload_id": uploadID})
 	if f, ok := w.(http.Flusher); ok {
 		f.Flush()
 	}
 
 	// Keep the handler alive until the body is fully read into the pipe.
-	// This prevents Go's HTTP server from closing r.Body prematurely.
 	<-copyDone
 }
 
@@ -262,7 +344,6 @@ func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 	log.Printf("[cancel] cancelling upload %s file=%s", uploadID, tracker.filePath)
 
 	go func() {
-		// Wait briefly for the upload goroutine to stop
 		time.Sleep(1 * time.Second)
 		if err := h.svc.Delete(context.Background(), user.ID, tracker.storageID, tracker.filePath, nil); err != nil {
 			log.Printf("[cancel] WARNING: cleanup failed for %s: %v", tracker.filePath, err)
@@ -282,21 +363,20 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
+	flusher, ok := setupSSE(w)
 	if !ok {
 		writeError(w, domain.ErrInternal("streaming not supported"))
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-time.After(500 * time.Millisecond):
+		case <-ticker.C:
 		}
 
 		h.mu.RLock()
@@ -304,8 +384,7 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		h.mu.RUnlock()
 
 		if !exists {
-			fmt.Fprintf(w, "data: {\"status\":\"done\"}\n\n")
-			flusher.Flush()
+			writeSSE(w, flusher, map[string]any{"status": "done"})
 			return
 		}
 
@@ -323,10 +402,14 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 			status = "done"
 		}
 
-		workersStatus := h.svc.WorkersStatus(tracker.storageID)
-		fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"%s\",\"workers_status\":\"%s\"}\n\n",
-			p.TotalChunks, p.UploadedChunks.Load(), p.TotalBytes, p.UploadedBytes.Load(), status, workersStatus)
-		flusher.Flush()
+		writeSSE(w, flusher, map[string]any{
+			"total":          p.TotalChunks,
+			"uploaded":       p.UploadedChunks.Load(),
+			"total_bytes":    p.TotalBytes,
+			"uploaded_bytes": p.UploadedBytes.Load(),
+			"status":         status,
+			"workers_status": h.svc.WorkersStatus(tracker.storageID),
+		})
 
 		if isDone {
 			return
@@ -354,31 +437,11 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	downloadID := r.URL.Query().Get("download_id")
-	var tracker *downloadTracker
-	downloadCtx := r.Context()
-	if downloadID != "" {
-		var cancel context.CancelFunc
-		downloadCtx, cancel = context.WithCancel(r.Context())
-		tracker = &downloadTracker{storageID: storageID, progress: &service.DownloadProgress{}, cancel: cancel}
-		h.mu.Lock()
-		h.downloads[downloadID] = tracker
-		h.mu.Unlock()
-
-		defer func() {
-			time.AfterFunc(5*time.Minute, func() {
-				h.mu.Lock()
-				delete(h.downloads, downloadID)
-				h.mu.Unlock()
-			})
-		}()
-	}
+	downloadCtx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
+	defer cleanup()
 
 	filename := filepath.Base(file.Path)
 	contentType := mime.TypeByExtension(filepath.Ext(filename))
-	if strings.EqualFold(filepath.Ext(filename), ".mkv") {
-		contentType = "video/x-matroska"
-	}
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
@@ -393,14 +456,21 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", disposition+`; filename="`+filename+`"`)
+	w.Header().Set("Content-Disposition", disposition+`; filename="`+sanitizeFilename(filename)+`"`)
 
-	if disposition == "inline" && isInlineVideo(contentType, filename) {
-		totalSize, err := h.svc.ExactFileSize(downloadCtx, file)
-		if err != nil {
-			log.Printf("[video-size] error: %v", err)
-			writeError(w, domain.ErrInternal("failed to determine exact video size"))
-			return
+	switch {
+	case disposition == "inline" && isInlineVideo(contentType, filename):
+		// Video: handle Range requests for streaming.
+		totalSize, ok := h.fileSizes.get(file.ID)
+		if !ok {
+			var sizeErr error
+			totalSize, sizeErr = h.svc.ExactFileSize(downloadCtx, file)
+			if sizeErr != nil {
+				log.Printf("[video-size] error: %v", sizeErr)
+				writeError(w, domain.ErrInternal("failed to determine exact video size"))
+				return
+			}
+			h.fileSizes.set(file.ID, totalSize)
 		}
 		w.Header().Set("Accept-Ranges", "bytes")
 		rangeHeader := r.Header.Get("Range")
@@ -411,19 +481,12 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
 				return
 			}
-
 			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize))
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
 			w.WriteHeader(http.StatusPartialContent)
-
 			if err := h.svc.DownloadFileRangeToWriter(downloadCtx, file, w, start, end, totalSize, progress); err != nil {
 				log.Printf("[download-file-range] error: %v", err)
-				if tracker != nil {
-					h.mu.Lock()
-					tracker.done = true
-					tracker.err = err
-					h.mu.Unlock()
-				}
+				h.finishTracker(tracker, err)
 				return
 			}
 		} else {
@@ -431,24 +494,14 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 			w.WriteHeader(http.StatusOK)
 			if err := h.svc.DownloadFileToWriter(downloadCtx, file, w, progress); err != nil {
 				log.Printf("[download-file] error: %v", err)
-				if tracker != nil {
-					h.mu.Lock()
-					tracker.done = true
-					tracker.err = err
-					h.mu.Unlock()
-				}
+				h.finishTracker(tracker, err)
 				return
 			}
 		}
-	} else if disposition == "inline" {
-		// Build full media into a temp file to avoid partial/corrupted inline responses on chunk failures.
-		tmpDir := os.TempDir()
-		if err := os.MkdirAll(tmpDir, 0o700); err != nil {
-			writeError(w, domain.ErrInternal("failed to prepare temporary directory"))
-			return
-		}
 
-		tmp, err := os.CreateTemp(tmpDir, "pentaract-file-*")
+	case disposition == "inline":
+		// Non-video inline: download to temp file, serve with http.ServeContent.
+		tmp, err := os.CreateTemp("", "pentaract-file-*")
 		if err != nil {
 			writeError(w, domain.ErrInternal("failed to create temporary file"))
 			return
@@ -461,12 +514,7 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 
 		if err := h.svc.DownloadFileToWriter(downloadCtx, file, tmp, progress); err != nil {
 			log.Printf("[download-file] error: %v", err)
-			if tracker != nil {
-				h.mu.Lock()
-				tracker.done = true
-				tracker.err = err
-				h.mu.Unlock()
-			}
+			h.finishTracker(tracker, err)
 			writeError(w, err)
 			return
 		}
@@ -482,25 +530,18 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		}
 		w.Header().Set("Accept-Ranges", "bytes")
 		http.ServeContent(w, r, filename, info.ModTime(), tmp)
-	} else {
+
+	default:
+		// Attachment: stream directly.
 		w.WriteHeader(http.StatusOK)
 		if err := h.svc.DownloadFileToWriter(downloadCtx, file, w, progress); err != nil {
 			log.Printf("[download-file] error: %v", err)
-			if tracker != nil {
-				h.mu.Lock()
-				tracker.done = true
-				tracker.err = err
-				h.mu.Unlock()
-			}
+			h.finishTracker(tracker, err)
 			return
 		}
 	}
 
-	if tracker != nil {
-		h.mu.Lock()
-		tracker.done = true
-		h.mu.Unlock()
-	}
+	h.finishTracker(tracker, nil)
 }
 
 func parseSingleByteRange(header string, size int64) (int64, int64, error) {
@@ -557,7 +598,7 @@ func isInlineVideo(contentType, filename string) bool {
 		return true
 	}
 	switch strings.ToLower(filepath.Ext(filename)) {
-	case ".mp4", ".webm", ".ogg", ".mov", ".m4v", ".mkv":
+	case ".mp4", ".webm", ".ogg", ".mov", ".m4v":
 		return true
 	default:
 		return false
@@ -584,28 +625,11 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 		dirName = "files"
 	}
 
-	downloadID := r.URL.Query().Get("download_id")
-	var tracker *downloadTracker
-	downloadCtx := r.Context()
-	if downloadID != "" {
-		var cancel context.CancelFunc
-		downloadCtx, cancel = context.WithCancel(r.Context())
-		tracker = &downloadTracker{storageID: storageID, progress: &service.DownloadProgress{}, cancel: cancel}
-		h.mu.Lock()
-		h.downloads[downloadID] = tracker
-		h.mu.Unlock()
-
-		defer func() {
-			time.AfterFunc(5*time.Minute, func() {
-				h.mu.Lock()
-				delete(h.downloads, downloadID)
-				h.mu.Unlock()
-			})
-		}()
-	}
+	downloadCtx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
+	defer cleanup()
 
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, dirName))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, sanitizeFilename(dirName)))
 
 	var progress *service.DownloadProgress
 	if tracker != nil {
@@ -614,20 +638,11 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := h.svc.DownloadDir(downloadCtx, user.ID, storageID, path, w, progress); err != nil {
 		log.Printf("[download-dir] error: %v", err)
-		if tracker != nil {
-			h.mu.Lock()
-			tracker.done = true
-			tracker.err = err
-			h.mu.Unlock()
-		}
+		h.finishTracker(tracker, err)
 		return
 	}
 
-	if tracker != nil {
-		h.mu.Lock()
-		tracker.done = true
-		h.mu.Unlock()
-	}
+	h.finishTracker(tracker, nil)
 }
 
 func (h *FilesHandler) CancelDownload(w http.ResponseWriter, r *http.Request) {
@@ -658,22 +673,21 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
+	flusher, ok := setupSSE(w)
 	if !ok {
 		writeError(w, domain.ErrInternal("streaming not supported"))
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 	waitStart := time.Now()
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-time.After(500 * time.Millisecond):
+		case <-ticker.C:
 		}
 
 		h.mu.RLock()
@@ -681,14 +695,13 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 		h.mu.RUnlock()
 
 		if !exists {
-			// Handle race where client subscribes just before download handler creates the tracker.
 			if time.Since(waitStart) < 15*time.Second {
-				fmt.Fprintf(w, "data: {\"total\":0,\"downloaded\":0,\"total_bytes\":0,\"downloaded_bytes\":0,\"status\":\"downloading\"}\n\n")
-				flusher.Flush()
+				writeSSE(w, flusher, map[string]any{
+					"total": 0, "downloaded": 0, "total_bytes": 0, "downloaded_bytes": 0, "status": "downloading",
+				})
 				continue
 			}
-			fmt.Fprintf(w, "data: {\"status\":\"error\"}\n\n")
-			flusher.Flush()
+			writeSSE(w, flusher, map[string]any{"status": "error"})
 			return
 		}
 
@@ -709,10 +722,14 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 			status = "done"
 		}
 
-		workersStatus := h.svc.WorkersStatus(tracker.storageID)
-		fmt.Fprintf(w, "data: {\"total\":%d,\"downloaded\":%d,\"total_bytes\":%d,\"downloaded_bytes\":%d,\"status\":\"%s\",\"workers_status\":\"%s\"}\n\n",
-			p.TotalChunks, p.DownloadedChunks.Load(), p.TotalBytes, p.DownloadedBytes.Load(), status, workersStatus)
-		flusher.Flush()
+		writeSSE(w, flusher, map[string]any{
+			"total":            p.TotalChunks,
+			"downloaded":       p.DownloadedChunks.Load(),
+			"total_bytes":      p.TotalBytes,
+			"downloaded_bytes": p.DownloadedBytes.Load(),
+			"status":           status,
+			"workers_status":   h.svc.WorkersStatus(tracker.storageID),
+		})
 
 		if isDone {
 			return
@@ -728,33 +745,32 @@ func (h *FilesHandler) DeleteProgress(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	flusher, ok := w.(http.Flusher)
+	flusher, ok := setupSSE(w)
 	if !ok {
 		writeError(w, domain.ErrInternal("streaming not supported"))
 		return
 	}
 
-	w.Header().Set("Content-Type", "text/event-stream")
-	w.Header().Set("Cache-Control", "no-cache")
-	w.Header().Set("Connection", "keep-alive")
+	ticker := time.NewTicker(500 * time.Millisecond)
+	defer ticker.Stop()
 	waitStart := time.Now()
 
 	for {
 		select {
 		case <-r.Context().Done():
 			return
-		case <-time.After(500 * time.Millisecond):
+		case <-ticker.C:
 		}
 
 		tracker, exists := getDeleteTracker(deleteID)
 		if !exists {
 			if time.Since(waitStart) < 15*time.Second {
-				fmt.Fprintf(w, "data: {\"total\":0,\"deleted\":0,\"pending\":0,\"status\":\"deleting\"}\n\n")
-				flusher.Flush()
+				writeSSE(w, flusher, map[string]any{
+					"total": 0, "deleted": 0, "pending": 0, "status": "deleting",
+				})
 				continue
 			}
-			fmt.Fprintf(w, "data: {\"status\":\"error\"}\n\n")
-			flusher.Flush()
+			writeSSE(w, flusher, map[string]any{"status": "error"})
 			return
 		}
 
@@ -771,10 +787,13 @@ func (h *FilesHandler) DeleteProgress(w http.ResponseWriter, r *http.Request) {
 			pending = 0
 		}
 
-		workersStatus := h.svc.WorkersStatus(tracker.storageID)
-		fmt.Fprintf(w, "data: {\"total\":%d,\"deleted\":%d,\"pending\":%d,\"status\":\"%s\",\"workers_status\":\"%s\"}\n\n",
-			total, deleted, pending, status, workersStatus)
-		flusher.Flush()
+		writeSSE(w, flusher, map[string]any{
+			"total":          total,
+			"deleted":        deleted,
+			"pending":        pending,
+			"status":         status,
+			"workers_status": h.svc.WorkersStatus(tracker.storageID),
+		})
 
 		if done {
 			return
@@ -822,7 +841,7 @@ func (h *FilesHandler) Search(w http.ResponseWriter, r *http.Request) {
 	}
 
 	if results == nil {
-		results = []domain.SearchFSElement{}
+		results = []domain.FSElement{}
 	}
 	writeJSON(w, http.StatusOK, results)
 }

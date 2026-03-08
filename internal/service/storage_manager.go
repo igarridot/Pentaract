@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -249,8 +248,7 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 		progress.TotalChunks = total
 	}
 
-	for _, chunk := range chunks {
-		c := chunk
+	for _, c := range chunks {
 		if c.TelegramMessageID == 0 {
 			continue
 		}
@@ -275,16 +273,6 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 	}
 	log.Printf("[delete] finished removing chunks from chat=%s", storage.Name)
 	return nil
-}
-
-// Download retrieves all chunks from Telegram in parallel and reassembles the file.
-// Download returns the full file contents in memory. Only suitable for smaller files.
-func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := m.DownloadToWriter(ctx, file, &buf, nil); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // DownloadToWriter streams a file's chunks sequentially to the given writer.
@@ -327,7 +315,7 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 
 		log.Printf("[download] chunk %d of file=%s via worker=%s chat=%s", chunk.Position, file.Path, wt.Name, storage.Name)
 
-		data, err := m.tgClient.DownloadCtx(ctx, wt.Token, chunk.TelegramFileID)
+		data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
 		if err != nil {
 			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
 		}
@@ -368,7 +356,7 @@ func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (
 		return 0, fmt.Errorf("getting token for last chunk %d: %w", last.Position, err)
 	}
 
-	data, err := m.tgClient.DownloadCtx(ctx, wt.Token, last.TelegramFileID)
+	data, err := m.tgClient.Download(ctx, wt.Token, last.TelegramFileID)
 	if err != nil {
 		return 0, fmt.Errorf("downloading last chunk %d: %w", last.Position, err)
 	}
@@ -419,7 +407,7 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 			return fmt.Errorf("getting token for chunk %d: %w", chunk.Position, err)
 		}
 
-		data, err := m.tgClient.DownloadCtx(ctx, wt.Token, chunk.TelegramFileID)
+		data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
 		if err != nil {
 			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
 		}

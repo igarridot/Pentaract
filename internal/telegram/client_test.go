@@ -1,6 +1,7 @@
 package telegram
 
 import (
+	"context"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -73,7 +74,7 @@ func TestDownloadFailsOnFileEndpointHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	data, err := c.Download("TOKEN", "file-id")
+	data, err := c.Download(context.Background(), "TOKEN", "file-id")
 	if err == nil {
 		t.Fatalf("expected error, got nil with data=%q", string(data))
 	}

@@ -1,4 +1,11 @@
-import { apiRequest, apiMultipartRequest } from './request'
+import { API_BASE, getRawToken, apiRequest, apiMultipartRequest } from './request'
+
+function buildAuthUrl(path, params = {}) {
+  const token = getRawToken()
+  if (!token) throw new Error('Not authenticated')
+  const searchParams = new URLSearchParams({ access_token: token, ...params })
+  return `${API_BASE}${path}?${searchParams.toString()}`
+}
 
 function subscribeSSE(url, token, onProgress) {
   let stopped = false
@@ -49,6 +56,12 @@ function subscribeSSE(url, token, onProgress) {
 
   fetchSSE()
   return () => { stopped = true; if (currentController) currentController.abort() }
+}
+
+function subscribeAuthSSE(path, onProgress) {
+  const token = getRawToken()
+  if (!token) throw new Error('Not authenticated')
+  return subscribeSSE(`${API_BASE}${path}`, token, onProgress)
 }
 
 const API = {
@@ -104,41 +117,14 @@ const API = {
     tree: (storageId, path) =>
       apiRequest(`/storages/${storageId}/files/tree/${path || ''}`),
 
-    downloadFileUrl: (storageId, path, downloadId) => {
-      const token = localStorage.getItem('access_token')
-      if (!token) throw new Error('Not authenticated')
-      const base = import.meta.env.VITE_API_BASE || '/api'
-      const safePath = encodeURI(path || '')
-      const params = new URLSearchParams({
-        download_id: downloadId,
-        access_token: token,
-      })
-      return `${base}/storages/${storageId}/files/download/${safePath}?${params.toString()}`
-    },
+    downloadFileUrl: (storageId, path, downloadId) =>
+      buildAuthUrl(`/storages/${storageId}/files/download/${encodeURI(path || '')}`, { download_id: downloadId }),
 
-    previewFileUrl: (storageId, path) => {
-      const token = localStorage.getItem('access_token')
-      if (!token) throw new Error('Not authenticated')
-      const base = import.meta.env.VITE_API_BASE || '/api'
-      const safePath = encodeURI(path || '')
-      const params = new URLSearchParams({
-        access_token: token,
-        inline: '1',
-      })
-      return `${base}/storages/${storageId}/files/download/${safePath}?${params.toString()}`
-    },
+    previewFileUrl: (storageId, path) =>
+      buildAuthUrl(`/storages/${storageId}/files/download/${encodeURI(path || '')}`, { inline: '1' }),
 
-    downloadDirUrl: (storageId, path, downloadId) => {
-      const token = localStorage.getItem('access_token')
-      if (!token) throw new Error('Not authenticated')
-      const base = import.meta.env.VITE_API_BASE || '/api'
-      const safePath = encodeURI(path || '')
-      const params = new URLSearchParams({
-        download_id: downloadId,
-        access_token: token,
-      })
-      return `${base}/storages/${storageId}/files/download_dir/${safePath}?${params.toString()}`
-    },
+    downloadDirUrl: (storageId, path, downloadId) =>
+      buildAuthUrl(`/storages/${storageId}/files/download_dir/${encodeURI(path || '')}`, { download_id: downloadId }),
 
     search: (storageId, basePath, searchPath) =>
       apiRequest(`/storages/${storageId}/files/search/${basePath || ''}?search_path=${encodeURIComponent(searchPath)}`),
@@ -152,26 +138,14 @@ const API = {
     cancelDownload: (downloadId) =>
       apiRequest(`/download_cancel/${downloadId}`, 'POST'),
 
-    subscribeProgress: (uploadId, onProgress) => {
-      const token = localStorage.getItem('access_token')
-      const base = import.meta.env.VITE_API_BASE || '/api'
-      const url = `${base}/upload_progress?upload_id=${uploadId}`
-      return subscribeSSE(url, token, onProgress)
-    },
+    subscribeProgress: (uploadId, onProgress) =>
+      subscribeAuthSSE(`/upload_progress?upload_id=${uploadId}`, onProgress),
 
-    subscribeDownloadProgress: (downloadId, onProgress) => {
-      const token = localStorage.getItem('access_token')
-      const base = import.meta.env.VITE_API_BASE || '/api'
-      const url = `${base}/download_progress?download_id=${downloadId}`
-      return subscribeSSE(url, token, onProgress)
-    },
+    subscribeDownloadProgress: (downloadId, onProgress) =>
+      subscribeAuthSSE(`/download_progress?download_id=${downloadId}`, onProgress),
 
-    subscribeDeleteProgress: (deleteId, onProgress) => {
-      const token = localStorage.getItem('access_token')
-      const base = import.meta.env.VITE_API_BASE || '/api'
-      const url = `${base}/delete_progress?delete_id=${deleteId}`
-      return subscribeSSE(url, token, onProgress)
-    },
+    subscribeDeleteProgress: (deleteId, onProgress) =>
+      subscribeAuthSSE(`/delete_progress?delete_id=${deleteId}`, onProgress),
   },
 }
 

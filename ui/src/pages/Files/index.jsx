@@ -10,6 +10,7 @@ import {
   Upload as UploadIcon,
 } from '@mui/icons-material'
 import API from '../../api'
+import { createOperationId } from '../../common/operation_id'
 import { useAlert } from '../../components/AlertStack'
 import FSListItem from '../../components/FSListItem'
 import FileInfo from '../../components/FileInfo'
@@ -22,19 +23,6 @@ import DownloadProgress from '../../components/DownloadProgress'
 import DeleteProgress from '../../components/DeleteProgress'
 import MoveDialog from '../../components/MoveDialog'
 import MediaPreviewDialog from '../../components/MediaPreviewDialog'
-
-function createUploadId() {
-  const cryptoObj = globalThis.crypto
-  if (cryptoObj?.randomUUID) return cryptoObj.randomUUID()
-  if (cryptoObj?.getRandomValues) {
-    const bytes = cryptoObj.getRandomValues(new Uint8Array(16))
-    bytes[6] = (bytes[6] & 0x0f) | 0x40
-    bytes[8] = (bytes[8] & 0x3f) | 0x80
-    const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
-    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
-  }
-  return `${Date.now()}-${Math.random().toString(16).slice(2)}`
-}
 
 export default function Files() {
   const { id: storageId } = useParams()
@@ -147,7 +135,7 @@ export default function Files() {
     if (!file) return
 
     const filename = file.name
-    const uploadId = createUploadId()
+    const uploadId = createOperationId()
     setUploadStates((prev) => [...prev, {
       id: uploadId,
       filename,
@@ -229,7 +217,7 @@ export default function Files() {
 
   const handleDownload = async (item) => {
     try {
-      const downloadId = createUploadId()
+      const downloadId = createOperationId()
       const filename = item.is_file ? item.name : `${item.name}.zip`
 
       setDownloadStates((prev) => [...prev, {
@@ -314,7 +302,7 @@ export default function Files() {
   const getMediaType = (name) => {
     const ext = name?.split('.').pop()?.toLowerCase() || ''
     if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image'
-    if (['mp4', 'webm', 'ogg', 'mov', 'm4v', 'mkv'].includes(ext)) return 'video'
+    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext)) return 'video'
     return null
   }
 
@@ -330,7 +318,7 @@ export default function Files() {
   const handleDelete = async () => {
     try {
       const path = (deleteTarget.path || deleteTarget.name).replace(/\/+$/, '')
-      const deleteId = createUploadId()
+      const deleteId = createOperationId()
       if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
       setDeleteState({
         label: deleteTarget?.name || path,
@@ -500,7 +488,6 @@ export default function Files() {
               <FSListItem
                 item={item}
                 storageId={storageId}
-                currentPath={currentPath}
                 onInfo={setInfoFile}
                 onPreview={handlePreview}
                 onDelete={setDeleteTarget}

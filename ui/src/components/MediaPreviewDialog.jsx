@@ -2,7 +2,6 @@ import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box } from '
 
 function getVideoMime(name) {
   const ext = name?.split('.').pop()?.toLowerCase() || ''
-  if (ext === 'mkv') return 'video/x-matroska'
   if (ext === 'mp4' || ext === 'm4v') return 'video/mp4'
   if (ext === 'webm') return 'video/webm'
   if (ext === 'ogg') return 'video/ogg'
