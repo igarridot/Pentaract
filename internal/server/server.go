@@ -1,9 +1,11 @@
 package server
 
 import (
+	"io/fs"
 	"log"
 	"net/http"
 	"os"
+	"path"
 	"path/filepath"
 	"strings"
 
@@ -120,31 +122,20 @@ func serveUI(r chi.Router) {
 		log.Printf("Failed to resolve UI directory path: %v", err)
 		return
 	}
-	indexPath := filepath.Join(absUI, "index.html")
-	absUIPrefix := absUI + string(os.PathSeparator)
+	uiFS := os.DirFS(absUI)
+	indexFile := "index.html"
 
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		requested := filepath.Clean(r.URL.Path)
+		requested := path.Clean("/" + r.URL.Path)
 		requested = strings.TrimPrefix(requested, "/")
 
-		absPath, err := filepath.Abs(filepath.Join(absUI, requested))
-		if err == nil {
-			rel, relErr := filepath.Rel(absUI, absPath)
-			insideUI := relErr == nil &&
-				rel != "" &&
-				rel != "." &&
-				rel != ".." &&
-				!strings.HasPrefix(rel, ".."+string(os.PathSeparator)) &&
-				strings.HasPrefix(absPath, absUIPrefix)
-
-			if insideUI {
-				if info, statErr := os.Stat(absPath); statErr == nil && !info.IsDir() {
-					http.ServeFile(w, r, absPath)
-					return
-				}
+		if requested != "" && requested != "." && !strings.HasPrefix(requested, "..") {
+			if info, statErr := fs.Stat(uiFS, requested); statErr == nil && info.Mode().IsRegular() {
+				http.ServeFileFS(w, r, uiFS, requested)
+				return
 			}
 		}
 
-		http.ServeFile(w, r, indexPath)
+		http.ServeFileFS(w, r, uiFS, indexFile)
 	})
 }
