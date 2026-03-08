@@ -114,12 +114,37 @@ func serveUI(r chi.Router) {
 		return
 	}
 
+	absUI, err := filepath.Abs(uiDir)
+	if err != nil {
+		log.Printf("Failed to resolve UI directory %q: %v", uiDir, err)
+		return
+	}
+	indexPath := filepath.Join(absUI, "index.html")
+
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		path := filepath.Join(uiDir, r.URL.Path)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			http.ServeFile(w, r, path)
+		requested := filepath.Clean(r.URL.Path)
+		// Ensure leading slash does not cause filepath.Join to ignore absUI
+		if filepath.IsAbs(requested) {
+			requested = requested[1:]
+		}
+
+		absPath := filepath.Join(absUI, requested)
+		if absPath, err = filepath.Abs(absPath); err != nil {
+			http.ServeFile(w, r, indexPath)
 			return
 		}
-		http.ServeFile(w, r, filepath.Join(uiDir, "index.html"))
+
+		// Ensure the resolved path is within the UI directory
+		if len(absPath) < len(absUI) || absPath[:len(absUI)] != absUI || (len(absPath) > len(absUI) && absPath[len(absUI)] != os.PathSeparator) {
+			http.ServeFile(w, r, indexPath)
+			return
+		}
+
+		if info, err := os.Stat(absPath); err == nil && !info.IsDir() {
+			http.ServeFile(w, r, absPath)
+			return
+		}
+
+		http.ServeFile(w, r, indexPath)
 	})
 }
