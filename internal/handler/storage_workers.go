@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/google/uuid"
@@ -10,10 +11,22 @@ import (
 )
 
 type StorageWorkersHandler struct {
-	svc *service.StorageWorkersService
+	svc storageWorkersService
+}
+
+type storageWorkersService interface {
+	Create(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error)
+	List(ctx context.Context, userID uuid.UUID) ([]domain.StorageWorker, error)
+	Update(ctx context.Context, id, userID uuid.UUID, name string, storageID *uuid.UUID) (*domain.StorageWorker, error)
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+	HasWorkers(ctx context.Context, storageID uuid.UUID) (bool, error)
 }
 
 func NewStorageWorkersHandler(svc *service.StorageWorkersService) *StorageWorkersHandler {
+	return NewStorageWorkersHandlerWithService(svc)
+}
+
+func NewStorageWorkersHandlerWithService(svc storageWorkersService) *StorageWorkersHandler {
 	return &StorageWorkersHandler{svc: svc}
 }
 

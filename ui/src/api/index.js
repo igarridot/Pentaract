@@ -1,4 +1,4 @@
-import { API_BASE, getRawToken, apiRequest, apiMultipartRequest } from './request'
+import { API_BASE, getRawToken, apiRequest, apiMultipartRequest } from './request.js'
 
 function buildAuthUrl(path, params = {}) {
   const token = getRawToken()

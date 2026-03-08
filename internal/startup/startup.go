@@ -6,21 +6,39 @@ import (
 	"log"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/config"
 	"github.com/Dominux/Pentaract/internal/password"
 )
 
+var pgxConnect = pgx.Connect
+
+type startupPool interface {
+	Begin(ctx context.Context) (pgx.Tx, error)
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+}
+
+type createDBConn interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Close(ctx context.Context) error
+}
+
 func CreateDB(ctx context.Context, cfg *config.Config) error {
-	conn, err := pgx.Connect(ctx, cfg.DatabaseURLWithoutDB())
+	conn, err := pgxConnect(ctx, cfg.DatabaseURLWithoutDB())
 	if err != nil {
 		return fmt.Errorf("connecting to postgres: %w", err)
 	}
 	defer conn.Close(ctx)
 
+	return createDBWithConn(ctx, cfg, conn)
+}
+
+func createDBWithConn(ctx context.Context, cfg *config.Config, conn createDBConn) error {
 	var exists bool
-	err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, cfg.DatabaseName).Scan(&exists)
+	err := conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, cfg.DatabaseName).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("checking database existence: %w", err)
 	}
@@ -39,6 +57,10 @@ func CreateDB(ctx context.Context, cfg *config.Config) error {
 }
 
 func InitDB(ctx context.Context, pool *pgxpool.Pool) error {
+	return initDBWithPool(ctx, pool)
+}
+
+func initDBWithPool(ctx context.Context, pool startupPool) error {
 	queries := []string{
 		`DO $$ BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'access_type') THEN
@@ -130,6 +152,10 @@ func InitDB(ctx context.Context, pool *pgxpool.Pool) error {
 }
 
 func CreateSuperuser(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) error {
+	return createSuperuserWithPool(ctx, pool, cfg)
+}
+
+func createSuperuserWithPool(ctx context.Context, pool startupPool, cfg *config.Config) error {
 	hash, err := password.Hash(cfg.SuperuserPass)
 	if err != nil {
 		return fmt.Errorf("hashing superuser password: %w", err)

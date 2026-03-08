@@ -4,16 +4,28 @@ import (
 	"context"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 type AccessRepo struct {
-	pool *pgxpool.Pool
+	pool accessDB
 }
 
 func NewAccessRepo(pool *pgxpool.Pool) *AccessRepo {
+	return NewAccessRepoWithDB(pool)
+}
+
+type accessDB interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+}
+
+func NewAccessRepoWithDB(pool accessDB) *AccessRepo {
 	return &AccessRepo{pool: pool}
 }
 
@@ -88,4 +100,3 @@ func (r *AccessRepo) HasAccess(ctx context.Context, userID, storageID uuid.UUID,
 	}
 	return exists, nil
 }
-

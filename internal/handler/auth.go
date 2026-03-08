@@ -1,16 +1,25 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
 type AuthHandler struct {
-	svc *service.AuthService
+	svc authService
+}
+
+type authService interface {
+	Login(ctx context.Context, email, pass string) (*service.LoginResponse, error)
 }
 
 func NewAuthHandler(svc *service.AuthService) *AuthHandler {
+	return NewAuthHandlerWithService(svc)
+}
+
+func NewAuthHandlerWithService(svc authService) *AuthHandler {
 	return &AuthHandler{svc: svc}
 }
 

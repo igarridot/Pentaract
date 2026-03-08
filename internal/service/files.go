@@ -13,16 +13,53 @@ import (
 )
 
 type FilesService struct {
-	filesRepo  *repository.FilesRepo
-	accessRepo *repository.AccessRepo
-	manager    *StorageManager
+	filesRepo    filesRepository
+	accessRepo   filesAccessRepository
+	manager      filesManager
+	storagesRepo filesStorageRepository
+	scheduler    *WorkerScheduler
+}
+
+type filesRepository interface {
+	CreateFolder(ctx context.Context, storageID uuid.UUID, path string) error
+	CreateFileAnyway(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error)
+	GetByPath(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error)
+	ListDir(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FSElement, error)
+	Search(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
+	ListChunksByPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FileChunk, error)
+	Delete(ctx context.Context, storageID uuid.UUID, path string) error
+	DirStats(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error)
+	ListFilesUnderPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error)
+	Move(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error
+}
+
+type filesAccessRepository interface {
+	HasAccess(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error)
+}
+
+type filesManager interface {
+	Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error
+	DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
+	ExactFileSize(ctx context.Context, file *domain.File) (int64, error)
+	DownloadRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error
+	DeleteFromTelegram(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error
+}
+
+type filesStorageRepository interface {
+	GetByID(ctx context.Context, id uuid.UUID) (*domain.Storage, error)
 }
 
 func NewFilesService(filesRepo *repository.FilesRepo, accessRepo *repository.AccessRepo, manager *StorageManager) *FilesService {
+	return NewFilesServiceWithDeps(filesRepo, accessRepo, manager, manager.storagesRepo, manager.scheduler)
+}
+
+func NewFilesServiceWithDeps(filesRepo filesRepository, accessRepo filesAccessRepository, manager filesManager, storagesRepo filesStorageRepository, scheduler *WorkerScheduler) *FilesService {
 	return &FilesService{
-		filesRepo:  filesRepo,
-		accessRepo: accessRepo,
-		manager:    manager,
+		filesRepo:    filesRepo,
+		accessRepo:   accessRepo,
+		manager:      manager,
+		storagesRepo: storagesRepo,
+		scheduler:    scheduler,
 	}
 }
 
@@ -128,7 +165,7 @@ func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, 
 	}
 
 	// Get storage info for Telegram deletion
-	storage, err := s.manager.storagesRepo.GetByID(ctx, storageID)
+	storage, err := s.storagesRepo.GetByID(ctx, storageID)
 	if err != nil {
 		return err
 	}
@@ -225,7 +262,7 @@ func (s *FilesService) Move(ctx context.Context, userID, storageID uuid.UUID, ol
 }
 
 func (s *FilesService) WorkersStatus(storageID uuid.UUID) string {
-	if s.manager != nil && s.manager.scheduler != nil && s.manager.scheduler.IsWaiting(storageID) {
+	if s.scheduler != nil && s.scheduler.IsWaiting(storageID) {
 		return "waiting_rate_limit"
 	}
 	return "active"

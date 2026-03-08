@@ -13,13 +13,22 @@ import (
 )
 
 type WorkerScheduler struct {
-	workersRepo *repository.StorageWorkersRepo
+	workersRepo schedulerWorkersRepo
 	rateLimit   int
 	mu          sync.RWMutex
 	waiting     map[uuid.UUID]int
 }
 
+type schedulerWorkersRepo interface {
+	GetToken(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error)
+	NextAvailableIn(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error)
+}
+
 func NewWorkerScheduler(workersRepo *repository.StorageWorkersRepo, rateLimit int) *WorkerScheduler {
+	return NewWorkerSchedulerWithRepo(workersRepo, rateLimit)
+}
+
+func NewWorkerSchedulerWithRepo(workersRepo schedulerWorkersRepo, rateLimit int) *WorkerScheduler {
 	return &WorkerScheduler{
 		workersRepo: workersRepo,
 		rateLimit:   rateLimit,

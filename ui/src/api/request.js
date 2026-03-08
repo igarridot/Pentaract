@@ -1,4 +1,5 @@
-export const API_BASE = import.meta.env.VITE_API_BASE || '/api'
+const viteEnv = typeof import.meta !== 'undefined' ? import.meta.env : undefined
+export const API_BASE = viteEnv?.VITE_API_BASE || '/api'
 
 export function getRawToken() {
   return localStorage.getItem('access_token')

@@ -1,19 +1,33 @@
 package handler
 
 import (
+	"context"
 	"net/http"
 
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
+	appjwt "github.com/Dominux/Pentaract/internal/jwt"
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
 type UsersHandler struct {
-	svc *service.UsersService
+	svc usersService
+}
+
+type usersService interface {
+	Register(ctx context.Context, email, pass string) (*domain.User, error)
+	AdminStatus(user *appjwt.AuthUser) bool
+	ListManaged(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error)
+	UpdatePassword(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error
+	DeleteManaged(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID) error
 }
 
 func NewUsersHandler(svc *service.UsersService) *UsersHandler {
+	return NewUsersHandlerWithService(svc)
+}
+
+func NewUsersHandlerWithService(svc usersService) *UsersHandler {
 	return &UsersHandler{svc: svc}
 }
 

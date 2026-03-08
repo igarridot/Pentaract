@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "test": "node --test \"src/**/*.test.js\""
+    "test": "node --test \"src/**/*.test.js\"",
+    "test:coverage": "node --test --experimental-test-coverage \"src/**/*.test.js\""
   },
   "dependencies": {
     "@emotion/react": "^11.14.0",

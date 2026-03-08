@@ -7,16 +7,28 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 type StorageWorkersRepo struct {
-	pool *pgxpool.Pool
+	pool storageWorkersDB
 }
 
 func NewStorageWorkersRepo(pool *pgxpool.Pool) *StorageWorkersRepo {
+	return NewStorageWorkersRepoWithDB(pool)
+}
+
+type storageWorkersDB interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
+}
+
+func NewStorageWorkersRepoWithDB(pool storageWorkersDB) *StorageWorkersRepo {
 	return &StorageWorkersRepo{pool: pool}
 }
 

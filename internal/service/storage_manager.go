@@ -18,9 +18,9 @@ import (
 )
 
 const (
-	maxTelegramGetFileBytes   = 20 * 1024 * 1024
-	uploadChunkSafetyMargin   = 64 * 1024 // keep encrypted chunk comfortably below 20MB
-	uploadChunkSize           = maxTelegramGetFileBytes - uploadChunkSafetyMargin
+	maxTelegramGetFileBytes = 20 * 1024 * 1024
+	uploadChunkSafetyMargin = 64 * 1024 // keep encrypted chunk comfortably below 20MB
+	uploadChunkSize         = maxTelegramGetFileBytes - uploadChunkSafetyMargin
 )
 
 type StorageManager struct {

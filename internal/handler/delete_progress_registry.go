@@ -24,6 +24,8 @@ var deleteRegistry = struct {
 	m: make(map[string]*deleteTracker),
 }
 
+var deleteTrackerAfterFunc = time.AfterFunc
+
 func startDeleteTracker(deleteID string, storageID uuid.UUID) *deleteTracker {
 	tracker := &deleteTracker{progress: &service.DeleteProgress{}, storageID: storageID}
 	deleteRegistry.mu.Lock()
@@ -40,7 +42,7 @@ func getDeleteTracker(deleteID string) (*deleteTracker, bool) {
 }
 
 func scheduleDeleteTrackerCleanup(deleteID string) {
-	time.AfterFunc(5*time.Minute, func() {
+	deleteTrackerAfterFunc(5*time.Minute, func() {
 		deleteRegistry.mu.Lock()
 		delete(deleteRegistry.m, deleteID)
 		deleteRegistry.mu.Unlock()

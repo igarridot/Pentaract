@@ -10,10 +10,22 @@ import (
 )
 
 type StorageWorkersService struct {
-	workersRepo *repository.StorageWorkersRepo
+	workersRepo storageWorkersRepository
+}
+
+type storageWorkersRepository interface {
+	Create(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error)
+	List(ctx context.Context, userID uuid.UUID) ([]domain.StorageWorker, error)
+	Update(ctx context.Context, id, userID uuid.UUID, name string, storageID *uuid.UUID) (*domain.StorageWorker, error)
+	Delete(ctx context.Context, id, userID uuid.UUID) error
+	HasWorkers(ctx context.Context, storageID uuid.UUID) (bool, error)
 }
 
 func NewStorageWorkersService(workersRepo *repository.StorageWorkersRepo) *StorageWorkersService {
+	return NewStorageWorkersServiceWithRepo(workersRepo)
+}
+
+func NewStorageWorkersServiceWithRepo(workersRepo storageWorkersRepository) *StorageWorkersService {
 	return &StorageWorkersService{workersRepo: workersRepo}
 }
 

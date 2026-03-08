@@ -11,12 +11,20 @@ import (
 )
 
 type AuthService struct {
-	usersRepo *repository.UsersRepo
+	usersRepo authUsersRepo
 	secretKey string
 	expireIn  time.Duration
 }
 
+type authUsersRepo interface {
+	GetByEmail(ctx context.Context, email string) (*domain.User, error)
+}
+
 func NewAuthService(usersRepo *repository.UsersRepo, secretKey string, expireInSecs int) *AuthService {
+	return NewAuthServiceWithRepo(usersRepo, secretKey, expireInSecs)
+}
+
+func NewAuthServiceWithRepo(usersRepo authUsersRepo, secretKey string, expireInSecs int) *AuthService {
 	return &AuthService{
 		usersRepo: usersRepo,
 		secretKey: secretKey,
