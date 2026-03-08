@@ -25,6 +25,8 @@ import DeleteProgress from '../../components/DeleteProgress'
 import MoveDialog from '../../components/MoveDialog'
 import MediaPreviewDialog from '../../components/MediaPreviewDialog'
 import RenameFolderDialog from '../../components/RenameFolderDialog'
+import UploadConflictDialog from '../../components/UploadConflictDialog'
+import { buildUploadEntries, normalizeUploadPath, resolveUploadEntries } from './upload_conflicts'
 
 export default function Files() {
   const { id: storageId } = useParams()
@@ -52,13 +54,23 @@ export default function Files() {
   const [deleteState, setDeleteState] = useState(null)
   const uploadProgressCancelsRef = useRef(new Map())
   const uploadAbortControllersRef = useRef(new Map())
+  const uploadConflictResolverRef = useRef(null)
+  const dirFileNamesCacheRef = useRef(new Map())
   const downloadProgressCancelsRef = useRef(new Map())
   const cancelDeleteProgressRef = useRef(null)
+  const [uploadConflictDialog, setUploadConflictDialog] = useState({
+    open: false,
+    filename: '',
+    targetPath: '',
+    applyForAll: false,
+  })
 
   const loadTree = useCallback(async () => {
     try {
       const data = await API.files.tree(storageId, currentPath)
       setItems(data || [])
+      const filesInCurrentPath = new Set((data || []).filter((item) => item.is_file).map((item) => item.name))
+      dirFileNamesCacheRef.current.set(normalizeUploadPath(currentPath), filesInCurrentPath)
     } catch (err) {
       addAlert(err.message, 'error')
     }
@@ -206,10 +218,71 @@ export default function Files() {
     }
   }
 
+  const askUploadConflictDecision = useCallback((filename, targetPath) => (
+    new Promise((resolve) => {
+      uploadConflictResolverRef.current = resolve
+      setUploadConflictDialog({
+        open: true,
+        filename,
+        targetPath: normalizeUploadPath(targetPath),
+        applyForAll: false,
+      })
+    })
+  ), [])
+
+  const handleUploadConflictDecision = useCallback((action, applyForAll) => {
+    const resolve = uploadConflictResolverRef.current
+    uploadConflictResolverRef.current = null
+    setUploadConflictDialog((prev) => ({ ...prev, open: false, applyForAll: false }))
+    if (resolve) {
+      resolve({ action, applyForAll })
+    }
+  }, [])
+
+  const getDirFileNames = useCallback(async (targetPath) => {
+    const normalizedPath = normalizeUploadPath(targetPath)
+    if (dirFileNamesCacheRef.current.has(normalizedPath)) {
+      return dirFileNamesCacheRef.current.get(normalizedPath)
+    }
+    const data = await API.files.tree(storageId, normalizedPath)
+    const fileNames = new Set((data || []).filter((item) => item.is_file).map((item) => item.name))
+    dirFileNamesCacheRef.current.set(normalizedPath, fileNames)
+    return fileNames
+  }, [storageId])
+
+  const hasUploadConflict = useCallback(async (targetPath, filename) => {
+    const fileNames = await getDirFileNames(targetPath)
+    return fileNames.has(filename)
+  }, [getDirFileNames])
+
+  const runUploadBatch = useCallback(async (entries) => {
+    const entriesToUpload = await resolveUploadEntries(
+      entries,
+      hasUploadConflict,
+      askUploadConflictDecision,
+    )
+
+    const uploadedKeys = new Set(entriesToUpload.map((entry) => `${entry.targetPath}::${entry.filename}`))
+    entries.forEach((entry) => {
+      const key = `${entry.targetPath}::${entry.filename}`
+      if (!uploadedKeys.has(key)) {
+        addAlert(`Skipped upload for "${entry.filename}"`, 'info')
+      }
+    })
+
+    for (const entry of entriesToUpload) {
+      // Upload sequentially to preserve stable progress/cancel behavior.
+      // This also avoids opening too many concurrent requests at once.
+      // eslint-disable-next-line no-await-in-loop
+      await uploadSingleFile(entry.file, entry.targetPath)
+      dirFileNamesCacheRef.current.delete(normalizeUploadPath(entry.targetPath))
+    }
+  }, [addAlert, askUploadConflictDecision, hasUploadConflict])
+
   const handleUpload = async (e) => {
     const file = e.target.files[0]
     if (!file) return
-    await uploadSingleFile(file, currentPath)
+    await runUploadBatch(buildUploadEntries([file], currentPath))
     e.target.value = ''
   }
 
@@ -217,19 +290,7 @@ export default function Files() {
     const files = Array.from(e.target.files || [])
     if (files.length === 0) return
 
-    for (const file of files) {
-      const relativePath = file.webkitRelativePath || file.name
-      const relativeDir = relativePath.includes('/')
-        ? relativePath.slice(0, relativePath.lastIndexOf('/'))
-        : ''
-      const targetPath = [currentPath.replace(/\/+$/, ''), relativeDir]
-        .filter(Boolean)
-        .join('/')
-      // Upload sequentially to preserve stable progress/cancel behavior.
-      // This also avoids opening too many concurrent requests at once.
-      // eslint-disable-next-line no-await-in-loop
-      await uploadSingleFile(file, targetPath)
-    }
+    await runUploadBatch(buildUploadEntries(files, currentPath))
     e.target.value = ''
   }
 
@@ -654,6 +715,14 @@ export default function Files() {
         folder={renameTarget}
         onRename={handleRename}
         onClose={() => setRenameTarget(null)}
+      />
+      <UploadConflictDialog
+        open={uploadConflictDialog.open}
+        filename={uploadConflictDialog.filename}
+        targetPath={uploadConflictDialog.targetPath}
+        applyForAll={uploadConflictDialog.applyForAll}
+        onApplyForAllChange={(checked) => setUploadConflictDialog((prev) => ({ ...prev, applyForAll: checked }))}
+        onDecision={handleUploadConflictDecision}
       />
     </Box>
   )
