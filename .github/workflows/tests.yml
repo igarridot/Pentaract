@@ -55,3 +55,65 @@ jobs:
 
       - name: Run UI tests
         run: pnpm test
+
+  release:
+    name: Create Tag And Release
+    runs-on: ubuntu-latest
+    needs:
+      - go-tests
+      - ui-tests
+    if: github.event_name == 'push' && github.ref == 'refs/heads/master'
+    permissions:
+      contents: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+
+      - name: Compute next semantic version
+        id: version
+        run: |
+          set -euo pipefail
+
+          semver_regex='^v[0-9]+\.[0-9]+\.[0-9]+$'
+
+          existing_tag="$(git tag --points-at HEAD | grep -E "${semver_regex}" | sort -V | tail -n1 || true)"
+          if [ -n "${existing_tag}" ]; then
+            echo "tag=${existing_tag}" >> "${GITHUB_OUTPUT}"
+            echo "Tag already exists on HEAD: ${existing_tag}"
+            exit 0
+          fi
+
+          latest_tag="$(git tag -l 'v*' | grep -E "${semver_regex}" | sort -V | tail -n1 || true)"
+          if [ -z "${latest_tag}" ]; then
+            next_tag="v0.0.1"
+          else
+            version="${latest_tag#v}"
+            IFS='.' read -r major minor patch <<< "${version}"
+            next_patch=$((patch + 1))
+            next_tag="v${major}.${minor}.${next_patch}"
+          fi
+
+          echo "tag=${next_tag}" >> "${GITHUB_OUTPUT}"
+          echo "Next tag: ${next_tag}"
+
+      - name: Create and push tag
+        run: |
+          set -euo pipefail
+          tag="${{ steps.version.outputs.tag }}"
+          if git rev-parse -q --verify "refs/tags/${tag}" >/dev/null; then
+            echo "Tag ${tag} already exists in repository"
+            exit 0
+          fi
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git tag -a "${tag}" -m "Release ${tag}"
+          git push origin "${tag}"
+
+      - name: Publish GitHub release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.version.outputs.tag }}
+          generate_release_notes: true
