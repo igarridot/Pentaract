@@ -102,8 +102,12 @@ func (s *FilesService) DownloadFileToWriter(ctx context.Context, file *domain.Fi
 	return s.manager.DownloadToWriter(ctx, file, w, progress)
 }
 
-func (s *FilesService) DownloadFileRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end int64, progress *DownloadProgress) error {
-	return s.manager.DownloadRangeToWriter(ctx, file, w, start, end, progress)
+func (s *FilesService) ExactFileSize(ctx context.Context, file *domain.File) (int64, error) {
+	return s.manager.ExactFileSize(ctx, file)
+}
+
+func (s *FilesService) DownloadFileRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error {
+	return s.manager.DownloadRangeToWriter(ctx, file, w, start, end, totalSize, progress)
 }
 
 func (s *FilesService) ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error) {

@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -170,12 +171,22 @@ func (c *Client) DeleteMessage(token string, chatID int64, messageID int64) erro
 // Download retrieves a file from Telegram by its file_id.
 // Automatically retries on 429 (Too Many Requests).
 func (c *Client) Download(token string, telegramFileID string) ([]byte, error) {
+	return c.DownloadCtx(context.Background(), token, telegramFileID)
+}
+
+// DownloadCtx retrieves a file from Telegram by its file_id honoring request cancellation.
+// Automatically retries on 429 (Too Many Requests).
+func (c *Client) DownloadCtx(ctx context.Context, token string, telegramFileID string) ([]byte, error) {
 	// Step 1: Get file path (with retry on 429)
 	var filePath string
 	getFileURL := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", c.baseURL, token, telegramFileID)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err := c.httpClient.Get(getFileURL)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, getFileURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating getFile request: %w", err)
+		}
+		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("getting file info: %w", err)
 		}
@@ -207,7 +218,11 @@ func (c *Client) Download(token string, telegramFileID string) ([]byte, error) {
 	// Step 2: Download the file
 	downloadURL := fmt.Sprintf("%s/file/bot%s/%s", c.baseURL, token, filePath)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		dlResp, err := c.httpClient.Get(downloadURL)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating file download request: %w", err)
+		}
+		dlResp, err := c.httpClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("downloading file: %w", err)
 		}
