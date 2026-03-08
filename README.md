@@ -154,6 +154,8 @@ cd ui && pnpm test
 
 CI runs automatically via GitHub Actions (`.github/workflows/tests.yml`).
 
+Dependency updates are automated with Updatecli (`.github/workflows/update-dependencies.yml`), covering Go modules, npm packages, Docker images, and GitHub Actions versions.
+
 ## Persistent Data
 
 Data is stored in `persistent_data/`:

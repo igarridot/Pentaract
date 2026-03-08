@@ -1,0 +1,32 @@
+name: "Pentaract dependency updates"
+
+scms:
+  github:
+    kind: github
+    spec:
+      user: "github-actions[bot]"
+      email: "41898282+github-actions[bot]@users.noreply.github.com"
+      owner: '{{ requiredEnv "UPDATECLI_GITHUB_OWNER" }}'
+      repository: '{{ requiredEnv "UPDATECLI_GITHUB_REPOSITORY" }}'
+      branch: '{{ requiredEnv "UPDATECLI_GITHUB_DEFAULT_BRANCH" }}'
+      token: '{{ requiredEnv "UPDATECLI_GITHUB_TOKEN" }}'
+      username: '{{ requiredEnv "UPDATECLI_GITHUB_USERNAME" }}'
+
+actions:
+  dependencies:
+    kind: github/pullrequest
+    scmid: github
+    title: "chore(deps): bump project dependencies"
+    spec:
+      labels:
+        - dependencies
+      mergemethod: squash
+      automerge: false
+
+autodiscovery:
+  groupby: all
+  scmid: github
+  actionid: dependencies
+  crawlers:
+    dockercompose:
+      rootdir: "."
