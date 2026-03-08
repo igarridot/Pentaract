@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -112,5 +113,44 @@ func TestAccessServiceForbiddenAndSelf(t *testing.T) {
 	}
 	if err := svc.Revoke(context.Background(), id, uuid.New(), id); err == nil {
 		t.Fatalf("expected self-access on revoke")
+	}
+}
+
+func TestAccessServiceErrorBranches(t *testing.T) {
+	caller := uuid.New()
+	storage := uuid.New()
+	target := uuid.New()
+
+	accessRepo := &fakeAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return false, errors.New("db error")
+		},
+		createOrUpdateFn: func(ctx context.Context, userID, storageID uuid.UUID, accessType domain.AccessType) error {
+			return nil
+		},
+		listFn:   func(ctx context.Context, storageID uuid.UUID) ([]domain.UserWithAccess, error) { return nil, nil },
+		deleteFn: func(ctx context.Context, userID, storageID uuid.UUID) error { return nil },
+	}
+	usersRepo := &fakeAccessUsersRepo{
+		getByEmailFn: func(ctx context.Context, email string) (*domain.User, error) {
+			return &domain.User{ID: target, Email: email}, nil
+		},
+		listGrantCandidatesFn: func(ctx context.Context, storageID, callerID uuid.UUID) ([]domain.User, error) {
+			return nil, errors.New("users error")
+		},
+	}
+	svc := NewAccessServiceWithRepos(accessRepo, usersRepo)
+
+	if err := svc.Grant(context.Background(), caller, storage, "a@example.com", domain.AccessRead); err == nil {
+		t.Fatalf("expected grant access check error")
+	}
+	if _, err := svc.List(context.Background(), caller, storage); err == nil {
+		t.Fatalf("expected list access check error")
+	}
+	if err := svc.Revoke(context.Background(), caller, storage, target); err == nil {
+		t.Fatalf("expected revoke access check error")
+	}
+	if _, err := svc.ListGrantCandidates(context.Background(), caller, storage); err == nil {
+		t.Fatalf("expected candidates access check error")
 	}
 }

@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/google/uuid"
@@ -132,5 +133,49 @@ func TestStoragesServiceForbidden(t *testing.T) {
 	}
 	if err := svc.Delete(context.Background(), uuid.New(), uuid.New(), nil); err == nil {
 		t.Fatalf("expected forbidden on delete")
+	}
+}
+
+func TestStoragesServiceErrorBranches(t *testing.T) {
+	caller := uuid.New()
+	storageID := uuid.New()
+
+	svc := NewStoragesServiceWithDeps(
+		&fakeStoragesRepo{
+			createFn: func(ctx context.Context, name string, chatID int64) (*domain.Storage, error) {
+				return &domain.Storage{ID: storageID, Name: name}, nil
+			},
+			listFn: func(ctx context.Context, userID uuid.UUID) ([]domain.StorageWithInfo, error) { return nil, nil },
+			getByID: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
+				return nil, errors.New("storage get fail")
+			},
+			deleteFn: func(ctx context.Context, id uuid.UUID) error {
+				return errors.New("delete fail")
+			},
+		},
+		&fakeStoragesAccessRepo{
+			hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+				return true, nil
+			},
+			createOrUpdateFn: func(ctx context.Context, userID, storageID uuid.UUID, accessType domain.AccessType) error {
+				return errors.New("grant fail")
+			},
+		},
+		&fakeStoragesFilesRepo{listChunksByStorageFn: func(ctx context.Context, storageID uuid.UUID) ([]domain.FileChunk, error) {
+			return nil, errors.New("chunks fail")
+		}},
+		&fakeStoragesManager{deleteFromTelegramFn: func(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error {
+			return errors.New("telegram fail")
+		}},
+	)
+
+	if _, err := svc.Create(context.Background(), caller, "S", 1); err == nil {
+		t.Fatalf("expected create grant error")
+	}
+	if _, err := svc.Get(context.Background(), caller, storageID); err == nil {
+		t.Fatalf("expected get storage repo error")
+	}
+	if err := svc.Delete(context.Background(), caller, storageID, nil); err == nil {
+		t.Fatalf("expected delete storage repo/get/chunks error")
 	}
 }

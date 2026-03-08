@@ -152,3 +152,58 @@ func TestStorageWorkersHandlerValidationErrors(t *testing.T) {
 		t.Fatalf("hasWorkers expected 400 for invalid storage_id, got %d", w.Code)
 	}
 }
+
+func TestStorageWorkersHandlerServiceErrors(t *testing.T) {
+	h := NewStorageWorkersHandlerWithService(&mockStorageWorkersService{
+		createFn: func(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
+			return nil, domain.ErrForbidden()
+		},
+		listFn: func(ctx context.Context, userID uuid.UUID) ([]domain.StorageWorker, error) {
+			return nil, domain.ErrForbidden()
+		},
+		updateFn: func(ctx context.Context, id, userID uuid.UUID, name string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
+			return nil, domain.ErrForbidden()
+		},
+		deleteFn: func(ctx context.Context, id, userID uuid.UUID) error {
+			return domain.ErrForbidden()
+		},
+		hasWorkersFn: func(ctx context.Context, storageID uuid.UUID) (bool, error) {
+			return false, domain.ErrForbidden()
+		},
+	})
+
+	id := uuid.New().String()
+	w := httptest.NewRecorder()
+	h.Create(w, makeWorkerReq(http.MethodPost, `{"name":"w","token":"t"}`, nil))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("create expected 403 on service error, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.List(w, makeWorkerReq(http.MethodGet, "", nil))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("list expected 403 on service error, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.Update(w, makeWorkerReq(http.MethodPut, `{"name":"w2"}`, map[string]string{"workerID": id}))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("update expected 403 on service error, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.Delete(w, makeWorkerReq(http.MethodDelete, "", map[string]string{"workerID": id}))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("delete expected 403 on service error, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	req := makeWorkerReq(http.MethodGet, "", nil)
+	q := req.URL.Query()
+	q.Set("storage_id", uuid.New().String())
+	req.URL.RawQuery = q.Encode()
+	h.HasWorkers(w, req)
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("hasWorkers expected 403 on service error, got %d", w.Code)
+	}
+}

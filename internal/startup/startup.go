@@ -20,6 +20,12 @@ type startupPool interface {
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
 
+type createDBConn interface {
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
+	Close(ctx context.Context) error
+}
+
 func CreateDB(ctx context.Context, cfg *config.Config) error {
 	conn, err := pgxConnect(ctx, cfg.DatabaseURLWithoutDB())
 	if err != nil {
@@ -27,8 +33,12 @@ func CreateDB(ctx context.Context, cfg *config.Config) error {
 	}
 	defer conn.Close(ctx)
 
+	return createDBWithConn(ctx, cfg, conn)
+}
+
+func createDBWithConn(ctx context.Context, cfg *config.Config, conn createDBConn) error {
 	var exists bool
-	err = conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, cfg.DatabaseName).Scan(&exists)
+	err := conn.QueryRow(ctx, `SELECT EXISTS(SELECT 1 FROM pg_database WHERE datname = $1)`, cfg.DatabaseName).Scan(&exists)
 	if err != nil {
 		return fmt.Errorf("checking database existence: %w", err)
 	}

@@ -6,6 +6,8 @@ import (
 	"time"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	pgxmock "github.com/pashagolub/pgxmock/v3"
 )
 
@@ -91,5 +93,58 @@ func TestStorageWorkersRepoMutationsAndScheduling(t *testing.T) {
 		WillReturnRows(pgxmock.NewRows([]string{"min"}).AddRow(time.Now()))
 	if d, err := repo.NextAvailableIn(context.Background(), storageID, 10); err != nil || d < 0 {
 		t.Fatalf("next available failed: %v %v", d, err)
+	}
+}
+
+func TestStorageWorkersRepoErrorBranches(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+	repo := NewStorageWorkersRepoWithDB(mock)
+
+	userID := uuid.New()
+	storageID := uuid.New()
+	workerID := uuid.New()
+
+	mock.ExpectQuery("INSERT INTO storage_workers").
+		WithArgs("w1", userID, "token", &storageID).
+		WillReturnError(&pgconn.PgError{Code: "23505"})
+	if _, err := repo.Create(context.Background(), "w1", userID, "token", &storageID); err == nil {
+		t.Fatalf("expected create unique violation")
+	}
+
+	mock.ExpectQuery("UPDATE storage_workers SET name = \\$3, storage_id = \\$4").
+		WithArgs(workerID, userID, "w2", &storageID).
+		WillReturnError(pgx.ErrNoRows)
+	if _, err := repo.Update(context.Background(), workerID, userID, "w2", &storageID); err == nil {
+		t.Fatalf("expected update not found")
+	}
+
+	mock.ExpectExec("DELETE FROM storage_workers WHERE id = \\$1 AND user_id = \\$2").
+		WithArgs(workerID, userID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	if err := repo.Delete(context.Background(), workerID, userID); err == nil {
+		t.Fatalf("expected delete not found")
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM storage_workers_usages").WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectQuery("WITH available_workers AS").
+		WithArgs(storageID, 10).
+		WillReturnError(pgx.ErrNoRows)
+	mock.ExpectRollback()
+	wt, err := repo.GetToken(context.Background(), storageID, 10)
+	if err != nil || wt != nil {
+		t.Fatalf("expected nil,nil for no available worker, got wt=%v err=%v", wt, err)
+	}
+
+	mock.ExpectQuery("SELECT MIN\\(swu.created_at\\)").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"min"}).AddRow(time.Time{}))
+	d, err := repo.NextAvailableIn(context.Background(), storageID, 10)
+	if err != nil || d != 0 {
+		t.Fatalf("expected zero duration when no rows timestamp, got d=%v err=%v", d, err)
 	}
 }

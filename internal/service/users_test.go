@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"strings"
 	"testing"
 
@@ -144,5 +145,36 @@ func TestUsersServiceDeleteManaged(t *testing.T) {
 	}
 	if !deleted {
 		t.Fatalf("expected delete to be called")
+	}
+}
+
+func TestUsersServiceAdminTargetForbiddenAndRepoErrors(t *testing.T) {
+	targetID := uuid.New()
+	repo := &fakeUsersRepo{
+		getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.User, error) {
+			return &domain.User{ID: id, Email: "admin@example.com"}, nil
+		},
+		updatePasswordFn: func(ctx context.Context, id uuid.UUID, passwordHash string) error { return nil },
+		deleteManagedFn:  func(ctx context.Context, id uuid.UUID) error { return nil },
+		createFn: func(ctx context.Context, email, passwordHash string) (*domain.User, error) {
+			return nil, errors.New("create fail")
+		},
+		listNonAdminFn: func(ctx context.Context, adminEmail string) ([]domain.User, error) {
+			return nil, errors.New("list fail")
+		},
+	}
+	svc := NewUsersServiceWithRepo(repo, "admin@example.com")
+
+	if _, err := svc.Register(context.Background(), "u@example.com", "x"); err == nil {
+		t.Fatalf("expected register repo error")
+	}
+	if _, err := svc.ListManaged(context.Background(), &appjwt.AuthUser{Email: "admin@example.com"}); err == nil {
+		t.Fatalf("expected list managed repo error")
+	}
+	if err := svc.UpdatePassword(context.Background(), &appjwt.AuthUser{Email: "admin@example.com"}, targetID, "x"); err == nil {
+		t.Fatalf("expected forbidden updating superuser")
+	}
+	if err := svc.DeleteManaged(context.Background(), &appjwt.AuthUser{Email: "admin@example.com"}, targetID); err == nil {
+		t.Fatalf("expected forbidden deleting superuser")
 	}
 }

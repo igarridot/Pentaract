@@ -18,6 +18,8 @@ import (
 
 const maxRetries = 3
 
+var telegramSleep = time.Sleep
+
 type Client struct {
 	baseURL    string
 	httpClient *http.Client
@@ -105,7 +107,7 @@ func (c *Client) Upload(token string, chatID int64, data []byte, filename string
 				return nil, rlErr
 			}
 			log.Printf("[telegram] 429 rate limited, waiting %ds before retry (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
-			time.Sleep(time.Duration(rlErr.RetryAfter) * time.Second)
+			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
 
@@ -154,7 +156,7 @@ func (c *Client) DeleteMessage(token string, chatID int64, messageID int64) erro
 				return rlErr
 			}
 			log.Printf("[telegram] 429 rate limited on deleteMessage, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
-			time.Sleep(time.Duration(rlErr.RetryAfter) * time.Second)
+			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
 
@@ -192,7 +194,7 @@ func (c *Client) ResolveFileIDByMessage(ctx context.Context, token string, chatI
 				return "", rlErr
 			}
 			log.Printf("[telegram] 429 rate limited on forwardMessage, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
-			time.Sleep(time.Duration(rlErr.RetryAfter) * time.Second)
+			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
 
@@ -247,7 +249,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 				return nil, rlErr
 			}
 			log.Printf("[telegram] 429 rate limited on getFile, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
-			time.Sleep(time.Duration(rlErr.RetryAfter) * time.Second)
+			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
 
@@ -290,7 +292,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 				return nil, rlErr
 			}
 			log.Printf("[telegram] 429 rate limited on file download, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
-			time.Sleep(time.Duration(rlErr.RetryAfter) * time.Second)
+			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
 

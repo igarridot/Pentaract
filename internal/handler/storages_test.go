@@ -116,3 +116,45 @@ func TestStoragesHandlerValidationErrors(t *testing.T) {
 		t.Fatalf("delete expected 400 for bad storageID, got %d", w.Code)
 	}
 }
+
+func TestStoragesHandlerServiceErrors(t *testing.T) {
+	id := uuid.New()
+	h := NewStoragesHandlerWithService(&mockStoragesService{
+		createFn: func(ctx context.Context, userID uuid.UUID, name string, chatID int64) (*domain.Storage, error) {
+			return nil, domain.ErrForbidden()
+		},
+		listFn: func(ctx context.Context, userID uuid.UUID) ([]domain.StorageWithInfo, error) {
+			return nil, domain.ErrForbidden()
+		},
+		getFn: func(ctx context.Context, userID uuid.UUID, storageID uuid.UUID) (*domain.Storage, error) {
+			return nil, domain.ErrForbidden()
+		},
+		deleteFn: func(ctx context.Context, userID uuid.UUID, storageID uuid.UUID, progress *service.DeleteProgress) error {
+			return domain.ErrForbidden()
+		},
+	})
+
+	w := httptest.NewRecorder()
+	h.Create(w, makeStorageReq(http.MethodPost, `{"name":"s","chat_id":1}`, ""))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("create expected 403 on service error, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.List(w, makeStorageReq(http.MethodGet, "", ""))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("list expected 403 on service error, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.Get(w, makeStorageReq(http.MethodGet, "", id.String()))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("get expected 403 on service error, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.Delete(w, makeStorageReq(http.MethodDelete, "", id.String()))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("delete expected 403 on service error, got %d", w.Code)
+	}
+}

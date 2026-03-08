@@ -2,14 +2,48 @@ package startup
 
 import (
 	"context"
+	"errors"
 	"testing"
 
 	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 	pgxmock "github.com/pashagolub/pgxmock/v3"
 
 	"github.com/Dominux/Pentaract/internal/config"
 )
+
+type fakeCreateDBRow struct {
+	scanFn func(dest ...any) error
+}
+
+func (r *fakeCreateDBRow) Scan(dest ...any) error {
+	return r.scanFn(dest...)
+}
+
+type fakeCreateDBConn struct {
+	queryRowFn func(ctx context.Context, sql string, args ...any) pgx.Row
+	execFn     func(ctx context.Context, sql string, args ...any) error
+	closeFn    func(ctx context.Context) error
+}
+
+func (c *fakeCreateDBConn) QueryRow(ctx context.Context, sql string, args ...any) pgx.Row {
+	return c.queryRowFn(ctx, sql, args...)
+}
+func (c *fakeCreateDBConn) Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error) {
+	if c.execFn != nil {
+		if err := c.execFn(ctx, sql, args...); err != nil {
+			return pgconn.CommandTag{}, err
+		}
+	}
+	return pgconn.NewCommandTag("CREATE DATABASE"), nil
+}
+func (c *fakeCreateDBConn) Close(ctx context.Context) error {
+	if c.closeFn != nil {
+		return c.closeFn(ctx)
+	}
+	return nil
+}
 
 func TestInitDBAndCreateSuperuser(t *testing.T) {
 	mock, err := pgxmock.NewPool()
@@ -51,6 +85,56 @@ func TestCreateDB(t *testing.T) {
 	}
 	if err := CreateDB(context.Background(), cfg); err == nil {
 		t.Fatalf("expected error when connect fails")
+	}
+}
+
+func TestCreateDBWithConnBranches(t *testing.T) {
+	cfg := &config.Config{DatabaseName: "pentaract"}
+
+	connExists := &fakeCreateDBConn{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return &fakeCreateDBRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*bool)) = true
+				return nil
+			}}
+		},
+	}
+	if err := createDBWithConn(context.Background(), cfg, connExists); err != nil {
+		t.Fatalf("expected nil when db exists, got: %v", err)
+	}
+
+	connCreate := &fakeCreateDBConn{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return &fakeCreateDBRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*bool)) = false
+				return nil
+			}}
+		},
+	}
+	if err := createDBWithConn(context.Background(), cfg, connCreate); err != nil {
+		t.Fatalf("expected create success, got: %v", err)
+	}
+
+	connQueryErr := &fakeCreateDBConn{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return &fakeCreateDBRow{scanFn: func(dest ...any) error { return errors.New("scan failed") }}
+		},
+	}
+	if err := createDBWithConn(context.Background(), cfg, connQueryErr); err == nil {
+		t.Fatalf("expected query/scan error")
+	}
+
+	connExecErr := &fakeCreateDBConn{
+		queryRowFn: func(ctx context.Context, sql string, args ...any) pgx.Row {
+			return &fakeCreateDBRow{scanFn: func(dest ...any) error {
+				*(dest[0].(*bool)) = false
+				return nil
+			}}
+		},
+		execFn: func(ctx context.Context, sql string, args ...any) error { return errors.New("exec failed") },
+	}
+	if err := createDBWithConn(context.Background(), cfg, connExecErr); err == nil {
+		t.Fatalf("expected exec error")
 	}
 }
 

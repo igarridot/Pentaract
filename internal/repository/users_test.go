@@ -5,6 +5,8 @@ import (
 	"testing"
 
 	"github.com/google/uuid"
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	pgxmock "github.com/pashagolub/pgxmock/v3"
 )
 
@@ -96,5 +98,51 @@ func TestUsersRepoDeleteManagedAndCandidates(t *testing.T) {
 	candidates, err := repo.ListGrantCandidates(context.Background(), sid, uid)
 	if err != nil || len(candidates) != 1 {
 		t.Fatalf("list candidates failed: %v %v", candidates, err)
+	}
+}
+
+func TestUsersRepoErrorBranches(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+	repo := NewUsersRepoWithDB(mock)
+	uid := uuid.New()
+
+	mock.ExpectQuery("INSERT INTO users").
+		WithArgs("u@example.com", "hash").
+		WillReturnError(&pgconn.PgError{Code: "23505"})
+	if _, err := repo.Create(context.Background(), "u@example.com", "hash"); err == nil {
+		t.Fatalf("expected create unique violation")
+	}
+
+	mock.ExpectQuery("SELECT id, email, password_hash FROM users WHERE email = \\$1").
+		WithArgs("missing@example.com").
+		WillReturnError(pgx.ErrNoRows)
+	if _, err := repo.GetByEmail(context.Background(), "missing@example.com"); err == nil {
+		t.Fatalf("expected get by email not found")
+	}
+
+	mock.ExpectQuery("SELECT id, email, password_hash FROM users WHERE id = \\$1").
+		WithArgs(uid).
+		WillReturnError(pgx.ErrNoRows)
+	if _, err := repo.GetByID(context.Background(), uid); err == nil {
+		t.Fatalf("expected get by id not found")
+	}
+
+	mock.ExpectExec("UPDATE users SET password_hash = \\$2 WHERE id = \\$1").
+		WithArgs(uid, "newhash").
+		WillReturnResult(pgxmock.NewResult("UPDATE", 0))
+	if err := repo.UpdatePassword(context.Background(), uid, "newhash"); err == nil {
+		t.Fatalf("expected update password not found")
+	}
+
+	mock.ExpectBegin()
+	mock.ExpectExec("DELETE FROM access WHERE user_id = \\$1").WithArgs(uid).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec("DELETE FROM storage_workers WHERE user_id = \\$1").WithArgs(uid).WillReturnResult(pgxmock.NewResult("DELETE", 1))
+	mock.ExpectExec("DELETE FROM users WHERE id = \\$1").WithArgs(uid).WillReturnResult(pgxmock.NewResult("DELETE", 0))
+	if err := repo.DeleteManaged(context.Background(), uid); err == nil {
+		t.Fatalf("expected delete managed not found")
 	}
 }
