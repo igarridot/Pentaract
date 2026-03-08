@@ -10,9 +10,16 @@ import (
 	"fmt"
 
 	"github.com/google/uuid"
+	"golang.org/x/crypto/pbkdf2"
 )
 
 var chunkCipherMagic = []byte{'P', 'T', 'R', 'C', '1'}
+
+const (
+	chunkCipherKeyLen         = 32
+	chunkCipherKDFIterations  = 600000
+	chunkCipherKDFSaltContext = "pentaract/chunk-cipher/v1"
+)
 
 // ChunkCipher encrypts and decrypts file chunks transparently.
 // Encrypted payload format:
@@ -22,8 +29,14 @@ type ChunkCipher struct {
 }
 
 func NewChunkCipher(secret string) *ChunkCipher {
-	key := sha256.Sum256([]byte(secret))
-	block, err := aes.NewCipher(key[:])
+	key := pbkdf2.Key(
+		[]byte(secret),
+		[]byte(chunkCipherKDFSaltContext),
+		chunkCipherKDFIterations,
+		chunkCipherKeyLen,
+		sha256.New,
+	)
+	block, err := aes.NewCipher(key)
 	if err != nil {
 		panic(fmt.Sprintf("creating AES cipher: %v", err))
 	}
@@ -31,6 +44,7 @@ func NewChunkCipher(secret string) *ChunkCipher {
 	if err != nil {
 		panic(fmt.Sprintf("creating GCM: %v", err))
 	}
+
 	return &ChunkCipher{aead: aead}
 }
 
