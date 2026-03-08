@@ -60,7 +60,7 @@ func (r *StorageWorkersRepo) List(ctx context.Context, userID uuid.UUID) ([]doma
 func (r *StorageWorkersRepo) HasWorkers(ctx context.Context, storageID uuid.UUID) (bool, error) {
 	var exists bool
 	err := r.pool.QueryRow(ctx,
-		`SELECT EXISTS(SELECT 1 FROM storage_workers WHERE storage_id = $1)`,
+		`SELECT EXISTS(SELECT 1 FROM storage_workers WHERE storage_id = $1 OR storage_id IS NULL)`,
 		storageID,
 	).Scan(&exists)
 	return exists, err
@@ -69,7 +69,9 @@ func (r *StorageWorkersRepo) HasWorkers(ctx context.Context, storageID uuid.UUID
 // ListTokensByStorage returns all worker tokens assigned to a storage.
 func (r *StorageWorkersRepo) ListTokensByStorage(ctx context.Context, storageID uuid.UUID) ([]WorkerToken, error) {
 	rows, err := r.pool.Query(ctx,
-		`SELECT token, name FROM storage_workers WHERE storage_id = $1 ORDER BY name`,
+		`SELECT token, name FROM storage_workers
+		WHERE storage_id = $1 OR storage_id IS NULL
+		ORDER BY name`,
 		storageID,
 	)
 	if err != nil {
@@ -150,7 +152,7 @@ func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, 
 			SELECT sw.id, sw.name, sw.token, COUNT(swu.id) AS usage_count
 			FROM storage_workers sw
 			LEFT JOIN storage_workers_usages swu ON swu.worker_id = sw.id
-			WHERE sw.storage_id = $1
+			WHERE sw.storage_id = $1 OR sw.storage_id IS NULL
 			GROUP BY sw.id, sw.name, sw.token
 			HAVING COUNT(swu.id) < $2
 			ORDER BY COUNT(swu.id) ASC
@@ -188,7 +190,7 @@ func (r *StorageWorkersRepo) NextAvailableIn(ctx context.Context, storageID uuid
 		`SELECT MIN(swu.created_at)
 		FROM storage_workers_usages swu
 		JOIN storage_workers sw ON sw.id = swu.worker_id
-		WHERE sw.storage_id = $1
+		WHERE sw.storage_id = $1 OR sw.storage_id IS NULL
 		AND swu.created_at >= now() - interval '1 minute'`,
 		storageID,
 	).Scan(&earliest)
