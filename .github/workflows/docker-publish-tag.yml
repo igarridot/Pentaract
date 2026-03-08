@@ -4,18 +4,40 @@ permissions:
   contents: read
 
 on:
-  release:
+  workflow_run:
+    workflows:
+      - Tests
     types:
-      - published
+      - completed
 
 jobs:
   docker-publish:
     name: Build And Push To Docker Hub
     runs-on: ubuntu-latest
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ github.event.workflow_run.head_sha }}
+
+      - name: Resolve release tag
+        id: version
+        run: |
+          set -euo pipefail
+
+          semver_regex='^v[0-9]+\.[0-9]+\.[0-9]+$'
+          release_tag="$(git tag --points-at HEAD | grep -E "${semver_regex}" | sort -V | tail -n1 || true)"
+
+          if [ -z "${release_tag}" ]; then
+            echo "No semantic version tag found on commit ${GITHUB_SHA}"
+            exit 1
+          fi
+
+          echo "tag=${release_tag}" >> "${GITHUB_OUTPUT}"
+          echo "Release tag: ${release_tag}"
 
       - name: Set up Docker Buildx
         uses: docker/setup-buildx-action@v4
@@ -37,5 +59,5 @@ jobs:
           push: true
           platforms: linux/amd64,linux/arm64
           tags: |
-            norbega/pentaract:${{ github.ref_name }}
+            norbega/pentaract:${{ steps.version.outputs.tag }}
             norbega/pentaract:latest
