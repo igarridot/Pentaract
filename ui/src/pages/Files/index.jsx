@@ -55,14 +55,13 @@ export default function Files() {
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [moveTarget, setMoveTarget] = useState(null)
-  const [uploadState, setUploadState] = useState(null)
-  const [downloadState, setDownloadState] = useState(null)
+  const [uploadStates, setUploadStates] = useState([])
+  const [downloadStates, setDownloadStates] = useState([])
   const [deleteState, setDeleteState] = useState(null)
-  const cancelProgressRef = useRef(null)
-  const cancelDownloadProgressRef = useRef(null)
+  const uploadProgressCancelsRef = useRef(new Map())
+  const uploadAbortControllersRef = useRef(new Map())
+  const downloadProgressCancelsRef = useRef(new Map())
   const cancelDeleteProgressRef = useRef(null)
-  const uploadIdRef = useRef(null)
-  const downloadIdRef = useRef(null)
 
   const loadTree = useCallback(async () => {
     try {
@@ -81,13 +80,23 @@ export default function Files() {
 
   useEffect(() => {
     return () => {
-      if (cancelProgressRef.current) cancelProgressRef.current()
-      if (cancelDownloadProgressRef.current) cancelDownloadProgressRef.current()
+      uploadProgressCancelsRef.current.forEach((_, uploadId) => {
+        API.files.cancelUpload(uploadId).catch(() => {})
+      })
+      uploadProgressCancelsRef.current.forEach((cancel) => cancel())
+      uploadProgressCancelsRef.current.clear()
+      uploadAbortControllersRef.current.forEach((controller) => controller.abort())
+      uploadAbortControllersRef.current.clear()
+      downloadProgressCancelsRef.current.forEach((_, downloadId) => {
+        API.files.cancelDownload(downloadId).catch(() => {})
+      })
+      downloadProgressCancelsRef.current.forEach((cancel) => cancel())
+      downloadProgressCancelsRef.current.clear()
       if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
     }
   }, [])
 
-  const isUploading = uploadState?.status === 'uploading'
+  const isUploading = uploadStates.some((u) => u.status === 'uploading')
 
   useEffect(() => {
     if (!isUploading) return
@@ -100,6 +109,14 @@ export default function Files() {
   }, [isUploading])
 
   const blocker = useBlocker(isUploading)
+
+  const updateUploadState = useCallback((id, updater) => {
+    setUploadStates((prev) => prev.map((u) => (u.id === id ? updater(u) : u)))
+  }, [])
+
+  const updateDownloadState = useCallback((id, updater) => {
+    setDownloadStates((prev) => prev.map((d) => (d.id === id ? updater(d) : d)))
+  }, [])
 
   const handleSearch = async (e) => {
     e.preventDefault()
@@ -131,11 +148,19 @@ export default function Files() {
 
     const filename = file.name
     const uploadId = createUploadId()
-    uploadIdRef.current = uploadId
-    setUploadState({ filename, totalBytes: file.size, uploadedBytes: 0, totalChunks: 0, uploadedChunks: 0, status: 'uploading' })
+    setUploadStates((prev) => [...prev, {
+      id: uploadId,
+      filename,
+      totalBytes: file.size,
+      uploadedBytes: 0,
+      totalChunks: 0,
+      uploadedChunks: 0,
+      status: 'uploading',
+      workersStatus: 'active',
+    }])
 
     const cancel = API.files.subscribeProgress(uploadId, (data) => {
-      setUploadState((prev) => ({
+      updateUploadState(uploadId, (prev) => ({
         ...prev,
         filename,
         totalBytes: data.total_bytes || prev?.totalBytes || file.size,
@@ -146,54 +171,69 @@ export default function Files() {
         workersStatus: data.workers_status || prev?.workersStatus || 'active',
       }))
       if (data.status === 'done') {
-        uploadIdRef.current = null
+        uploadProgressCancelsRef.current.get(uploadId)?.()
+        uploadProgressCancelsRef.current.delete(uploadId)
+        uploadAbortControllersRef.current.delete(uploadId)
         addAlert('File uploaded', 'success')
         loadTree()
-        setTimeout(() => setUploadState(null), 2000)
+        setTimeout(() => {
+          setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
+        }, 2000)
       }
       if (data.status === 'error') {
-        uploadIdRef.current = null
+        uploadProgressCancelsRef.current.get(uploadId)?.()
+        uploadProgressCancelsRef.current.delete(uploadId)
+        uploadAbortControllersRef.current.delete(uploadId)
         addAlert('Upload failed unexpectedly. Please try again.', 'error', { persistent: true })
-        setTimeout(() => setUploadState(null), 3000)
+        setTimeout(() => {
+          setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
+        }, 3000)
       }
     })
-    cancelProgressRef.current = cancel
+    uploadProgressCancelsRef.current.set(uploadId, cancel)
+    const controller = new AbortController()
+    uploadAbortControllersRef.current.set(uploadId, controller)
 
     try {
-      await API.files.upload(storageId, currentPath.replace(/\/+$/, ''), file, uploadId)
+      await API.files.upload(storageId, currentPath.replace(/\/+$/, ''), file, uploadId, { signal: controller.signal })
     } catch (err) {
-      if (uploadIdRef.current === uploadId) {
-        setUploadState(null)
-        uploadIdRef.current = null
+      if (err?.name !== 'AbortError') {
+        updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
         addAlert(`Upload interrupted: ${err.message}`, 'error', { persistent: true })
       }
+      uploadProgressCancelsRef.current.get(uploadId)?.()
+      uploadProgressCancelsRef.current.delete(uploadId)
+      uploadAbortControllersRef.current.delete(uploadId)
+      setTimeout(() => {
+        setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
+      }, 1500)
     }
     e.target.value = ''
   }
 
-  const handleCancelUpload = async () => {
-    const id = uploadIdRef.current
-    if (!id) return
+  const handleCancelUpload = async (uploadId) => {
+    if (!uploadId) return
     try {
-      if (cancelProgressRef.current) cancelProgressRef.current()
-      await API.files.cancelUpload(id)
+      uploadProgressCancelsRef.current.get(uploadId)?.()
+      uploadProgressCancelsRef.current.delete(uploadId)
+      uploadAbortControllersRef.current.get(uploadId)?.abort()
+      uploadAbortControllersRef.current.delete(uploadId)
+      await API.files.cancelUpload(uploadId)
       addAlert('Upload cancelled', 'info')
     } catch (err) {
       addAlert(err.message, 'error')
     }
-    setUploadState(null)
-    uploadIdRef.current = null
+    setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
     loadTree()
   }
 
   const handleDownload = async (item) => {
     try {
-      if (cancelDownloadProgressRef.current) cancelDownloadProgressRef.current()
       const downloadId = createUploadId()
-      downloadIdRef.current = downloadId
       const filename = item.is_file ? item.name : `${item.name}.zip`
 
-      setDownloadState({
+      setDownloadStates((prev) => [...prev, {
+        id: downloadId,
         filename,
         totalBytes: 0,
         downloadedBytes: 0,
@@ -201,10 +241,10 @@ export default function Files() {
         downloadedChunks: 0,
         status: 'downloading',
         workersStatus: 'active',
-      })
+      }])
 
       const cancel = API.files.subscribeDownloadProgress(downloadId, (data) => {
-        setDownloadState((prev) => ({
+        updateDownloadState(downloadId, (prev) => ({
           ...prev,
           filename,
           totalBytes: data.total_bytes || prev?.totalBytes || 0,
@@ -216,27 +256,30 @@ export default function Files() {
         }))
 
         if (data.status === 'done') {
-          cancel()
-          cancelDownloadProgressRef.current = null
-          downloadIdRef.current = null
-          setTimeout(() => setDownloadState(null), 2000)
+          downloadProgressCancelsRef.current.get(downloadId)?.()
+          downloadProgressCancelsRef.current.delete(downloadId)
+          setTimeout(() => {
+            setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
+          }, 2000)
         }
         if (data.status === 'error') {
-          cancel()
-          cancelDownloadProgressRef.current = null
-          downloadIdRef.current = null
+          downloadProgressCancelsRef.current.get(downloadId)?.()
+          downloadProgressCancelsRef.current.delete(downloadId)
           addAlert('Download failed unexpectedly. Please try again.', 'error', { persistent: true })
-          setTimeout(() => setDownloadState(null), 3000)
+          setTimeout(() => {
+            setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
+          }, 3000)
         }
         if (data.status === 'cancelled') {
-          cancel()
-          cancelDownloadProgressRef.current = null
-          downloadIdRef.current = null
+          downloadProgressCancelsRef.current.get(downloadId)?.()
+          downloadProgressCancelsRef.current.delete(downloadId)
           addAlert('Download cancelled', 'info')
-          setTimeout(() => setDownloadState(null), 1500)
+          setTimeout(() => {
+            setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
+          }, 1500)
         }
       })
-      cancelDownloadProgressRef.current = cancel
+      downloadProgressCancelsRef.current.set(downloadId, cancel)
 
       const url = item.is_file
         ? API.files.downloadFileUrl(storageId, item.path, downloadId)
@@ -248,33 +291,23 @@ export default function Files() {
       a.rel = 'noopener'
       a.click()
     } catch (err) {
-      if (downloadIdRef.current && cancelDownloadProgressRef.current) {
-        cancelDownloadProgressRef.current()
-        cancelDownloadProgressRef.current = null
-        downloadIdRef.current = null
-      }
-      setDownloadState((prev) => (prev ? { ...prev, status: 'error' } : null))
-      setTimeout(() => setDownloadState(null), 3000)
       addAlert(err.message, 'error')
     }
   }
 
-  const handleCancelDownload = async () => {
-    const id = downloadIdRef.current
-    if (!id) return
+  const handleCancelDownload = async (downloadId) => {
+    if (!downloadId) return
     try {
-      await API.files.cancelDownload(id)
-      if (cancelDownloadProgressRef.current) {
-        cancelDownloadProgressRef.current()
-        cancelDownloadProgressRef.current = null
-      }
-      setDownloadState((prev) => (prev ? { ...prev, status: 'cancelled' } : null))
+      await API.files.cancelDownload(downloadId)
+      downloadProgressCancelsRef.current.get(downloadId)?.()
+      downloadProgressCancelsRef.current.delete(downloadId)
+      updateDownloadState(downloadId, (prev) => (prev ? { ...prev, status: 'cancelled' } : prev))
       addAlert('Download cancelled', 'info')
-      setTimeout(() => setDownloadState(null), 1500)
+      setTimeout(() => {
+        setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
+      }, 1500)
     } catch (err) {
       addAlert(err.message, 'error')
-    } finally {
-      downloadIdRef.current = null
     }
   }
 
@@ -391,8 +424,9 @@ export default function Files() {
     <Box>
       <Breadcrumbs sx={{ mb: 2 }}>{breadcrumbs}</Breadcrumbs>
 
-      {uploadState && (
+      {uploadStates.map((uploadState) => (
         <UploadProgress
+          key={uploadState.id}
           filename={uploadState.filename}
           totalBytes={uploadState.totalBytes}
           uploadedBytes={uploadState.uploadedBytes}
@@ -400,11 +434,12 @@ export default function Files() {
           uploadedChunks={uploadState.uploadedChunks}
           status={uploadState.status}
           workersStatus={uploadState.workersStatus}
-          onCancel={handleCancelUpload}
+          onCancel={() => handleCancelUpload(uploadState.id)}
         />
-      )}
-      {downloadState && (
+      ))}
+      {downloadStates.map((downloadState) => (
         <DownloadProgress
+          key={downloadState.id}
           filename={downloadState.filename}
           totalBytes={downloadState.totalBytes}
           downloadedBytes={downloadState.downloadedBytes}
@@ -412,9 +447,9 @@ export default function Files() {
           downloadedChunks={downloadState.downloadedChunks}
           status={downloadState.status}
           workersStatus={downloadState.workersStatus}
-          onCancel={handleCancelDownload}
+          onCancel={() => handleCancelDownload(downloadState.id)}
         />
-      )}
+      ))}
       {deleteState && (
         <DeleteProgress
           label={deleteState.label}
