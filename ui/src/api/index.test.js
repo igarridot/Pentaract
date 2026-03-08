@@ -58,6 +58,7 @@ test('files.upload builds multipart body with optional upload id', async () => {
     const fd = opts.body
     assert.equal(fd.get('path'), 'folder')
     assert.equal(fd.get('upload_id'), 'up-1')
+    assert.equal(fd.get('on_conflict'), 'keep_both')
     assert.equal(fd.get('file').name, 'a.txt')
     return {
       ok: true,
@@ -72,6 +73,26 @@ test('files.upload builds multipart body with optional upload id', async () => {
   const f = new File(['hello'], 'a.txt')
   const res = await API.files.upload('s1', 'folder', f, 'up-1')
   assert.deepEqual(res, { ok: true })
+})
+
+test('files.upload accepts explicit on_conflict policy', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  globalThis.fetch = async (url, opts) => {
+    assert.equal(url, '/api/storages/s1/files/upload')
+    const fd = opts.body
+    assert.equal(fd.get('on_conflict'), 'skip')
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      async text() {
+        return '{"ok":true}'
+      },
+    }
+  }
+
+  const f = new File(['hello'], 'a.txt')
+  await API.files.upload('s1', 'folder', f, 'up-1', { onConflict: 'skip' })
 })
 
 test('subscribeProgress consumes SSE and stops on done status', async () => {

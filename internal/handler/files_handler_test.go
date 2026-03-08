@@ -22,7 +22,7 @@ import (
 type mockFilesService struct {
 	moveFn                    func(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error
 	createFolderFn            func(ctx context.Context, userID, storageID uuid.UUID, path, folderName string) error
-	uploadFn                  func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress) (*domain.File, error)
+	uploadFn                  func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error)
 	deleteFn                  func(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error
 	workersStatusFn           func(storageID uuid.UUID) string
 	getFileForDownloadFn      func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error)
@@ -46,11 +46,11 @@ func (m *mockFilesService) CreateFolder(ctx context.Context, userID, storageID u
 	}
 	return m.createFolderFn(ctx, userID, storageID, path, folderName)
 }
-func (m *mockFilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress) (*domain.File, error) {
+func (m *mockFilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
 	if m.uploadFn == nil {
-		return &domain.File{}, nil
+		return &domain.File{}, false, nil
 	}
-	return m.uploadFn(ctx, userID, storageID, path, size, reader, progress)
+	return m.uploadFn(ctx, userID, storageID, path, size, reader, progress, onConflict)
 }
 func (m *mockFilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error {
 	if m.deleteFn == nil {
@@ -268,13 +268,16 @@ func TestFilesHandlerDownloadAndUploadValidation(t *testing.T) {
 func TestFilesHandlerUploadSuccess(t *testing.T) {
 	uploadDone := make(chan struct{})
 	h := NewFilesHandlerWithService(&mockFilesService{
-		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress) (*domain.File, error) {
+		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
 			defer close(uploadDone)
 			b, _ := io.ReadAll(reader)
 			if path != "folder/a.txt" || string(b) != "hello" {
 				t.Fatalf("unexpected upload payload: path=%s body=%q", path, string(b))
 			}
-			return &domain.File{ID: uuid.New(), Path: path}, nil
+			if onConflict != service.UploadConflictKeepBoth {
+				t.Fatalf("unexpected on_conflict: %q", onConflict)
+			}
+			return &domain.File{ID: uuid.New(), Path: path}, false, nil
 		},
 	})
 
@@ -304,6 +307,48 @@ func TestFilesHandlerUploadSuccess(t *testing.T) {
 	case <-uploadDone:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("upload service was not called")
+	}
+}
+
+func TestFilesHandlerUploadSkipOnConflict(t *testing.T) {
+	h := NewFilesHandlerWithService(&mockFilesService{
+		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
+			if onConflict != service.UploadConflictSkip {
+				t.Fatalf("expected skip policy, got %q", onConflict)
+			}
+			_, _ = io.Copy(io.Discard, reader)
+			return nil, true, nil
+		},
+	})
+
+	var body bytes.Buffer
+	mw := multipart.NewWriter(&body)
+	_ = mw.WriteField("path", "folder")
+	_ = mw.WriteField("upload_id", "upload-skip-1")
+	_ = mw.WriteField("on_conflict", "skip")
+	part, err := mw.CreateFormFile("file", "a.txt")
+	if err != nil {
+		t.Fatalf("create form file: %v", err)
+	}
+	_, _ = io.WriteString(part, "hello")
+	_ = mw.Close()
+
+	req := makeFilesReq(http.MethodPost, "/", "", uuid.New().String(), "")
+	req.Header.Set("Content-Type", mw.FormDataContentType())
+	req.Body = io.NopCloser(bytes.NewReader(body.Bytes()))
+	req.ContentLength = int64(body.Len())
+
+	w := httptest.NewRecorder()
+	h.Upload(w, req)
+	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), `"upload_id":"upload-skip-1"`) {
+		t.Fatalf("unexpected upload response: code=%d body=%s", w.Code, w.Body.String())
+	}
+
+	progressReq := makeFilesReq(http.MethodGet, "/?upload_id=upload-skip-1", "", "", "")
+	progressW := httptest.NewRecorder()
+	h.UploadProgress(progressW, progressReq)
+	if !strings.Contains(progressW.Body.String(), `"status":"skipped"`) {
+		t.Fatalf("expected skipped upload SSE, got %q", progressW.Body.String())
 	}
 }
 
