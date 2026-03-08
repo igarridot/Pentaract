@@ -130,6 +130,7 @@ Build caches are persisted under `persistent_data/` so subsequent builds are fas
 | `make down` | Stop and remove all containers |
 | `make build` | Compile Go backend inside a container |
 | `make check` | Run `go vet` inside a container |
+| `make test` | Run backend + frontend tests inside the `dev` container |
 | `make mod-tidy` | Run `go mod tidy` inside a container |
 | `make ui-install` | Install frontend npm dependencies inside a container |
 | `make ui-build` | Build the production frontend bundle inside a container |
@@ -164,6 +165,32 @@ docker compose run --rm -p 3000:3000 dev sh -c "cd ui && pnpm run dev"
 ```
 
 The Vite dev server proxies `/api` requests to the backend.
+
+---
+
+## Tests
+
+### Run tests in containers (recommended)
+
+Use the `dev` profile and run both backend and frontend tests:
+
+```bash
+make test
+```
+
+This executes:
+
+- `go test ./...`
+- `cd ui && npm run test`
+
+inside the `dev` service container.
+
+### Run tests locally (optional)
+
+```bash
+go test ./...
+cd ui && npm run test
+```
 
 ---
 
