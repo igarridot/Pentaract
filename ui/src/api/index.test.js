@@ -95,6 +95,28 @@ test('files.upload accepts explicit on_conflict policy', async () => {
   await API.files.upload('s1', 'folder', f, 'up-1', { onConflict: 'skip' })
 })
 
+test('files.move sends old/new paths and forwards request options', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  let gotSignal = false
+  globalThis.fetch = async (url, opts) => {
+    assert.equal(url, '/api/storages/s1/files/move')
+    const body = JSON.parse(opts.body)
+    assert.deepEqual(body, { old_path: 'a.txt', new_path: 'dst/a.txt' })
+    gotSignal = Boolean(opts.signal)
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      async text() {
+        return '{"ok":true}'
+      },
+    }
+  }
+  const controller = new AbortController()
+  await API.files.move('s1', 'a.txt', 'dst/a.txt', { signal: controller.signal })
+  assert.equal(gotSignal, true)
+})
+
 test('subscribeProgress consumes SSE and stops on done status', async () => {
   globalThis.localStorage = makeStorage('tok')
   let called = null

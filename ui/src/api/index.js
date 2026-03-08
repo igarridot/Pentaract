@@ -124,8 +124,8 @@ const API = {
     createFolder: (storageId, path, folder_name) =>
       apiRequest(filesPath(storageId, '/create_folder'), 'POST', { path, folder_name }),
 
-    move: (storageId, oldPath, newPath) =>
-      apiRequest(filesPath(storageId, '/move'), 'POST', { old_path: oldPath, new_path: newPath }),
+    move: (storageId, oldPath, newPath, options = {}) =>
+      apiRequest(filesPath(storageId, '/move'), 'POST', { old_path: oldPath, new_path: newPath }, true, options),
 
     upload: (storageId, path, file, uploadId, options = {}) => {
       const formData = new FormData()

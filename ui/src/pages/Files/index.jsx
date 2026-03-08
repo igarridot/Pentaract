@@ -24,6 +24,7 @@ import DownloadProgress from '../../components/DownloadProgress'
 import DeleteProgress from '../../components/DeleteProgress'
 import BulkOperationProgress from '../../components/BulkOperationProgress'
 import MoveDialog from '../../components/MoveDialog'
+import BulkMoveDialog from '../../components/BulkMoveDialog'
 import MediaPreviewDialog from '../../components/MediaPreviewDialog'
 import RenameFolderDialog from '../../components/RenameFolderDialog'
 import UploadConflictDialog from '../../components/UploadConflictDialog'
@@ -52,6 +53,7 @@ export default function Files() {
   const [renameTarget, setRenameTarget] = useState(null)
   const [selectedFilePaths, setSelectedFilePaths] = useState([])
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkMoveOpen, setBulkMoveOpen] = useState(false)
   const [bulkOperation, setBulkOperation] = useState(null)
   const [uploadStates, setUploadStates] = useState([])
   const [downloadStates, setDownloadStates] = useState([])
@@ -114,6 +116,7 @@ export default function Files() {
   const isBulkUpload = isBulkOperating && bulkOperation?.operation === 'upload'
   const isBulkDownload = isBulkOperating && bulkOperation?.operation === 'download'
   const isBulkDelete = isBulkOperating && bulkOperation?.operation === 'delete'
+  const isBulkMove = isBulkOperating && bulkOperation?.operation === 'move'
   const hasActiveFileOperation = isUploading || isDownloading || isDeleting || isBulkOperating
 
   useEffect(() => {
@@ -356,9 +359,9 @@ export default function Files() {
   }, [addAlert, askUploadConflictDecision, hasUploadConflict, uploadStates])
 
   const handleUpload = async (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-    await runUploadBatch(buildUploadEntries([file], currentPath))
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+    await runUploadBatch(buildUploadEntries(files, currentPath))
     e.target.value = ''
   }
 
@@ -542,6 +545,7 @@ export default function Files() {
       addAlert(err.message, 'error')
     } finally {
       setForceDelete(false)
+      loadTree()
     }
   }
 
@@ -610,11 +614,21 @@ export default function Files() {
     : bulkOperation?.operation === 'download'
       ? downloadStates.filter((d) => (bulkOperation.transferIds || []).includes(d.id))
       : []
-  const bulkTotalBytes = bulkTransferStates.reduce((sum, t) => sum + (t.totalBytes || 0), 0)
-  const bulkProcessedBytes = bulkTransferStates.reduce((sum, t) => sum + ((t.uploadedBytes ?? t.downloadedBytes) || 0), 0)
-  const bulkTotalChunks = bulkTransferStates.reduce((sum, t) => sum + (t.totalChunks || 0), 0)
-  const bulkProcessedChunks = bulkTransferStates.reduce((sum, t) => sum + ((t.uploadedChunks ?? t.downloadedChunks) || 0), 0)
-  const bulkWorkersStatus = bulkTransferStates.some((t) => t.workersStatus === 'waiting_rate_limit') ? 'waiting_rate_limit' : 'active'
+  const bulkTotalBytes = bulkOperation?.operation === 'move'
+    ? (bulkOperation.total || 0)
+    : bulkTransferStates.reduce((sum, t) => sum + (t.totalBytes || 0), 0)
+  const bulkProcessedBytes = bulkOperation?.operation === 'move'
+    ? (bulkOperation.completed || 0)
+    : bulkTransferStates.reduce((sum, t) => sum + ((t.uploadedBytes ?? t.downloadedBytes) || 0), 0)
+  const bulkTotalChunks = bulkOperation?.operation === 'move'
+    ? (bulkOperation.total || 0)
+    : bulkTransferStates.reduce((sum, t) => sum + (t.totalChunks || 0), 0)
+  const bulkProcessedChunks = bulkOperation?.operation === 'move'
+    ? (bulkOperation.completed || 0)
+    : bulkTransferStates.reduce((sum, t) => sum + ((t.uploadedChunks ?? t.downloadedChunks) || 0), 0)
+  const bulkWorkersStatus = bulkOperation?.operation === 'move'
+    ? 'active'
+    : bulkTransferStates.some((t) => t.workersStatus === 'waiting_rate_limit') ? 'waiting_rate_limit' : 'active'
 
   useEffect(() => {
     const visiblePaths = new Set(selectableFiles.map((item) => item.path))
@@ -719,13 +733,61 @@ export default function Files() {
       setTimeout(() => setBulkOperation(null), 1500)
       addAlert(`Deleted ${deletedCount} file(s)`, 'success')
       setSelectedFilePaths([])
-      loadTree()
     } catch (err) {
       setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
       setTimeout(() => setBulkOperation(null), 3000)
       addAlert(err.message, 'error')
     } finally {
       bulkCancelRef.current = null
+      loadTree()
+    }
+  }
+
+  const handleBulkMove = async (targetPath) => {
+    setBulkMoveOpen(false)
+    const targets = [...selectedFiles]
+    const bulkCancelledRef = { current: false }
+    const moveAbortController = new AbortController()
+    setBulkOperation({
+      operation: 'move',
+      status: 'running',
+      total: targets.length,
+      completed: 0,
+      transferIds: [],
+    })
+    bulkCancelRef.current = () => {
+      bulkCancelledRef.current = true
+      moveAbortController.abort()
+    }
+    try {
+      let movedCount = 0
+      for (let i = 0; i < targets.length; i += 1) {
+        if (bulkCancelledRef.current) break
+        const item = targets[i]
+        const newPath = targetPath ? `${targetPath}/${item.name}` : item.name
+        // Keep move operations sequential for predictable ordering and cancellation.
+        // eslint-disable-next-line no-await-in-loop
+        await API.files.move(storageId, item.path, newPath, { signal: moveAbortController.signal })
+        movedCount += 1
+        setBulkOperation((prev) => (prev ? { ...prev, completed: i + 1 } : prev))
+      }
+      setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
+      setTimeout(() => setBulkOperation(null), 1500)
+      addAlert(`Moved ${movedCount} file(s)`, 'success')
+      setSelectedFilePaths([])
+    } catch (err) {
+      if (err?.name === 'AbortError') {
+        setBulkOperation((prev) => (prev ? { ...prev, status: 'cancelled' } : prev))
+        setTimeout(() => setBulkOperation(null), 1500)
+        addAlert('Bulk move cancelled', 'info')
+      } else {
+        setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
+        setTimeout(() => setBulkOperation(null), 3000)
+        addAlert(err.message, 'error')
+      }
+    } finally {
+      bulkCancelRef.current = null
+      loadTree()
     }
   }
 
@@ -818,6 +880,9 @@ export default function Files() {
           <Button size="small" onClick={() => setSelectedFilePaths([])} disabled={selectedFiles.length === 0}>
             Clear
           </Button>
+          <Button size="small" onClick={() => setBulkMoveOpen(true)} disabled={selectedFiles.length === 0 || isBulkOperating}>
+            Move selected
+          </Button>
           <Button size="small" onClick={handleBulkDownload} disabled={selectedFiles.length === 0 || isBulkOperating}>
             Download selected
           </Button>
@@ -880,7 +945,7 @@ export default function Files() {
           </MenuItem>,
           <MenuItem key="upload" component="label">
             <UploadIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> Upload File
-            <input type="file" hidden onChange={(e) => { close(); handleUpload(e) }} />
+            <input type="file" hidden multiple onChange={(e) => { close(); handleUpload(e) }} />
           </MenuItem>,
           <MenuItem key="upload-folder" component="label">
             <FolderUploadIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> Upload Folder
@@ -959,6 +1024,7 @@ export default function Files() {
         isUploading={isUploading || isBulkUpload}
         isDownloading={isDownloading || isBulkDownload}
         isDeleting={isDeleting || isBulkDelete}
+        isMoving={isBulkMove}
       />
 
       <MoveDialog
@@ -967,6 +1033,14 @@ export default function Files() {
         storageId={storageId}
         onMove={handleMove}
         onClose={() => setMoveTarget(null)}
+      />
+
+      <BulkMoveDialog
+        open={bulkMoveOpen}
+        count={selectedFiles.length}
+        storageId={storageId}
+        onConfirm={handleBulkMove}
+        onClose={() => setBulkMoveOpen(false)}
       />
 
       <RenameFolderDialog
