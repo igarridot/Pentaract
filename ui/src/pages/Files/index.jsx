@@ -22,6 +22,7 @@ import FloatingMenu from '../../components/Menu'
 import UploadProgress from '../../components/UploadProgress'
 import DownloadProgress from '../../components/DownloadProgress'
 import DeleteProgress from '../../components/DeleteProgress'
+import BulkOperationProgress from '../../components/BulkOperationProgress'
 import MoveDialog from '../../components/MoveDialog'
 import MediaPreviewDialog from '../../components/MediaPreviewDialog'
 import RenameFolderDialog from '../../components/RenameFolderDialog'
@@ -51,6 +52,7 @@ export default function Files() {
   const [renameTarget, setRenameTarget] = useState(null)
   const [selectedFilePaths, setSelectedFilePaths] = useState([])
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
+  const [bulkOperation, setBulkOperation] = useState(null)
   const [uploadStates, setUploadStates] = useState([])
   const [downloadStates, setDownloadStates] = useState([])
   const [deleteState, setDeleteState] = useState(null)
@@ -59,6 +61,7 @@ export default function Files() {
   const uploadConflictResolverRef = useRef(null)
   const dirFileNamesCacheRef = useRef(new Map())
   const downloadProgressCancelsRef = useRef(new Map())
+  const bulkCancelRef = useRef(null)
   const cancelDeleteProgressRef = useRef(null)
   const [uploadConflictDialog, setUploadConflictDialog] = useState({
     open: false,
@@ -87,6 +90,7 @@ export default function Files() {
 
   useEffect(() => {
     return () => {
+      if (bulkCancelRef.current) bulkCancelRef.current()
       uploadProgressCancelsRef.current.forEach((_, uploadId) => {
         API.files.cancelUpload(uploadId).catch(() => {})
       })
@@ -106,12 +110,17 @@ export default function Files() {
   const isUploading = uploadStates.some((u) => u.status === 'uploading')
   const isDownloading = downloadStates.some((d) => d.status === 'downloading')
   const isDeleting = deleteState?.status === 'deleting'
-  const hasActiveFileOperation = isUploading || isDownloading || isDeleting
+  const isBulkOperating = bulkOperation?.status === 'running'
+  const isBulkUpload = isBulkOperating && bulkOperation?.operation === 'upload'
+  const isBulkDownload = isBulkOperating && bulkOperation?.operation === 'download'
+  const isBulkDelete = isBulkOperating && bulkOperation?.operation === 'delete'
+  const hasActiveFileOperation = isUploading || isDownloading || isDeleting || isBulkOperating
 
   useEffect(() => {
     if (!hasActiveFileOperation) return
     const handler = (e) => {
-      const message = isDeleting
+      const isDeleteFlow = isDeleting || isBulkDelete
+      const message = isDeleteFlow
         ? 'Operation in progress. Leaving will cancel it. If delete is interrupted, the file will be irrecoverable and orphaned data may remain in storage.'
         : 'Operation in progress. Leaving will cancel it.'
       e.preventDefault()
@@ -120,7 +129,7 @@ export default function Files() {
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [hasActiveFileOperation, isDeleting])
+  }, [hasActiveFileOperation, isDeleting, isBulkDelete])
 
   const blocker = useBlocker(hasActiveFileOperation)
 
@@ -228,6 +237,7 @@ export default function Files() {
         setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
       }, 1500)
     }
+    return uploadId
   }
 
   const askUploadConflictDecision = useCallback((filename, targetPath) => (
@@ -268,6 +278,8 @@ export default function Files() {
   }, [getDirFileNames])
 
   const runUploadBatch = useCallback(async (entries) => {
+    const showBulkProgress = entries.length > 1
+    const bulkCancelledRef = { current: false }
     let defaultConflictMode = 'keep_both'
     const askConflictDecision = async (filename, targetPath) => {
       const decision = await askUploadConflictDecision(filename, targetPath)
@@ -283,6 +295,29 @@ export default function Files() {
       askConflictDecision,
     )
 
+    if (showBulkProgress) {
+      setBulkOperation({
+        operation: 'upload',
+        status: 'running',
+        total: entriesToUpload.length,
+        completed: 0,
+        transferIds: [],
+      })
+      bulkCancelRef.current = async () => {
+        bulkCancelledRef.current = true
+        const currentIds = uploadStates
+          .filter((u) => u.status === 'uploading')
+          .map((u) => u.id)
+        await Promise.all(currentIds.map(async (uploadId) => {
+          uploadProgressCancelsRef.current.get(uploadId)?.()
+          uploadProgressCancelsRef.current.delete(uploadId)
+          uploadAbortControllersRef.current.get(uploadId)?.abort()
+          uploadAbortControllersRef.current.delete(uploadId)
+          await API.files.cancelUpload(uploadId).catch(() => {})
+        }))
+      }
+    }
+
     const uploadedKeys = new Set(entriesToUpload.map((entry) => `${entry.targetPath}::${entry.filename}`))
     entries.forEach((entry) => {
       const key = `${entry.targetPath}::${entry.filename}`
@@ -291,14 +326,34 @@ export default function Files() {
       }
     })
 
-    for (const entry of entriesToUpload) {
-      // Upload sequentially to preserve stable progress/cancel behavior.
-      // This also avoids opening too many concurrent requests at once.
-      // eslint-disable-next-line no-await-in-loop
-      await uploadSingleFile(entry.file, entry.targetPath, defaultConflictMode)
-      dirFileNamesCacheRef.current.delete(normalizeUploadPath(entry.targetPath))
+    try {
+      for (const entry of entriesToUpload) {
+        if (bulkCancelledRef.current) break
+        // Upload sequentially to preserve stable progress/cancel behavior.
+        // This also avoids opening too many concurrent requests at once.
+        // eslint-disable-next-line no-await-in-loop
+        const uploadId = await uploadSingleFile(entry.file, entry.targetPath, defaultConflictMode)
+        dirFileNamesCacheRef.current.delete(normalizeUploadPath(entry.targetPath))
+        if (showBulkProgress) {
+          setBulkOperation((prev) => (prev
+            ? { ...prev, completed: prev.completed + 1, transferIds: [...(prev.transferIds || []), uploadId] }
+            : prev))
+        }
+      }
+      if (showBulkProgress) {
+        setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
+        setTimeout(() => setBulkOperation(null), 1500)
+      }
+    } catch (err) {
+      if (showBulkProgress) {
+        setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
+        setTimeout(() => setBulkOperation(null), 3000)
+      }
+      throw err
+    } finally {
+      if (showBulkProgress) bulkCancelRef.current = null
     }
-  }, [addAlert, askUploadConflictDecision, hasUploadConflict])
+  }, [addAlert, askUploadConflictDecision, hasUploadConflict, uploadStates])
 
   const handleUpload = async (e) => {
     const file = e.target.files[0]
@@ -394,8 +449,10 @@ export default function Files() {
       a.download = filename
       a.rel = 'noopener'
       a.click()
+      return downloadId
     } catch (err) {
       addAlert(err.message, 'error')
+      return null
     }
   }
 
@@ -548,6 +605,16 @@ export default function Files() {
   const selectableFiles = displayItems.filter((item) => item.is_file)
   const selectedFiles = selectableFiles.filter((item) => selectedFilePaths.includes(item.path))
   const allFilesSelected = selectableFiles.length > 0 && selectedFiles.length === selectableFiles.length
+  const bulkTransferStates = bulkOperation?.operation === 'upload'
+    ? uploadStates.filter((u) => (bulkOperation.transferIds || []).includes(u.id))
+    : bulkOperation?.operation === 'download'
+      ? downloadStates.filter((d) => (bulkOperation.transferIds || []).includes(d.id))
+      : []
+  const bulkTotalBytes = bulkTransferStates.reduce((sum, t) => sum + (t.totalBytes || 0), 0)
+  const bulkProcessedBytes = bulkTransferStates.reduce((sum, t) => sum + ((t.uploadedBytes ?? t.downloadedBytes) || 0), 0)
+  const bulkTotalChunks = bulkTransferStates.reduce((sum, t) => sum + (t.totalChunks || 0), 0)
+  const bulkProcessedChunks = bulkTransferStates.reduce((sum, t) => sum + ((t.uploadedChunks ?? t.downloadedChunks) || 0), 0)
+  const bulkWorkersStatus = bulkTransferStates.some((t) => t.workersStatus === 'waiting_rate_limit') ? 'waiting_rate_limit' : 'active'
 
   useEffect(() => {
     const visiblePaths = new Set(selectableFiles.map((item) => item.path))
@@ -578,10 +645,46 @@ export default function Files() {
   }
 
   const handleBulkDownload = async () => {
-    for (const item of selectedFiles) {
-      // Keep stable progress state behavior.
-      // eslint-disable-next-line no-await-in-loop
-      await handleDownload(item)
+    const targets = [...selectedFiles]
+    const bulkCancelledRef = { current: false }
+    setBulkOperation({
+      operation: 'download',
+      status: 'running',
+      total: targets.length,
+      completed: 0,
+      transferIds: [],
+    })
+    bulkCancelRef.current = async () => {
+      bulkCancelledRef.current = true
+      const currentIds = downloadStates
+        .filter((d) => d.status === 'downloading')
+        .map((d) => d.id)
+      await Promise.all(currentIds.map(async (downloadId) => {
+        await API.files.cancelDownload(downloadId).catch(() => {})
+        downloadProgressCancelsRef.current.get(downloadId)?.()
+        downloadProgressCancelsRef.current.delete(downloadId)
+      }))
+    }
+    try {
+      for (let i = 0; i < targets.length; i += 1) {
+        if (bulkCancelledRef.current) break
+        // Keep stable progress state behavior.
+        // eslint-disable-next-line no-await-in-loop
+        const downloadId = await handleDownload(targets[i])
+        setBulkOperation((prev) => (prev ? {
+          ...prev,
+          completed: i + 1,
+          transferIds: downloadId ? [...(prev.transferIds || []), downloadId] : (prev.transferIds || []),
+        } : prev))
+      }
+      setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
+      setTimeout(() => setBulkOperation(null), 1500)
+    } catch (err) {
+      setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
+      setTimeout(() => setBulkOperation(null), 3000)
+      addAlert(err.message, 'error')
+    } finally {
+      bulkCancelRef.current = null
     }
   }
 
@@ -592,17 +695,37 @@ export default function Files() {
 
   const handleBulkDelete = async () => {
     setBulkDeleteOpen(false)
+    const targets = [...selectedFiles]
+    const bulkCancelledRef = { current: false }
+    setBulkOperation({
+      operation: 'delete',
+      status: 'running',
+      total: targets.length,
+      completed: 0,
+      transferIds: [],
+    })
+    bulkCancelRef.current = () => { bulkCancelledRef.current = true }
     try {
-      for (const item of selectedFiles) {
+      let deletedCount = 0
+      for (let i = 0; i < targets.length; i += 1) {
+        if (bulkCancelledRef.current) break
         // Keep API calls sequential to avoid overwhelming the backend.
         // eslint-disable-next-line no-await-in-loop
-        await deleteSingleItem(item)
+        await deleteSingleItem(targets[i])
+        deletedCount += 1
+        setBulkOperation((prev) => (prev ? { ...prev, completed: i + 1 } : prev))
       }
-      addAlert(`Deleted ${selectedFiles.length} file(s)`, 'success')
+      setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
+      setTimeout(() => setBulkOperation(null), 1500)
+      addAlert(`Deleted ${deletedCount} file(s)`, 'success')
       setSelectedFilePaths([])
       loadTree()
     } catch (err) {
+      setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
+      setTimeout(() => setBulkOperation(null), 3000)
       addAlert(err.message, 'error')
+    } finally {
+      bulkCancelRef.current = null
     }
   }
 
@@ -645,6 +768,20 @@ export default function Files() {
           workersStatus={deleteState.workersStatus}
         />
       )}
+      {bulkOperation && (
+        <BulkOperationProgress
+          operation={bulkOperation.operation}
+          status={bulkOperation.status}
+          total={bulkOperation.total}
+          completed={bulkOperation.completed}
+          totalBytes={bulkTotalBytes}
+          processedBytes={bulkProcessedBytes}
+          totalChunks={bulkTotalChunks}
+          processedChunks={bulkProcessedChunks}
+          workersStatus={bulkWorkersStatus}
+          onCancel={bulkOperation.status === 'running' ? () => bulkCancelRef.current?.() : null}
+        />
+      )}
 
       <Box component="form" onSubmit={handleSearch} sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
         <TextField
@@ -681,14 +818,14 @@ export default function Files() {
           <Button size="small" onClick={() => setSelectedFilePaths([])} disabled={selectedFiles.length === 0}>
             Clear
           </Button>
-          <Button size="small" onClick={handleBulkDownload} disabled={selectedFiles.length === 0}>
+          <Button size="small" onClick={handleBulkDownload} disabled={selectedFiles.length === 0 || isBulkOperating}>
             Download selected
           </Button>
           <Button
             size="small"
             color="error"
             onClick={() => setBulkDeleteOpen(true)}
-            disabled={selectedFiles.length === 0}
+            disabled={selectedFiles.length === 0 || isBulkOperating}
           >
             Delete selected
           </Button>
@@ -819,9 +956,9 @@ export default function Files() {
 
       <NavigationBlockDialog
         blocker={blocker}
-        isUploading={isUploading}
-        isDownloading={isDownloading}
-        isDeleting={isDeleting}
+        isUploading={isUploading || isBulkUpload}
+        isDownloading={isDownloading || isBulkDownload}
+        isDeleting={isDeleting || isBulkDelete}
       />
 
       <MoveDialog
