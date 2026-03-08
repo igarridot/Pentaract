@@ -32,6 +32,7 @@ Files are split into **20 MB chunks**, uploaded through Telegram bot workers, an
 If you would like to support this project
 
 **BTC**: `bc1qgx8f76qy3eekfhtsr9eauqvjt30utvts4r8n4h`
+
 **ETH**: `0x032C9ABEb3055ae5E0e58df94a7309823e70eBcB`
 
 ## Prerequisites
