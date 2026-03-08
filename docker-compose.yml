@@ -7,7 +7,9 @@ services:
       chmod -R 0777 /data
       "
     volumes:
-      - ./persistent_data:/data
+      - type: bind
+        source: ./persistent_data
+        target: /data
 
   pentaract:
     image: norbega/pentaract:latest
@@ -36,7 +38,9 @@ services:
       POSTGRES_DB: ${DATABASE_NAME:-pentaract}
       PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
-      - ./persistent_data/db:/var/lib/postgresql/data
+      - type: bind
+        source: ./persistent_data/db
+        target: /var/lib/postgresql/data
 
   # Development service: compile and test inside containers
   dev:
@@ -48,9 +52,15 @@ services:
       - "${PORT:-8000}:8000"
       - "3000:3000"
     volumes:
-      - .:/app
-      - ./persistent_data/go-mod-cache:/go/pkg/mod
-      - ./persistent_data/go-build-cache:/tmp/go-build-cache
+      - type: bind
+        source: .
+        target: /app
+      - type: bind
+        source: ./persistent_data/go-mod-cache
+        target: /go/pkg/mod
+      - type: bind
+        source: ./persistent_data/go-build-cache
+        target: /tmp/go-build-cache
     working_dir: /app
     user: "${UID:-1000}:${GID:-1000}"
     environment:

@@ -154,6 +154,14 @@ Persistent data lives in `persistent_data/`:
 - `persistent_data/go-mod-cache` - Go module cache (dev)
 - `persistent_data/go-build-cache` - Go build cache (dev)
 
+Compose uses bind mounts to `./persistent_data/*` (not named Docker volumes).
+If you used older versions with named volumes, remove them once:
+
+```bash
+docker volume ls | grep pentaract
+docker volume rm <old_volume_name>
+```
+
 Full local reset:
 
 ```bash
