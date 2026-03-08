@@ -86,6 +86,22 @@ func (s *FilesService) Download(ctx context.Context, userID, storageID uuid.UUID
 	return data, file.Path, nil
 }
 
+func (s *FilesService) GetFileForDownload(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
+	if err != nil {
+		return nil, err
+	}
+	if !ok {
+		return nil, domain.ErrForbidden()
+	}
+
+	return s.filesRepo.GetByPath(ctx, storageID, path)
+}
+
+func (s *FilesService) DownloadFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+	return s.manager.DownloadToWriter(ctx, file, w, progress)
+}
+
 func (s *FilesService) ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error) {
 	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
 	if err != nil {

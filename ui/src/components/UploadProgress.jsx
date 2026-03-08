@@ -47,14 +47,14 @@ export default function UploadProgress({ filename, totalBytes, uploadedBytes, to
         overflow: 'hidden',
       }}
     >
-      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 1, minWidth: 0 }}>
-        <Typography variant="body2" noWrap sx={{ fontWeight: 500, flexGrow: 1, minWidth: 0 }}>
+      <Box sx={{ display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, justifyContent: 'space-between', mb: 1, minWidth: 0 }}>
+        <Typography variant="body2" sx={{ fontWeight: 500, flexGrow: 1, minWidth: 0, pr: 1, wordBreak: 'break-word' }}>
           {isError ? `Failed` : isActive ? `Uploading` : `Complete`}
           <Typography
             component="span"
             variant="body2"
             color="text.secondary"
-            sx={{ ml: 0.5, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}
+            sx={{ ml: 0.5, maxWidth: '100%', overflowWrap: 'anywhere' }}
           >
             {filename}
           </Typography>

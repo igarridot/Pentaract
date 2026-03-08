@@ -181,74 +181,64 @@ export default function Files() {
 
   const handleDownload = async (item) => {
     try {
-      let blob, filename
-      if (item.is_file) {
-        blob = await API.files.download(storageId, item.path)
-        filename = item.name
-      } else {
-        if (cancelDownloadProgressRef.current) cancelDownloadProgressRef.current()
-        const downloadId = createUploadId()
-        downloadIdRef.current = downloadId
-        filename = item.name + '.zip'
-        setDownloadState({
+      if (cancelDownloadProgressRef.current) cancelDownloadProgressRef.current()
+      const downloadId = createUploadId()
+      downloadIdRef.current = downloadId
+      const filename = item.is_file ? item.name : `${item.name}.zip`
+
+      setDownloadState({
+        filename,
+        totalBytes: 0,
+        downloadedBytes: 0,
+        totalChunks: 0,
+        downloadedChunks: 0,
+        status: 'downloading',
+      })
+
+      const cancel = API.files.subscribeDownloadProgress(downloadId, (data) => {
+        setDownloadState((prev) => ({
+          ...prev,
           filename,
-          totalBytes: 0,
-          downloadedBytes: 0,
-          totalChunks: 0,
-          downloadedChunks: 0,
-          status: 'downloading',
-        })
-        const cancel = API.files.subscribeDownloadProgress(downloadId, (data) => {
-          setDownloadState((prev) => ({
-            ...prev,
-            filename,
-            totalBytes: data.total_bytes || prev?.totalBytes || 0,
-            downloadedBytes: data.downloaded_bytes || 0,
-            totalChunks: data.total || prev?.totalChunks || 0,
-            downloadedChunks: data.downloaded || 0,
-            status: data.status,
-          }))
+          totalBytes: data.total_bytes || prev?.totalBytes || 0,
+          downloadedBytes: data.downloaded_bytes || 0,
+          totalChunks: data.total || prev?.totalChunks || 0,
+          downloadedChunks: data.downloaded || 0,
+          status: data.status,
+        }))
 
-          if (data.status === 'done') {
-            cancel()
-            cancelDownloadProgressRef.current = null
-            downloadIdRef.current = null
-            setTimeout(() => setDownloadState(null), 2000)
-          }
-          if (data.status === 'error') {
-            cancel()
-            cancelDownloadProgressRef.current = null
-            downloadIdRef.current = null
-            addAlert('Download failed unexpectedly. Please try again.', 'error', { persistent: true })
-            setTimeout(() => setDownloadState(null), 3000)
-          }
-        })
-        cancelDownloadProgressRef.current = cancel
+        if (data.status === 'done') {
+          cancel()
+          cancelDownloadProgressRef.current = null
+          downloadIdRef.current = null
+          setTimeout(() => setDownloadState(null), 2000)
+        }
+        if (data.status === 'error') {
+          cancel()
+          cancelDownloadProgressRef.current = null
+          downloadIdRef.current = null
+          addAlert('Download failed unexpectedly. Please try again.', 'error', { persistent: true })
+          setTimeout(() => setDownloadState(null), 3000)
+        }
+      })
+      cancelDownloadProgressRef.current = cancel
 
-        const url = API.files.downloadDirUrl(storageId, item.path, downloadId)
-        const a = document.createElement('a')
-        a.href = url
-        a.download = filename
-        a.rel = 'noopener'
-        a.click()
-        return
-      }
-      const url = URL.createObjectURL(blob)
+      const url = item.is_file
+        ? API.files.downloadFileUrl(storageId, item.path, downloadId)
+        : API.files.downloadDirUrl(storageId, item.path, downloadId)
+
       const a = document.createElement('a')
       a.href = url
       a.download = filename
+      a.rel = 'noopener'
       a.click()
-      URL.revokeObjectURL(url)
     } catch (err) {
-      if (!item.is_file) {
-        if (downloadIdRef.current && cancelDownloadProgressRef.current) {
-          cancelDownloadProgressRef.current()
-          cancelDownloadProgressRef.current = null
-          downloadIdRef.current = null
-        }
-        setDownloadState((prev) => (prev ? { ...prev, status: 'error' } : null))
-        setTimeout(() => setDownloadState(null), 3000)
+      if (downloadIdRef.current && cancelDownloadProgressRef.current) {
+        cancelDownloadProgressRef.current()
+        cancelDownloadProgressRef.current = null
+        downloadIdRef.current = null
       }
+      setDownloadState((prev) => (prev ? { ...prev, status: 'error' } : null))
+      setTimeout(() => setDownloadState(null), 3000)
       addAlert(err.message, 'error')
     }
   }

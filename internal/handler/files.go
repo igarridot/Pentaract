@@ -340,22 +340,60 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	data, filePath, err := h.svc.Download(r.Context(), user.ID, storageID, path)
+	file, err := h.svc.GetFileForDownload(r.Context(), user.ID, storageID, path)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	filename := filepath.Base(filePath)
+	downloadID := r.URL.Query().Get("download_id")
+	var tracker *downloadTracker
+	if downloadID != "" {
+		tracker = &downloadTracker{progress: &service.DownloadProgress{}}
+		h.mu.Lock()
+		h.downloads[downloadID] = tracker
+		h.mu.Unlock()
+
+		defer func() {
+			time.AfterFunc(5*time.Minute, func() {
+				h.mu.Lock()
+				delete(h.downloads, downloadID)
+				h.mu.Unlock()
+			})
+		}()
+	}
+
+	filename := filepath.Base(file.Path)
 	contentType := mime.TypeByExtension(filepath.Ext(filename))
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
 
+	var progress *service.DownloadProgress
+	if tracker != nil {
+		progress = tracker.progress
+	}
+
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
 	w.WriteHeader(http.StatusOK)
-	w.Write(data)
+
+	if err := h.svc.DownloadFileToWriter(r.Context(), file, w, progress); err != nil {
+		log.Printf("[download-file] error: %v", err)
+		if tracker != nil {
+			h.mu.Lock()
+			tracker.done = true
+			tracker.err = err
+			h.mu.Unlock()
+		}
+		return
+	}
+
+	if tracker != nil {
+		h.mu.Lock()
+		tracker.done = true
+		h.mu.Unlock()
+	}
 }
 
 func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
@@ -438,6 +476,7 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
+	waitStart := time.Now()
 
 	for {
 		select {
@@ -451,7 +490,13 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 		h.mu.RUnlock()
 
 		if !exists {
-			fmt.Fprintf(w, "data: {\"status\":\"done\"}\n\n")
+			// Handle race where client subscribes just before download handler creates the tracker.
+			if time.Since(waitStart) < 15*time.Second {
+				fmt.Fprintf(w, "data: {\"total\":0,\"downloaded\":0,\"total_bytes\":0,\"downloaded_bytes\":0,\"status\":\"downloading\"}\n\n")
+				flusher.Flush()
+				continue
+			}
+			fmt.Fprintf(w, "data: {\"status\":\"error\"}\n\n")
 			flusher.Flush()
 			return
 		}

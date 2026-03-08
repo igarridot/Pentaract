@@ -103,14 +103,16 @@ const API = {
     tree: (storageId, path) =>
       apiRequest(`/storages/${storageId}/files/tree/${path || ''}`),
 
-    download: async (storageId, path) => {
+    downloadFileUrl: (storageId, path, downloadId) => {
       const token = localStorage.getItem('access_token')
+      if (!token) throw new Error('Not authenticated')
       const base = import.meta.env.VITE_API_BASE || '/api'
-      const resp = await fetch(`${base}/storages/${storageId}/files/download/${path}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const safePath = encodeURI(path || '')
+      const params = new URLSearchParams({
+        download_id: downloadId,
+        access_token: token,
       })
-      if (!resp.ok) throw new Error('Download failed')
-      return resp.blob()
+      return `${base}/storages/${storageId}/files/download/${safePath}?${params.toString()}`
     },
 
     downloadDirUrl: (storageId, path, downloadId) => {

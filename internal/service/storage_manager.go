@@ -274,6 +274,11 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 		return domain.ErrNotFound("file chunks")
 	}
 
+	if progress != nil && progress.TotalChunks == 0 && progress.TotalBytes == 0 {
+		progress.TotalChunks = int64(len(chunks))
+		progress.TotalBytes = file.Size
+	}
+
 	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
 		return fmt.Errorf("getting storage: %w", err)
