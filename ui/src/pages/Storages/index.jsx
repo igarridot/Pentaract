@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useRef } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
   Typography, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
@@ -16,6 +16,7 @@ import { convertSize } from '../../common/size_converter'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import Access from '../../components/Access'
 import GrantAccess from '../../components/GrantAccess'
+import DeleteProgress from '../../components/DeleteProgress'
 
 export default function Storages() {
   const navigate = useNavigate()
@@ -26,6 +27,21 @@ export default function Storages() {
   const [accessUsers, setAccessUsers] = useState([])
   const [grantOpen, setGrantOpen] = useState(false)
   const [editUser, setEditUser] = useState(null)
+  const [deleteState, setDeleteState] = useState(null)
+  const cancelDeleteProgressRef = useRef(null)
+
+  const createOperationId = () => {
+    const cryptoObj = globalThis.crypto
+    if (cryptoObj?.randomUUID) return cryptoObj.randomUUID()
+    if (cryptoObj?.getRandomValues) {
+      const bytes = cryptoObj.getRandomValues(new Uint8Array(16))
+      bytes[6] = (bytes[6] & 0x0f) | 0x40
+      bytes[8] = (bytes[8] & 0x3f) | 0x80
+      const hex = [...bytes].map((b) => b.toString(16).padStart(2, '0')).join('')
+      return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+    }
+    return `${Date.now()}-${Math.random().toString(16).slice(2)}`
+  }
 
   const load = async () => {
     try {
@@ -37,14 +53,55 @@ export default function Storages() {
   }
 
   useEffect(() => { load() }, [])
+  useEffect(() => () => {
+    if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
+  }, [])
 
   const handleDelete = async () => {
     try {
-      await API.storages.delete(deleteTarget.id)
+      const deleteId = createOperationId()
+      if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
+      setDeleteState({
+        label: deleteTarget?.name || 'storage',
+        totalChunks: 0,
+        deletedChunks: 0,
+        status: 'deleting',
+        workersStatus: 'active',
+      })
+
+      const cancel = API.files.subscribeDeleteProgress(deleteId, (data) => {
+        setDeleteState((prev) => ({
+          ...prev,
+          totalChunks: data.total || prev?.totalChunks || 0,
+          deletedChunks: data.deleted || 0,
+          status: data.status,
+          workersStatus: data.workers_status || prev?.workersStatus || 'active',
+        }))
+
+        if (data.status === 'done') {
+          cancel()
+          setTimeout(() => setDeleteState(null), 1500)
+        }
+        if (data.status === 'error') {
+          cancel()
+          setTimeout(() => setDeleteState(null), 3000)
+        }
+      })
+      cancelDeleteProgressRef.current = cancel
+
+      await API.storages.delete(deleteTarget.id, deleteId)
+      cancel()
+      cancelDeleteProgressRef.current = null
       setDeleteTarget(null)
       addAlert('Storage deleted', 'success')
       load()
     } catch (err) {
+      if (cancelDeleteProgressRef.current) {
+        cancelDeleteProgressRef.current()
+        cancelDeleteProgressRef.current = null
+      }
+      setDeleteState((prev) => (prev ? { ...prev, status: 'error' } : null))
+      setTimeout(() => setDeleteState(null), 3000)
       addAlert(err.message, 'error')
     }
   }
@@ -91,6 +148,15 @@ export default function Storages() {
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 3 }}>Storages</Typography>
+      {deleteState && (
+        <DeleteProgress
+          label={deleteState.label}
+          totalChunks={deleteState.totalChunks}
+          deletedChunks={deleteState.deletedChunks}
+          status={deleteState.status}
+          workersStatus={deleteState.workersStatus}
+        />
+      )}
 
       <Box sx={{
         bgcolor: 'background.paper',

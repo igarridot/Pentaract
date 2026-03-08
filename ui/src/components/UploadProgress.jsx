@@ -3,7 +3,7 @@ import { Box, LinearProgress, Typography, IconButton } from '@mui/material'
 import { Close as CloseIcon } from '@mui/icons-material'
 import { convertSize } from '../common/size_converter'
 
-export default function UploadProgress({ filename, totalBytes, uploadedBytes, totalChunks, uploadedChunks, status, onCancel }) {
+export default function UploadProgress({ filename, totalBytes, uploadedBytes, totalChunks, uploadedChunks, status, workersStatus, onCancel }) {
   const percent = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0
   const isActive = status === 'uploading'
   const isError = status === 'error'
@@ -23,6 +23,7 @@ export default function UploadProgress({ filename, totalBytes, uploadedBytes, to
 
   const speed = speedRef.current.speed
   const speedText = speed > 0 ? `${convertSize(speed)}/s` : ''
+  const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
 
   const chunkText = totalChunks > 0
     ? `${uploadedChunks}/${totalChunks} chunks`
@@ -76,7 +77,7 @@ export default function UploadProgress({ filename, totalBytes, uploadedBytes, to
           {progressText}
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ textAlign: { xs: 'left', sm: 'right' } }}>
-          {[chunkText && isActive ? chunkText : '', speedText && isActive ? speedText : ''].filter(Boolean).join(' \u00b7 ')}
+          {[workersText, chunkText && isActive ? chunkText : '', speedText && isActive ? speedText : ''].filter(Boolean).join(' \u00b7 ')}
         </Typography>
       </Box>
     </Box>

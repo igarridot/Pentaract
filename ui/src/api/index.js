@@ -64,7 +64,8 @@ const API = {
     list: () => apiRequest('/storages'),
     create: (name, chat_id) => apiRequest('/storages', 'POST', { name, chat_id }),
     get: (id) => apiRequest(`/storages/${id}`),
-    delete: (id) => apiRequest(`/storages/${id}`, 'DELETE'),
+    delete: (id, deleteId) =>
+      apiRequest(`/storages/${id}${deleteId ? `?delete_id=${encodeURIComponent(deleteId)}` : ''}`, 'DELETE'),
   },
 
   access: {
@@ -130,8 +131,8 @@ const API = {
     search: (storageId, basePath, searchPath) =>
       apiRequest(`/storages/${storageId}/files/search/${basePath || ''}?search_path=${encodeURIComponent(searchPath)}`),
 
-    delete: (storageId, path) =>
-      apiRequest(`/storages/${storageId}/files/${path}`, 'DELETE'),
+    delete: (storageId, path, deleteId) =>
+      apiRequest(`/storages/${storageId}/files/${path}${deleteId ? `?delete_id=${encodeURIComponent(deleteId)}` : ''}`, 'DELETE'),
 
     cancelUpload: (uploadId) =>
       apiRequest(`/upload_cancel/${uploadId}`, 'POST'),
@@ -147,6 +148,13 @@ const API = {
       const token = localStorage.getItem('access_token')
       const base = import.meta.env.VITE_API_BASE || '/api'
       const url = `${base}/download_progress?download_id=${downloadId}`
+      return subscribeSSE(url, token, onProgress)
+    },
+
+    subscribeDeleteProgress: (deleteId, onProgress) => {
+      const token = localStorage.getItem('access_token')
+      const base = import.meta.env.VITE_API_BASE || '/api'
+      const url = `${base}/delete_progress?delete_id=${deleteId}`
       return subscribeSSE(url, token, onProgress)
     },
   },

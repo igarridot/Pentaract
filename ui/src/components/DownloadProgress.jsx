@@ -2,7 +2,7 @@ import { useEffect, useRef } from 'react'
 import { Box, LinearProgress, Typography } from '@mui/material'
 import { convertSize } from '../common/size_converter'
 
-export default function DownloadProgress({ filename, totalBytes, downloadedBytes, totalChunks, downloadedChunks, status }) {
+export default function DownloadProgress({ filename, totalBytes, downloadedBytes, totalChunks, downloadedChunks, status, workersStatus }) {
   const percent = totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0
   const isActive = status === 'downloading'
   const isError = status === 'error'
@@ -23,6 +23,7 @@ export default function DownloadProgress({ filename, totalBytes, downloadedBytes
 
   const speed = speedRef.current.speed
   const speedText = speed > 0 && isActive ? `${convertSize(speed)}/s` : ''
+  const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
   const chunkText = totalChunks > 0
     ? `${downloadedChunks}/${totalChunks} chunks \u00b7 ${pendingChunks} pending`
     : `${downloadedChunks} chunks`
@@ -69,7 +70,7 @@ export default function DownloadProgress({ filename, totalBytes, downloadedBytes
           {progressText}
         </Typography>
         <Typography variant="caption" color="text.secondary" sx={{ textAlign: { xs: 'left', sm: 'right' } }}>
-          {[chunkText, speedText].filter(Boolean).join(' \u00b7 ')}
+          {[workersText, chunkText, speedText].filter(Boolean).join(' \u00b7 ')}
         </Typography>
       </Box>
     </Box>

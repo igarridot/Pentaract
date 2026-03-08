@@ -224,6 +224,32 @@ func (r *FilesRepo) ListChunksByPath(ctx context.Context, storageID uuid.UUID, p
 	return chunks, rows.Err()
 }
 
+// ListChunksByStorage returns all chunks for uploaded files in a storage.
+func (r *FilesRepo) ListChunksByStorage(ctx context.Context, storageID uuid.UUID) ([]domain.FileChunk, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT fc.id, fc.file_id, fc.telegram_file_id, fc.telegram_message_id, fc.position
+		FROM file_chunks fc
+		JOIN files f ON f.id = fc.file_id
+		WHERE f.storage_id = $1
+		ORDER BY fc.file_id, fc.position`,
+		storageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var chunks []domain.FileChunk
+	for rows.Next() {
+		var c domain.FileChunk
+		if err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.TelegramMessageID, &c.Position); err != nil {
+			return nil, err
+		}
+		chunks = append(chunks, c)
+	}
+	return chunks, rows.Err()
+}
+
 func (r *FilesRepo) Delete(ctx context.Context, storageID uuid.UUID, path string) error {
 	// Delete exact file or all files under folder path
 	ct, err := r.pool.Exec(ctx,

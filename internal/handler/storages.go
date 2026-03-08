@@ -78,9 +78,28 @@ func (h *StoragesHandler) Delete(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.Delete(r.Context(), user.ID, storageID); err != nil {
+	deleteID := r.URL.Query().Get("delete_id")
+	var tracker *deleteTracker
+	if deleteID != "" {
+		tracker = startDeleteTracker(deleteID, storageID)
+		defer scheduleDeleteTrackerCleanup(deleteID)
+	}
+
+	var progress *service.DeleteProgress
+	if tracker != nil {
+		progress = tracker.progress
+	}
+
+	if err := h.svc.Delete(r.Context(), user.ID, storageID, progress); err != nil {
+		if tracker != nil {
+			markDeleteTrackerDone(tracker, err)
+		}
 		writeError(w, err)
 		return
+	}
+
+	if tracker != nil {
+		markDeleteTrackerDone(tracker, nil)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

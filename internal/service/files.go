@@ -126,7 +126,7 @@ func (s *FilesService) Search(ctx context.Context, userID, storageID uuid.UUID, 
 	return s.filesRepo.Search(ctx, storageID, basePath, searchPath)
 }
 
-func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, path string) error {
+func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *DeleteProgress) error {
 	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessWrite)
 	if err != nil {
 		return err
@@ -147,14 +147,16 @@ func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, 
 		return err
 	}
 
-	// Delete from DB first
-	if err := s.filesRepo.Delete(ctx, storageID, path); err != nil {
-		return err
+	// Delete from Telegram first. DB delete is allowed only after Telegram cleanup succeeds.
+	if len(chunks) > 0 {
+		if err := s.manager.DeleteFromTelegram(ctx, *storage, chunks, progress); err != nil {
+			return err
+		}
 	}
 
-	// Delete from Telegram (best-effort, don't fail if this errors)
-	if len(chunks) > 0 {
-		go s.manager.DeleteFromTelegram(context.Background(), *storage, chunks)
+	// Delete from DB only after Telegram deletion has been confirmed.
+	if err := s.filesRepo.Delete(ctx, storageID, path); err != nil {
+		return err
 	}
 
 	return nil
@@ -233,4 +235,11 @@ func (s *FilesService) Move(ctx context.Context, userID, storageID uuid.UUID, ol
 	}
 
 	return s.filesRepo.Move(ctx, storageID, oldPath, newPath)
+}
+
+func (s *FilesService) WorkersStatus(storageID uuid.UUID) string {
+	if s.manager != nil && s.manager.scheduler != nil && s.manager.scheduler.IsWaiting(storageID) {
+		return "waiting_rate_limit"
+	}
+	return "active"
 }
