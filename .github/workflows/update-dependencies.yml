@@ -1,0 +1,45 @@
+name: Update Dependencies
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths:
+      - ".github/workflows/update-dependencies.yml"
+      - "updatecli/**"
+  schedule:
+    - cron: "0 5 * * 1"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  pull-requests: write
+
+jobs:
+  updatecli:
+    name: Update dependencies with Updatecli
+    runs-on: ubuntu-latest
+    env:
+      UPDATECLI_GITHUB_OWNER: ${{ github.repository_owner }}
+      UPDATECLI_GITHUB_REPOSITORY: ${{ github.event.repository.name }}
+      UPDATECLI_GITHUB_DEFAULT_BRANCH: ${{ github.event.repository.default_branch }}
+      UPDATECLI_GITHUB_USERNAME: github-actions[bot]
+      UPDATECLI_GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Run Updatecli in dry-run mode
+        uses: updatecli/updatecli-action@v2
+        with:
+          command: diff
+          config: updatecli/updatecli.d
+
+      - name: Run Updatecli and create pull requests
+        if: github.event_name != 'push' || github.ref_name == github.event.repository.default_branch
+        uses: updatecli/updatecli-action@v2
+        with:
+          command: apply
+          config: updatecli/updatecli.d
