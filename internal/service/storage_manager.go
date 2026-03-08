@@ -22,6 +22,7 @@ type StorageManager struct {
 	storagesRepo *repository.StoragesRepo
 	scheduler    *WorkerScheduler
 	tgClient     *telegram.Client
+	chunkCipher  *ChunkCipher
 }
 
 func NewStorageManager(
@@ -29,12 +30,14 @@ func NewStorageManager(
 	storagesRepo *repository.StoragesRepo,
 	scheduler *WorkerScheduler,
 	tgClient *telegram.Client,
+	encryptionSecret string,
 ) *StorageManager {
 	return &StorageManager{
 		filesRepo:    filesRepo,
 		storagesRepo: storagesRepo,
 		scheduler:    scheduler,
 		tgClient:     tgClient,
+		chunkCipher:  NewChunkCipher(encryptionSecret),
 	}
 }
 
@@ -161,8 +164,13 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 
 			log.Printf("[upload] chunk %d of file=%s via worker=%s chat=%s", pos, file.Path, wt.Name, storage.Name)
 
+			encryptedChunkData, err := m.chunkCipher.EncryptChunk(file.ID, pos, chunkData)
+			if err != nil {
+				return fmt.Errorf("encrypting chunk %d: %w", pos, err)
+			}
+
 			filename := telegram.GenerateChunkFilename(file.ID, int(pos))
-			result, err := m.tgClient.Upload(wt.Token, storage.ChatID, chunkData, filename)
+			result, err := m.tgClient.Upload(wt.Token, storage.ChatID, encryptedChunkData, filename)
 			if err != nil {
 				return fmt.Errorf("uploading chunk %d: %w", pos, err)
 			}
@@ -319,6 +327,10 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 		if err != nil {
 			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
 		}
+		data, err = m.chunkCipher.DecryptChunk(file.ID, chunk.Position, data)
+		if err != nil {
+			return fmt.Errorf("decrypting chunk %d: %w", chunk.Position, err)
+		}
 
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
@@ -359,6 +371,10 @@ func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (
 	data, err := m.tgClient.Download(ctx, wt.Token, last.TelegramFileID)
 	if err != nil {
 		return 0, fmt.Errorf("downloading last chunk %d: %w", last.Position, err)
+	}
+	data, err = m.chunkCipher.DecryptChunk(file.ID, last.Position, data)
+	if err != nil {
+		return 0, fmt.Errorf("decrypting last chunk %d: %w", last.Position, err)
 	}
 
 	return int64(len(chunks)-1)*chunkSize + int64(len(data)), nil
@@ -410,6 +426,10 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 		data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
 		if err != nil {
 			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
+		}
+		data, err = m.chunkCipher.DecryptChunk(file.ID, chunk.Position, data)
+		if err != nil {
+			return fmt.Errorf("decrypting chunk %d: %w", chunk.Position, err)
 		}
 
 		chunkStart := int64(i) * chunkSize

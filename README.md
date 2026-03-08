@@ -16,6 +16,7 @@ Files are split into **20 MB chunks**, uploaded through Telegram bot workers, an
 ## Features
 
 - **Chunked upload/download** with parallel worker scheduling and Telegram rate-limit handling.
+- **Encrypted chunk storage in Telegram** (AES-GCM per chunk, transparent decrypt on download).
 - **Real-time progress** (SSE) for uploads, downloads, and deletes.
 - **Multiple concurrent operations** in UI, each with its own progress indicator.
 - **Per-operation cancellation** for uploads and downloads.
@@ -125,36 +126,27 @@ All settings are via environment variables (see `.env.example`):
 | `make ui-install` | Install UI dependencies inside dev container |
 | `make ui-build` | Build UI bundle inside dev container |
 | `make dev-shell` | Open a shell inside the dev container |
+| `make dev-up` | Start containerized dev stack (DB + API + UI) |
 
-### Typical workflow
+### Typical development workflow
 
 ```bash
 cp .env.example .env
-make mod-tidy
-make ui-install
-make up
-```
-
-Follow logs:
-
-```bash
-docker compose logs -f pentaract
-```
-
-## Testing
-
-```bash
-# Containerized (recommended)
 make test
-
-# Local
-go test ./...
-cd ui && pnpm test
+make dev-up
 ```
 
 CI runs automatically via GitHub Actions (`.github/workflows/tests.yml`).
 
-Dependency updates are automated with Updatecli (`.github/workflows/update-dependencies.yml`), covering Go modules, npm packages, Docker images, and GitHub Actions versions.
+Dependency updates are automated with:
+- Dependabot (`.github/dependabot.yml`) for Go modules, npm, Dockerfiles, and GitHub Actions.
+- Updatecli (`.github/workflows/update-dependencies.yml`) for Docker Compose image updates.
+
+## Security Notes
+
+- Chunk encryption is enabled for uploads to Telegram using AES-GCM with per-chunk random nonces.
+- The decryption key is derived from `SECRET_KEY`; keep this secret strong and private.
+- Legacy plaintext chunks (uploaded before encryption was enabled) remain downloadable for backward compatibility.
 
 ## Persistent Data
 
