@@ -345,3 +345,84 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 	log.Printf("[download] completed file=%s storage=%s chat=%s", file.Path, storage.Name, storage.Name)
 	return nil
 }
+
+// DownloadRangeToWriter streams only the requested byte range [start, end] (inclusive).
+// It downloads only the needed Telegram chunks and trims boundaries in memory.
+func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end int64, progress *DownloadProgress) error {
+	if start < 0 || end < start || end >= file.Size {
+		return fmt.Errorf("invalid range %d-%d for file size %d", start, end, file.Size)
+	}
+
+	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
+	if err != nil {
+		return fmt.Errorf("listing chunks: %w", err)
+	}
+	if len(chunks) == 0 {
+		return domain.ErrNotFound("file chunks")
+	}
+
+	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
+	if err != nil {
+		return fmt.Errorf("getting storage: %w", err)
+	}
+
+	if progress != nil && progress.TotalBytes == 0 {
+		progress.TotalBytes = end - start + 1
+	}
+
+	startChunk := int(start / chunkSize)
+	endChunk := int(end / chunkSize)
+	if startChunk < 0 || endChunk >= len(chunks) {
+		return fmt.Errorf("range maps to invalid chunk indexes %d-%d (len=%d)", startChunk, endChunk, len(chunks))
+	}
+
+	for i := startChunk; i <= endChunk; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		chunk := chunks[i]
+		wt, err := m.scheduler.GetToken(ctx, storage.ID)
+		if err != nil {
+			return fmt.Errorf("getting token for chunk %d: %w", chunk.Position, err)
+		}
+
+		data, err := m.tgClient.Download(wt.Token, chunk.TelegramFileID)
+		if err != nil {
+			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
+		}
+
+		chunkStart := int64(i) * chunkSize
+		left := int64(0)
+		if start > chunkStart {
+			left = start - chunkStart
+		}
+		right := int64(len(data))
+		chunkEndExclusive := chunkStart + int64(len(data))
+		if end+1 < chunkEndExclusive {
+			right = end + 1 - chunkStart
+		}
+		if left < 0 {
+			left = 0
+		}
+		if right > int64(len(data)) {
+			right = int64(len(data))
+		}
+		if left >= right {
+			continue
+		}
+
+		if _, err := w.Write(data[left:right]); err != nil {
+			return fmt.Errorf("writing ranged chunk %d: %w", chunk.Position, err)
+		}
+
+		if progress != nil {
+			progress.DownloadedChunks.Add(1)
+			progress.DownloadedBytes.Add(right - left)
+		}
+	}
+
+	return nil
+}

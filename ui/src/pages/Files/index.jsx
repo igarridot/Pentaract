@@ -281,7 +281,7 @@ export default function Files() {
   const getMediaType = (name) => {
     const ext = name?.split('.').pop()?.toLowerCase() || ''
     if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image'
-    if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext)) return 'video'
+    if (['mp4', 'webm', 'ogg', 'mov', 'm4v', 'mkv'].includes(ext)) return 'video'
     return null
   }
 
