@@ -95,6 +95,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Delete("/storages/{storageID}/files/*", filesH.DeleteFile)
 
 			r.Get("/upload_progress", filesH.UploadProgress)
+			r.Get("/download_progress", filesH.DownloadProgress)
 			r.Post("/upload_cancel/{uploadID}", filesH.CancelUpload)
 		})
 	})

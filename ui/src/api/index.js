@@ -1,5 +1,56 @@
 import { apiRequest, apiMultipartRequest } from './request'
 
+function subscribeSSE(url, token, onProgress) {
+  let stopped = false
+  let currentController = null
+
+  const fetchSSE = async () => {
+    while (!stopped) {
+      const controller = new AbortController()
+      currentController = controller
+      try {
+        const resp = await fetch(url, {
+          headers: { Authorization: `Bearer ${token}` },
+          signal: controller.signal,
+        })
+        const reader = resp.body.getReader()
+        const decoder = new TextDecoder()
+        let buffer = ''
+
+        while (true) {
+          const { done, value } = await reader.read()
+          if (done) break
+          buffer += decoder.decode(value, { stream: true })
+
+          const lines = buffer.split('\n')
+          buffer = lines.pop() || ''
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              try {
+                const data = JSON.parse(line.slice(6))
+                onProgress(data)
+                if (data.status === 'done' || data.status === 'error') {
+                  stopped = true
+                  return
+                }
+              } catch {}
+            }
+          }
+        }
+      } catch (err) {
+        if (err.name === 'AbortError' || stopped) return
+      }
+      if (!stopped) {
+        await new Promise((r) => setTimeout(r, 1000))
+      }
+    }
+  }
+
+  fetchSSE()
+  return () => { stopped = true; if (currentController) currentController.abort() }
+}
+
 const API = {
   auth: {
     login: (email, password) => apiRequest('/auth/login', 'POST', { email, password }, false),
@@ -52,24 +103,28 @@ const API = {
     tree: (storageId, path) =>
       apiRequest(`/storages/${storageId}/files/tree/${path || ''}`),
 
-    download: async (storageId, path) => {
+    downloadFileUrl: (storageId, path, downloadId) => {
       const token = localStorage.getItem('access_token')
+      if (!token) throw new Error('Not authenticated')
       const base = import.meta.env.VITE_API_BASE || '/api'
-      const resp = await fetch(`${base}/storages/${storageId}/files/download/${path}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const safePath = encodeURI(path || '')
+      const params = new URLSearchParams({
+        download_id: downloadId,
+        access_token: token,
       })
-      if (!resp.ok) throw new Error('Download failed')
-      return resp.blob()
+      return `${base}/storages/${storageId}/files/download/${safePath}?${params.toString()}`
     },
 
-    downloadDir: async (storageId, path) => {
+    downloadDirUrl: (storageId, path, downloadId) => {
       const token = localStorage.getItem('access_token')
+      if (!token) throw new Error('Not authenticated')
       const base = import.meta.env.VITE_API_BASE || '/api'
-      const resp = await fetch(`${base}/storages/${storageId}/files/download_dir/${path || ''}`, {
-        headers: { Authorization: `Bearer ${token}` },
+      const safePath = encodeURI(path || '')
+      const params = new URLSearchParams({
+        download_id: downloadId,
+        access_token: token,
       })
-      if (!resp.ok) throw new Error('Download failed')
-      return resp.blob()
+      return `${base}/storages/${storageId}/files/download_dir/${safePath}?${params.toString()}`
     },
 
     search: (storageId, basePath, searchPath) =>
@@ -85,55 +140,14 @@ const API = {
       const token = localStorage.getItem('access_token')
       const base = import.meta.env.VITE_API_BASE || '/api'
       const url = `${base}/upload_progress?upload_id=${uploadId}`
-      let stopped = false
-      let currentController = null
+      return subscribeSSE(url, token, onProgress)
+    },
 
-      const fetchSSE = async () => {
-        while (!stopped) {
-          const controller = new AbortController()
-          currentController = controller
-          try {
-            const resp = await fetch(url, {
-              headers: { Authorization: `Bearer ${token}` },
-              signal: controller.signal,
-            })
-            const reader = resp.body.getReader()
-            const decoder = new TextDecoder()
-            let buffer = ''
-
-            while (true) {
-              const { done, value } = await reader.read()
-              if (done) break
-              buffer += decoder.decode(value, { stream: true })
-
-              const lines = buffer.split('\n')
-              buffer = lines.pop() || ''
-
-              for (const line of lines) {
-                if (line.startsWith('data: ')) {
-                  try {
-                    const data = JSON.parse(line.slice(6))
-                    onProgress(data)
-                    if (data.status === 'done' || data.status === 'error') {
-                      stopped = true
-                      return
-                    }
-                  } catch {}
-                }
-              }
-            }
-          } catch (err) {
-            if (err.name === 'AbortError' || stopped) return
-          }
-          // Reconnect after a short delay
-          if (!stopped) {
-            await new Promise((r) => setTimeout(r, 1000))
-          }
-        }
-      }
-
-      fetchSSE()
-      return () => { stopped = true; if (currentController) currentController.abort() }
+    subscribeDownloadProgress: (downloadId, onProgress) => {
+      const token = localStorage.getItem('access_token')
+      const base = import.meta.env.VITE_API_BASE || '/api'
+      const url = `${base}/download_progress?download_id=${downloadId}`
+      return subscribeSSE(url, token, onProgress)
     },
   },
 }

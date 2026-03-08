@@ -47,6 +47,14 @@ type UploadProgress struct {
 	UploadedBytes  atomic.Int64
 }
 
+// DownloadProgress tracks chunk download progress.
+type DownloadProgress struct {
+	TotalChunks      int64
+	DownloadedChunks atomic.Int64
+	TotalBytes       int64
+	DownloadedBytes  atomic.Int64
+}
+
 // Upload reads from reader chunk by chunk (streaming), uploads to Telegram in parallel,
 // and records chunk metadata in the DB. Never holds the full file in memory.
 func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
@@ -248,7 +256,7 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 // Download returns the full file contents in memory. Only suitable for smaller files.
 func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byte, error) {
 	var buf bytes.Buffer
-	if err := m.DownloadToWriter(ctx, file, &buf); err != nil {
+	if err := m.DownloadToWriter(ctx, file, &buf, nil); err != nil {
 		return nil, err
 	}
 	return buf.Bytes(), nil
@@ -256,7 +264,7 @@ func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byt
 
 // DownloadToWriter streams a file's chunks sequentially to the given writer.
 // Chunks are downloaded one at a time in order so only one chunk (~20MB) is in memory at once.
-func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer) error {
+func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
 	if err != nil {
 		return fmt.Errorf("listing chunks: %w", err)
@@ -264,6 +272,11 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 
 	if len(chunks) == 0 {
 		return domain.ErrNotFound("file chunks")
+	}
+
+	if progress != nil && progress.TotalChunks == 0 && progress.TotalBytes == 0 {
+		progress.TotalChunks = int64(len(chunks))
+		progress.TotalBytes = file.Size
 	}
 
 	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
@@ -296,6 +309,11 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
+		}
+
+		if progress != nil {
+			progress.DownloadedChunks.Add(1)
+			progress.DownloadedBytes.Add(int64(len(data)))
 		}
 	}
 
