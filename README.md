@@ -1,5 +1,10 @@
 # Pentaract
 
+[![Tests](https://img.shields.io/github/actions/workflow/status/Dominux/Pentaract/tests.yml?style=plastic&logo=github)](https://github.com/Dominux/Pentaract/actions/workflows/tests.yml)
+[![DockerHub](https://img.shields.io/badge/dockerhub-latest-blue?logo=docker&style=plastic)](https://hub.docker.com/r/thedominux/pentaract)
+[![Image Size](https://img.shields.io/docker/image-size/thedominux/pentaract/latest?style=plastic&logo=docker&color=gold)](https://hub.docker.com/r/thedominux/pentaract)
+[![Platform](https://img.shields.io/badge/platform-any-green?style=plastic&logo=linux&logoColor=white)](https://hub.docker.com/r/thedominux/pentaract)
+
 Cloud storage system that uses **Telegram as the storage backend**. Files are split into 20 MB chunks, uploaded to Telegram channels via bot workers, and reassembled on download.
 
 Built with **Go 1.24** (Chi, pgx) + **React 18** (Material UI 5) + **PostgreSQL 15**. Supports **amd64** and **arm64** architectures.
