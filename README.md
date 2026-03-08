@@ -2,261 +2,208 @@
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/igarridot/Pentaract/tests.yml?style=plastic&logo=github)](https://github.com/igarridot/Pentaract/actions/workflows/tests.yml)
 [<img alt="Dockerhub latest" src="https://img.shields.io/badge/dockerhub-latest-blue?logo=docker&style=plastic">](https://hub.docker.com/r/norbega/pentaract)
-[<img alt="Docker Image Size (tag)" src="https://img.shields.io/docker/image-size/norbega/pentaract/latest?style=plastic&logo=docker&color=gold">](https://hub.docker.com/r/thedominux/pentaract/tags?page=1&name=latest)
 [<img alt="Any platform" src="https://img.shields.io/badge/platform-any-green?style=plastic&logo=linux&logoColor=white">](https://github.com/igarridot/Pentaract)
 
-Pentaract is a self-hosted cloud storage that uses **Telegram as the storage backend**.
-Files are split into **20 MB chunks**, uploaded through Telegram bot workers, and reassembled on download.
+Pentaract is a self-hosted storage service that uses **Telegram channels as chunk storage**.
+The API and UI provide file management, access control, progress tracking, and worker orchestration.
 
-- **Backend:** Go 1.24 (Chi router, pgx)
-- **Frontend:** React 18 + Vite + Material UI 5
-- **Database:** PostgreSQL 15
-- **Platforms:** `linux/amd64`, `linux/arm64`
+## Current Project Status
 
-## Features
+- Backend: Go 1.24 (`chi`, `pgx`)
+- Frontend: React 19 + Vite + MUI 7
+- Database: PostgreSQL
 
-- **Chunked upload/download** with parallel worker scheduling and Telegram rate-limit handling.
-- **Encrypted chunk storage in Telegram** (AES-GCM per chunk, transparent decrypt on download).
-- **Real-time progress** (SSE) for uploads, downloads, and deletes.
-- **Multiple concurrent operations** in UI, each with its own progress indicator.
-- **Per-operation cancellation** for uploads and downloads.
-- **Media preview** in the browser:
-  - Images: inline preview.
-  - Videos (MP4, WebM, OGG, MOV, M4V): inline playback with byte-range seeking.
-- **File management:** upload, download, move, rename, delete, create folders, search.
-- **Directory download** as ZIP.
-- **Access control:** read / write / admin per storage, with user grants.
-- **Multi-worker model:** multiple Telegram bots, optional per-storage assignment, rate-limit aware scheduling.
+## What You Get
 
-## Support
+- Chunked upload/download to Telegram (20 MB-safe encrypted chunks)
+- Chunk encryption with **AES-256-GCM** and per-chunk random nonce
+- Encryption key derived from `SECRET_KEY` using **PBKDF2-HMAC-SHA256** (600000 iterations)
+- Real-time progress via SSE (upload/download/delete)
+- Upload/download cancellation
+- File browser: upload, download, move, create folders, search, preview
+- Directory download as ZIP
+- Multi-worker support (shared or storage-scoped bots)
+- Per-storage access control:
+  - `read`: browse/download
+  - `write`: browse/download/upload/move/create folder
+  - `admin`: full management including delete and access grants
+- Admin-only user management:
+  - list managed users
+  - update non-admin passwords
+  - delete non-admin users
+- Safer delete model with progress and optional `force delete` mode
 
-If you would like to support this project
+## Quick Start (Production-like)
 
-**BTC**: `bc1qgx8f76qy3eekfhtsr9eauqvjt30utvts4r8n4h`
-
-**ETH**: `0x032C9ABEb3055ae5E0e58df94a7309823e70eBcB`
-
-## Prerequisites
-
-- Docker and Docker Compose
-
-## Quick Start
+### 1. Prepare env
 
 ```bash
 cp .env.example .env
 ```
 
-Edit `.env` — at minimum change:
+Set at least:
 
-| Variable | Required change |
-|---|---|
-| `SECRET_KEY` | Replace with a random value (`openssl rand -hex 32`) |
-| `SUPERUSER_EMAIL` | Initial admin email |
-| `SUPERUSER_PASS` | Initial admin password |
-| `DATABASE_PASSWORD` | Non-default password |
+- `SECRET_KEY` (generate one: `openssl rand -hex 32`)
+- `SUPERUSER_EMAIL`
+- `SUPERUSER_PASS`
+- `DATABASE_PASSWORD`
+
+### 2. Start stack
 
 ```bash
 make up
 ```
 
-Then configure Telegram:
+App URL: `http://localhost:8000`
+
+### 3. Configure Telegram backend
 
 1. Create a Telegram channel (private recommended).
-2. Forward a channel message to [@RawDataBot](https://t.me/RawDataBot) and note `message.forward_origin.chat.id`.
-3. Remove the `-100` prefix — use the remaining number as `chat_id` in Pentaract.
-4. Create one or more Telegram bots via [@BotFather](https://t.me/BotFather).
-5. Add bots as channel admins (with send and delete permissions).
-6. In the Pentaract UI (`http://localhost:8000`):
-   - Create a **Storage** with the channel `chat_id`.
-   - Add **Workers** with the bot tokens.
+2. Get channel ID (forward message to `@RawDataBot`).
+3. Use the numeric ID without the `-100` prefix as `chat_id`.
+4. Create one or more bots via `@BotFather`.
+5. Add bots as channel admins (send + delete permissions).
+6. In UI:
+   - Create storage with `chat_id`
+   - Create workers with bot tokens
 
-Stop:
+Stop stack:
 
 ```bash
 make down
 ```
 
-## Architecture
+## Permissions Model
 
-```text
-Browser  -->  Go API  -->  PostgreSQL (metadata)
-                   |
-                   v
-            Telegram Bot API (chunk storage)
-```
+- `read`: cannot upload or delete
+- `write`: can upload/download/manage non-destructive file ops, **cannot delete**
+- `admin`: required for delete operations and access changes
 
-1. User uploads a file.
-2. Backend splits it into 20 MB chunks.
-3. Bot workers upload chunks to Telegram in parallel.
-4. PostgreSQL stores file metadata and chunk references.
-5. On download/preview, chunks are fetched from Telegram and reassembled.
+Delete behavior:
 
-## Configuration
+- Normal delete: removes Telegram chunks + DB metadata
+- `force delete`: removes DB metadata only, can leave Telegram orphan chunks
 
-All settings are via environment variables (see `.env.example`):
+## Development Workflow
 
-| Variable | Default | Description |
-|---|---|---|
-| `PORT` | `8000` | HTTP port |
-| `WORKERS` | `4` | Application worker goroutines |
-| `SECRET_KEY` | *required* | JWT signing key |
-| `SUPERUSER_EMAIL` | *required* | Initial admin email |
-| `SUPERUSER_PASS` | *required* | Initial admin password |
-| `ACCESS_TOKEN_EXPIRE_IN_SECS` | `31536000` | JWT token TTL in seconds |
-| `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Telegram API base URL |
-| `TELEGRAM_RATE_LIMIT` | `18` | Max requests/minute per bot |
-| `DATABASE_USER` | `pentaract` | PostgreSQL user |
-| `DATABASE_PASSWORD` | `pentaract` | PostgreSQL password |
-| `DATABASE_NAME` | `pentaract` | PostgreSQL database name |
-| `DATABASE_HOST` | `db` | PostgreSQL host |
-| `DATABASE_PORT` | `5432` | PostgreSQL port |
-
-## Development
-
-### Make targets
-
-| Command | Description |
-|---|---|
-| `make up` | Build and start the production stack |
-| `make down` | Stop and remove containers |
-| `make build` | Compile Go inside dev container |
-| `make check` | Run `go vet` inside dev container |
-| `make test` | Run Go + UI tests inside dev container |
-| `make mod-tidy` | Run `go mod tidy` inside dev container |
-| `make ui-install` | Install UI dependencies inside dev container |
-| `make ui-build` | Build UI bundle inside dev container |
-| `make dev-shell` | Open a shell inside the dev container |
-| `make dev-up` | Start containerized dev stack (DB + API + UI) |
-
-### Typical development workflow
+All heavy tasks can run inside containers.
 
 ```bash
-cp .env.example .env
+# compile backend
+make build
+
+# static checks
+make check
+
+# backend + frontend tests
 make test
+
+# run dev API + UI with live code
 make dev-up
 ```
 
-CI runs automatically via GitHub Actions (`.github/workflows/tests.yml`).
+Useful targets:
 
-Dependency updates are automated with:
-- Dependabot (`.github/dependabot.yml`) for Go modules, npm, Dockerfiles, and GitHub Actions.
-- Updatecli (`.github/workflows/update-dependencies.yml`) for Docker Compose image updates.
+- `make dev-shell`
+- `make ui-install`
+- `make ui-build`
+- `make mod-tidy`
 
-## Security Notes
+## Testing and CI
 
-- Chunk encryption is enabled for uploads to Telegram using AES-GCM with per-chunk random nonces.
-- The decryption key is derived from `SECRET_KEY`; keep this secret strong and private.
-- Legacy plaintext chunks (uploaded before encryption was enabled) remain downloadable for backward compatibility.
+### Local
 
-## Persistent Data
+Run backend + frontend tests in containers:
 
-Data is stored in `persistent_data/`:
+```bash
+make test
+```
 
-| Path | Purpose |
-|---|---|
-| `persistent_data/db/` | PostgreSQL data |
-| `persistent_data/go-mod-cache/` | Go module cache (dev) |
-| `persistent_data/go-build-cache/` | Go build cache (dev) |
+### GitHub Actions
 
-Reset all local data:
+Workflow: `.github/workflows/tests.yml`
+
+- Backend job: `go test -count=1 ./...`
+- Frontend job: `pnpm run test:coverage`
+
+## Configuration
+
+From `.env`:
+
+| Variable | Default | Notes |
+|---|---|---|
+| `PORT` | `8000` | API + UI port |
+| `WORKERS` | `4` | app worker goroutines |
+| `SUPERUSER_EMAIL` | required | bootstrap admin |
+| `SUPERUSER_PASS` | required | bootstrap admin password |
+| `ACCESS_TOKEN_EXPIRE_IN_SECS` | `1800` | JWT TTL |
+| `SECRET_KEY` | required | JWT + chunk encryption secret |
+| `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Telegram API |
+| `TELEGRAM_RATE_LIMIT` | `18` | per-worker requests/min guard |
+| `DATABASE_USER` | `pentaract` | postgres user |
+| `DATABASE_PASSWORD` | `pentaract` | postgres password |
+| `DATABASE_NAME` | `pentaract` | postgres db |
+| `DATABASE_HOST` | `db` | db host in compose |
+| `DATABASE_PORT` | `5432` | db port |
+
+## Persistence and Data
+
+Persistent data lives in `persistent_data/`:
+
+- `persistent_data/db` - PostgreSQL data
+- `persistent_data/go-mod-cache` - Go module cache (dev)
+- `persistent_data/go-build-cache` - Go build cache (dev)
+
+Full local reset:
 
 ```bash
 make down
 rm -rf persistent_data/
 ```
 
-## API
+## API Surface (high level)
 
-All endpoints except login and register require `Authorization: Bearer <token>`.
+Main route groups:
 
-### Auth & Users
+- `/api/auth/*`
+- `/api/users/*`
+- `/api/storages/*`
+- `/api/storages/{storageID}/access*`
+- `/api/storage_workers/*`
+- `/api/storages/{storageID}/files/*`
+- `/api/*_progress` and cancel endpoints
 
-| Method | Path |
-|---|---|
-| `POST` | `/api/auth/login` |
-| `POST` | `/api/users` |
-
-### Storages
-
-| Method | Path |
-|---|---|
-| `GET` | `/api/storages` |
-| `POST` | `/api/storages` |
-| `GET` | `/api/storages/{storageID}` |
-| `DELETE` | `/api/storages/{storageID}` |
-
-### Access
-
-| Method | Path |
-|---|---|
-| `GET` | `/api/storages/{storageID}/access` |
-| `POST` | `/api/storages/{storageID}/access` |
-| `DELETE` | `/api/storages/{storageID}/access` |
-
-### Storage Workers
-
-| Method | Path |
-|---|---|
-| `GET` | `/api/storage_workers` |
-| `POST` | `/api/storage_workers` |
-| `PUT` | `/api/storage_workers/{workerID}` |
-| `DELETE` | `/api/storage_workers/{workerID}` |
-| `GET` | `/api/storage_workers/has_workers?storage_id=` |
-
-### Files
-
-| Method | Path |
-|---|---|
-| `POST` | `/api/storages/{storageID}/files/create_folder` |
-| `POST` | `/api/storages/{storageID}/files/move` |
-| `POST` | `/api/storages/{storageID}/files/upload` |
-| `GET` | `/api/storages/{storageID}/files/tree/*` |
-| `GET` | `/api/storages/{storageID}/files/download/*` |
-| `GET` | `/api/storages/{storageID}/files/download_dir/*` |
-| `GET` | `/api/storages/{storageID}/files/search/*` |
-| `DELETE` | `/api/storages/{storageID}/files/*` |
-
-### Progress & Cancellation
-
-| Method | Path |
-|---|---|
-| `GET` | `/api/upload_progress?upload_id=` |
-| `GET` | `/api/download_progress?download_id=` |
-| `GET` | `/api/delete_progress?delete_id=` |
-| `POST` | `/api/upload_cancel/{uploadID}` |
-| `POST` | `/api/download_cancel/{downloadID}` |
+See `internal/server/server.go` for exact route list.
 
 ## Project Layout
 
 ```text
-cmd/pentaract/          Entry point
+cmd/pentaract/          application entry point
 internal/
-  config/               Environment-based configuration
-  domain/               Models and error types
-  handler/              HTTP handlers and middleware
-  repository/           PostgreSQL queries
-  service/              Business logic and storage manager
-  server/               Router setup and static file serving
-  startup/              DB creation, migrations, superuser
+  config/               env config
+  domain/               core models/errors
+  handler/              HTTP handlers + middleware
+  repository/           postgres access
+  service/              business logic (storage/workers/permissions)
+  server/               router + static UI serving
+  startup/              db init + migrations + superuser bootstrap
   telegram/             Telegram Bot API client
-  jwt/                  JWT generation and validation
-  password/             Bcrypt hashing
+  jwt/                  JWT logic
+  password/             password hashing
 ui/
-  src/
-    api/                API client and SSE helpers
-    common/             Shared utilities (auth, theme, etc.)
-    components/         Reusable UI components
-    layouts/            Page layouts
-    pages/              Route pages
+  src/api/              frontend API + SSE clients
+  src/common/           shared frontend utilities
+  src/components/       reusable UI components
+  src/pages/            route screens
 ```
 
-## Kudos
+## Known Operational Constraints
 
-Inspired on the [Pentaract](https://github.com/Dominux/Pentaract) by Dominux.
-To support him:
+- Telegram Bot API limits and channel permissions directly affect throughput.
+- If workers are misconfigured (missing admin rights/token revoked), uploads/deletes fail.
+- `force delete` is irreversible and may leave backend remnants by design.
+- Legacy plaintext chunks (from older versions) are still readable for backward compatibility.
 
-**BTC**: `18mquj59AcB4y4VBevdn5HekG5y7gvPYGk`
+## Acknowledgement
 
-**TON**: `UQDoGRgUIEDA30cko8k-icnI8S5i8QIq2jFvqswNvVUc9F2U`
-
-**USDT TON**: `UQDoGRgUIEDA30cko8k-icnI8S5i8QIq2jFvqswNvVUc9F2U`
+Inspired by the original [Pentaract](https://github.com/Dominux/Pentaract) by Dominux.
