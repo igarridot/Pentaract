@@ -113,7 +113,7 @@ func (s *FilesService) Search(ctx context.Context, userID, storageID uuid.UUID, 
 }
 
 func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *DeleteProgress, forceDelete bool) error {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessWrite)
+	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessAdmin)
 	if err != nil {
 		return err
 	}

@@ -8,6 +8,7 @@ import StorageCreateForm from './pages/Storages/StorageCreateForm'
 import Files from './pages/Files'
 import StorageWorkers from './pages/StorageWorkers'
 import StorageWorkerCreateForm from './pages/StorageWorkers/StorageWorkerCreateForm'
+import Users from './pages/Users'
 
 const router = createBrowserRouter([
   { path: '/login', element: <Login /> },
@@ -22,6 +23,7 @@ const router = createBrowserRouter([
       { path: 'storages/:id/files/*', element: <Files /> },
       { path: 'storage_workers', element: <StorageWorkers /> },
       { path: 'storage_workers/register', element: <StorageWorkerCreateForm /> },
+      { path: 'users', element: <Users /> },
       { path: '*', element: <NotFound /> },
     ],
   },

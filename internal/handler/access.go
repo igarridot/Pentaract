@@ -18,7 +18,7 @@ func NewAccessHandler(svc *service.AccessService) *AccessHandler {
 }
 
 type grantAccessRequest struct {
-	Email      string           `json:"email"`
+	Email      string            `json:"email"`
 	AccessType domain.AccessType `json:"access_type"`
 }
 
@@ -94,4 +94,24 @@ func (h *AccessHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.WriteHeader(http.StatusNoContent)
+}
+
+func (h *AccessHandler) GrantCandidates(w http.ResponseWriter, r *http.Request) {
+	user := GetAuthUser(r.Context())
+	storageID, err := parseUUIDParam(r, "storageID")
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	users, err := h.svc.ListGrantCandidates(r.Context(), user.ID, storageID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+
+	if users == nil {
+		users = []domain.User{}
+	}
+	writeJSON(w, http.StatusOK, users)
 }
