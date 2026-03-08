@@ -55,6 +55,12 @@ type DownloadProgress struct {
 	DownloadedBytes  atomic.Int64
 }
 
+// DeleteProgress tracks chunk deletion progress in Telegram.
+type DeleteProgress struct {
+	TotalChunks   int64
+	DeletedChunks atomic.Int64
+}
+
 // Upload reads from reader chunk by chunk (streaming), uploads to Telegram in parallel,
 // and records chunk metadata in the DB. Never holds the full file in memory.
 func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
@@ -98,7 +104,11 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 					TelegramMessageID: r.TelegramMessageID,
 				}
 			}
-			go m.DeleteFromTelegram(context.Background(), *storage, cleanupChunks)
+			go func() {
+				if err := m.DeleteFromTelegram(context.Background(), *storage, cleanupChunks, nil); err != nil {
+					log.Printf("[delete] WARNING: cleanup after failed upload returned error: %v", err)
+				}
+			}()
 		}
 	}
 
@@ -223,11 +233,21 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 }
 
 // DeleteFromTelegram deletes chunk messages from Telegram for the given chunks.
-func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk) {
+func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error {
 	log.Printf("[delete] removing %d chunks from telegram chat=%s", len(chunks), storage.Name)
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(5)
+
+	if progress != nil {
+		total := int64(0)
+		for _, c := range chunks {
+			if c.TelegramMessageID != 0 {
+				total++
+			}
+		}
+		progress.TotalChunks = total
+	}
 
 	for _, chunk := range chunks {
 		c := chunk
@@ -237,19 +257,24 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 		g.Go(func() error {
 			wt, err := m.scheduler.GetToken(gctx, storage.ID)
 			if err != nil {
-				log.Printf("[delete] WARNING: could not get token to delete message %d from chat=%s: %v", c.TelegramMessageID, storage.Name, err)
-				return nil
+				return fmt.Errorf("getting token for delete message %d: %w", c.TelegramMessageID, err)
 			}
 			log.Printf("[delete] deleting message %d via worker=%s chat=%s", c.TelegramMessageID, wt.Name, storage.Name)
 			if err := m.tgClient.DeleteMessage(wt.Token, storage.ChatID, c.TelegramMessageID); err != nil {
-				log.Printf("[delete] WARNING: could not delete message %d via worker=%s chat=%s: %v", c.TelegramMessageID, wt.Name, storage.Name, err)
+				return fmt.Errorf("deleting message %d via worker=%s: %w", c.TelegramMessageID, wt.Name, err)
+			}
+			if progress != nil {
+				progress.DeletedChunks.Add(1)
 			}
 			return nil
 		})
 	}
 
-	g.Wait()
+	if err := g.Wait(); err != nil {
+		return err
+	}
 	log.Printf("[delete] finished removing chunks from chat=%s", storage.Name)
+	return nil
 }
 
 // Download retrieves all chunks from Telegram in parallel and reassembles the file.

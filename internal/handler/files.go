@@ -30,9 +30,10 @@ type uploadTracker struct {
 }
 
 type downloadTracker struct {
-	progress *service.DownloadProgress
-	err      error
-	done     bool
+	storageID uuid.UUID
+	progress  *service.DownloadProgress
+	err       error
+	done      bool
 }
 
 type FilesHandler struct {
@@ -257,7 +258,7 @@ func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 	go func() {
 		// Wait briefly for the upload goroutine to stop
 		time.Sleep(1 * time.Second)
-		if err := h.svc.Delete(context.Background(), user.ID, tracker.storageID, tracker.filePath); err != nil {
+		if err := h.svc.Delete(context.Background(), user.ID, tracker.storageID, tracker.filePath, nil); err != nil {
 			log.Printf("[cancel] WARNING: cleanup failed for %s: %v", tracker.filePath, err)
 		} else {
 			log.Printf("[cancel] cleanup done for %s", tracker.filePath)
@@ -316,8 +317,9 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 			status = "done"
 		}
 
-		fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"%s\"}\n\n",
-			p.TotalChunks, p.UploadedChunks.Load(), p.TotalBytes, p.UploadedBytes.Load(), status)
+		workersStatus := h.svc.WorkersStatus(tracker.storageID)
+		fmt.Fprintf(w, "data: {\"total\":%d,\"uploaded\":%d,\"total_bytes\":%d,\"uploaded_bytes\":%d,\"status\":\"%s\",\"workers_status\":\"%s\"}\n\n",
+			p.TotalChunks, p.UploadedChunks.Load(), p.TotalBytes, p.UploadedBytes.Load(), status, workersStatus)
 		flusher.Flush()
 
 		if isDone {
@@ -349,7 +351,7 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	downloadID := r.URL.Query().Get("download_id")
 	var tracker *downloadTracker
 	if downloadID != "" {
-		tracker = &downloadTracker{progress: &service.DownloadProgress{}}
+		tracker = &downloadTracker{storageID: storageID, progress: &service.DownloadProgress{}}
 		h.mu.Lock()
 		h.downloads[downloadID] = tracker
 		h.mu.Unlock()
@@ -419,7 +421,7 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 	downloadID := r.URL.Query().Get("download_id")
 	var tracker *downloadTracker
 	if downloadID != "" {
-		tracker = &downloadTracker{progress: &service.DownloadProgress{}}
+		tracker = &downloadTracker{storageID: storageID, progress: &service.DownloadProgress{}}
 		h.mu.Lock()
 		h.downloads[downloadID] = tracker
 		h.mu.Unlock()
@@ -515,11 +517,74 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 			status = "done"
 		}
 
-		fmt.Fprintf(w, "data: {\"total\":%d,\"downloaded\":%d,\"total_bytes\":%d,\"downloaded_bytes\":%d,\"status\":\"%s\"}\n\n",
-			p.TotalChunks, p.DownloadedChunks.Load(), p.TotalBytes, p.DownloadedBytes.Load(), status)
+		workersStatus := h.svc.WorkersStatus(tracker.storageID)
+		fmt.Fprintf(w, "data: {\"total\":%d,\"downloaded\":%d,\"total_bytes\":%d,\"downloaded_bytes\":%d,\"status\":\"%s\",\"workers_status\":\"%s\"}\n\n",
+			p.TotalChunks, p.DownloadedChunks.Load(), p.TotalBytes, p.DownloadedBytes.Load(), status, workersStatus)
 		flusher.Flush()
 
 		if isDone {
+			return
+		}
+	}
+}
+
+// DeleteProgress returns an SSE stream with delete progress updates.
+func (h *FilesHandler) DeleteProgress(w http.ResponseWriter, r *http.Request) {
+	deleteID := r.URL.Query().Get("delete_id")
+	if deleteID == "" {
+		writeError(w, domain.ErrBadRequest("delete_id is required"))
+		return
+	}
+
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		writeError(w, domain.ErrInternal("streaming not supported"))
+		return
+	}
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	waitStart := time.Now()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-time.After(500 * time.Millisecond):
+		}
+
+		tracker, exists := getDeleteTracker(deleteID)
+		if !exists {
+			if time.Since(waitStart) < 15*time.Second {
+				fmt.Fprintf(w, "data: {\"total\":0,\"deleted\":0,\"pending\":0,\"status\":\"deleting\"}\n\n")
+				flusher.Flush()
+				continue
+			}
+			fmt.Fprintf(w, "data: {\"status\":\"error\"}\n\n")
+			flusher.Flush()
+			return
+		}
+
+		done, trackerErr, total, deleted := getDeleteTrackerStatus(tracker)
+		status := "deleting"
+		if done && trackerErr != nil {
+			status = "error"
+		} else if done {
+			status = "done"
+		}
+
+		pending := total - deleted
+		if pending < 0 {
+			pending = 0
+		}
+
+		workersStatus := h.svc.WorkersStatus(tracker.storageID)
+		fmt.Fprintf(w, "data: {\"total\":%d,\"deleted\":%d,\"pending\":%d,\"status\":\"%s\",\"workers_status\":\"%s\"}\n\n",
+			total, deleted, pending, status, workersStatus)
+		flusher.Flush()
+
+		if done {
 			return
 		}
 	}
@@ -585,9 +650,28 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if err := h.svc.Delete(r.Context(), user.ID, storageID, path); err != nil {
+	deleteID := r.URL.Query().Get("delete_id")
+	var tracker *deleteTracker
+	if deleteID != "" {
+		tracker = startDeleteTracker(deleteID, storageID)
+		defer scheduleDeleteTrackerCleanup(deleteID)
+	}
+
+	var progress *service.DeleteProgress
+	if tracker != nil {
+		progress = tracker.progress
+	}
+
+	if err := h.svc.Delete(r.Context(), user.ID, storageID, path, progress); err != nil {
+		if tracker != nil {
+			markDeleteTrackerDone(tracker, err)
+		}
 		writeError(w, err)
 		return
+	}
+
+	if tracker != nil {
+		markDeleteTrackerDone(tracker, nil)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

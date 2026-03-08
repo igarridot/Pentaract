@@ -35,7 +35,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 
 	authSvc := service.NewAuthService(usersRepo, cfg.SecretKey, cfg.AccessTokenExpireInSec)
 	usersSvc := service.NewUsersService(usersRepo)
-	storagesSvc := service.NewStoragesService(storagesRepo, accessRepo)
+	storagesSvc := service.NewStoragesService(storagesRepo, accessRepo, filesRepo, storageManager)
 	accessSvc := service.NewAccessService(accessRepo, usersRepo)
 	workersSvc := service.NewStorageWorkersService(workersRepo)
 	filesSvc := service.NewFilesService(filesRepo, accessRepo, storageManager)
@@ -96,6 +96,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 
 			r.Get("/upload_progress", filesH.UploadProgress)
 			r.Get("/download_progress", filesH.DownloadProgress)
+			r.Get("/delete_progress", filesH.DeleteProgress)
 			r.Post("/upload_cancel/{uploadID}", filesH.CancelUpload)
 		})
 	})
