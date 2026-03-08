@@ -87,7 +87,9 @@ All persistent data is stored under `persistent_data/` in the project root:
 | `persistent_data/go-mod-cache/` | Go module cache (dev only) |
 | `persistent_data/go-build-cache/` | Go build cache (dev only) |
 
-This directory is excluded from version control via `.gitignore`. To reset all data:
+On Linux, compose runs a one-shot `init-perms` service before PostgreSQL that prepares these directories and sets writable permissions to avoid UID/GID mismatches.
+
+To reset all data:
 
 ```bash
 make down

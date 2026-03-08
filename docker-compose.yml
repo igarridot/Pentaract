@@ -1,4 +1,14 @@
 services:
+  init-perms:
+    image: public.ecr.aws/docker/library/alpine:3.20
+    command: >
+      sh -c "
+      mkdir -p /data/db /data/go-mod-cache /data/go-build-cache &&
+      chmod -R 0777 /data
+      "
+    volumes:
+      - ./persistent_data:/data
+
   pentaract:
     build: .
     ports:
@@ -11,15 +21,19 @@ services:
 
   db:
     image: public.ecr.aws/docker/library/postgres:15-alpine
-    environment:
-      POSTGRES_USER: ${DATABASE_USER:-pentaract}
-      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-pentaract}
-      POSTGRES_DB: ${DATABASE_NAME:-pentaract}
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U ${DATABASE_USER:-pentaract}"]
       interval: 10s
       timeout: 5s
       retries: 5
+    depends_on:
+      init-perms:
+        condition: service_completed_successfully
+    environment:
+      POSTGRES_USER: ${DATABASE_USER:-pentaract}
+      POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-pentaract}
+      POSTGRES_DB: ${DATABASE_NAME:-pentaract}
+      PGDATA: /var/lib/postgresql/data/pgdata
     volumes:
       - ./persistent_data/db:/var/lib/postgresql/data
 
@@ -31,7 +45,11 @@ services:
     volumes:
       - .:/app
       - ./persistent_data/go-mod-cache:/go/pkg/mod
-      - ./persistent_data/go-build-cache:/root/.cache/go-build
+      - ./persistent_data/go-build-cache:/tmp/go-build-cache
     working_dir: /app
+    user: "${UID:-1000}:${GID:-1000}"
+    environment:
+      GOCACHE: /tmp/go-build-cache
+      GOMODCACHE: /go/pkg/mod
     profiles:
       - dev
