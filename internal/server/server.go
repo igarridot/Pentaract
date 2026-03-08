@@ -98,6 +98,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Get("/download_progress", filesH.DownloadProgress)
 			r.Get("/delete_progress", filesH.DeleteProgress)
 			r.Post("/upload_cancel/{uploadID}", filesH.CancelUpload)
+			r.Post("/download_cancel/{downloadID}", filesH.CancelDownload)
 		})
 	})
 

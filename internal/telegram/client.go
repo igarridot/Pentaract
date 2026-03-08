@@ -206,18 +206,38 @@ func (c *Client) Download(token string, telegramFileID string) ([]byte, error) {
 
 	// Step 2: Download the file
 	downloadURL := fmt.Sprintf("%s/file/bot%s/%s", c.baseURL, token, filePath)
-	dlResp, err := c.httpClient.Get(downloadURL)
-	if err != nil {
-		return nil, fmt.Errorf("downloading file: %w", err)
-	}
-	defer dlResp.Body.Close()
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		dlResp, err := c.httpClient.Get(downloadURL)
+		if err != nil {
+			return nil, fmt.Errorf("downloading file: %w", err)
+		}
 
-	data, err := io.ReadAll(dlResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading file data: %w", err)
+		if rlErr := parseRateLimitError(dlResp); rlErr != nil {
+			dlResp.Body.Close()
+			if attempt == maxRetries {
+				return nil, rlErr
+			}
+			log.Printf("[telegram] 429 rate limited on file download, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
+			time.Sleep(time.Duration(rlErr.RetryAfter) * time.Second)
+			continue
+		}
+
+		if dlResp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(dlResp.Body)
+			dlResp.Body.Close()
+			return nil, fmt.Errorf("telegram file download error (status %d): %s", dlResp.StatusCode, string(respBody))
+		}
+
+		data, err := io.ReadAll(dlResp.Body)
+		dlResp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("reading file data: %w", err)
+		}
+
+		return data, nil
 	}
 
-	return data, nil
+	return nil, fmt.Errorf("telegram file download failed after %d retries", maxRetries)
 }
 
 // GenerateChunkFilename generates a filename for a chunk.

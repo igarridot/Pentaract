@@ -8,6 +8,7 @@ import (
 	"mime"
 	"net/http"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"sync"
@@ -32,6 +33,8 @@ type uploadTracker struct {
 type downloadTracker struct {
 	storageID uuid.UUID
 	progress  *service.DownloadProgress
+	cancel    context.CancelFunc
+	canceled  bool
 	err       error
 	done      bool
 }
@@ -350,8 +353,11 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 
 	downloadID := r.URL.Query().Get("download_id")
 	var tracker *downloadTracker
+	downloadCtx := r.Context()
 	if downloadID != "" {
-		tracker = &downloadTracker{storageID: storageID, progress: &service.DownloadProgress{}}
+		var cancel context.CancelFunc
+		downloadCtx, cancel = context.WithCancel(r.Context())
+		tracker = &downloadTracker{storageID: storageID, progress: &service.DownloadProgress{}, cancel: cancel}
 		h.mu.Lock()
 		h.downloads[downloadID] = tracker
 		h.mu.Unlock()
@@ -370,6 +376,10 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	if contentType == "" {
 		contentType = "application/octet-stream"
 	}
+	disposition := "attachment"
+	if r.URL.Query().Get("inline") == "1" {
+		disposition = "inline"
+	}
 
 	var progress *service.DownloadProgress
 	if tracker != nil {
@@ -377,18 +387,62 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", `attachment; filename="`+filename+`"`)
-	w.WriteHeader(http.StatusOK)
+	w.Header().Set("Content-Disposition", disposition+`; filename="`+filename+`"`)
 
-	if err := h.svc.DownloadFileToWriter(r.Context(), file, w, progress); err != nil {
-		log.Printf("[download-file] error: %v", err)
-		if tracker != nil {
-			h.mu.Lock()
-			tracker.done = true
-			tracker.err = err
-			h.mu.Unlock()
+	if disposition == "inline" {
+		// Build full media into a temp file to avoid partial/corrupted inline responses on chunk failures.
+		tmpDir := os.TempDir()
+		if err := os.MkdirAll(tmpDir, 0o700); err != nil {
+			writeError(w, domain.ErrInternal("failed to prepare temporary directory"))
+			return
 		}
-		return
+
+		tmp, err := os.CreateTemp(tmpDir, "pentaract-file-*")
+		if err != nil {
+			writeError(w, domain.ErrInternal("failed to create temporary file"))
+			return
+		}
+		tmpPath := tmp.Name()
+		defer func() {
+			tmp.Close()
+			_ = os.Remove(tmpPath)
+		}()
+
+		if err := h.svc.DownloadFileToWriter(downloadCtx, file, tmp, progress); err != nil {
+			log.Printf("[download-file] error: %v", err)
+			if tracker != nil {
+				h.mu.Lock()
+				tracker.done = true
+				tracker.err = err
+				h.mu.Unlock()
+			}
+			writeError(w, err)
+			return
+		}
+
+		info, err := tmp.Stat()
+		if err != nil {
+			writeError(w, domain.ErrInternal("failed to stat temporary file"))
+			return
+		}
+		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+			writeError(w, domain.ErrInternal("failed to rewind temporary file"))
+			return
+		}
+		w.Header().Set("Accept-Ranges", "bytes")
+		http.ServeContent(w, r, filename, info.ModTime(), tmp)
+	} else {
+		w.WriteHeader(http.StatusOK)
+		if err := h.svc.DownloadFileToWriter(downloadCtx, file, w, progress); err != nil {
+			log.Printf("[download-file] error: %v", err)
+			if tracker != nil {
+				h.mu.Lock()
+				tracker.done = true
+				tracker.err = err
+				h.mu.Unlock()
+			}
+			return
+		}
 	}
 
 	if tracker != nil {
@@ -420,8 +474,11 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 
 	downloadID := r.URL.Query().Get("download_id")
 	var tracker *downloadTracker
+	downloadCtx := r.Context()
 	if downloadID != "" {
-		tracker = &downloadTracker{storageID: storageID, progress: &service.DownloadProgress{}}
+		var cancel context.CancelFunc
+		downloadCtx, cancel = context.WithCancel(r.Context())
+		tracker = &downloadTracker{storageID: storageID, progress: &service.DownloadProgress{}, cancel: cancel}
 		h.mu.Lock()
 		h.downloads[downloadID] = tracker
 		h.mu.Unlock()
@@ -443,7 +500,7 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 		progress = tracker.progress
 	}
 
-	if _, err := h.svc.DownloadDir(r.Context(), user.ID, storageID, path, w, progress); err != nil {
+	if _, err := h.svc.DownloadDir(downloadCtx, user.ID, storageID, path, w, progress); err != nil {
 		log.Printf("[download-dir] error: %v", err)
 		if tracker != nil {
 			h.mu.Lock()
@@ -459,6 +516,26 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 		tracker.done = true
 		h.mu.Unlock()
 	}
+}
+
+func (h *FilesHandler) CancelDownload(w http.ResponseWriter, r *http.Request) {
+	downloadID := chi.URLParam(r, "downloadID")
+
+	h.mu.Lock()
+	tracker, exists := h.downloads[downloadID]
+	if !exists {
+		h.mu.Unlock()
+		writeError(w, domain.ErrNotFound("download"))
+		return
+	}
+	tracker.canceled = true
+	tracker.done = true
+	if tracker.cancel != nil {
+		tracker.cancel()
+	}
+	h.mu.Unlock()
+
+	w.WriteHeader(http.StatusNoContent)
 }
 
 // DownloadProgress returns an SSE stream with directory download progress updates.
@@ -509,9 +586,12 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 		h.mu.RLock()
 		isDone := tracker.done
 		downloadErr := tracker.err
+		isCanceled := tracker.canceled
 		h.mu.RUnlock()
 
-		if isDone && downloadErr != nil {
+		if isDone && isCanceled {
+			status = "cancelled"
+		} else if isDone && downloadErr != nil {
 			status = "error"
 		} else if isDone {
 			status = "done"
