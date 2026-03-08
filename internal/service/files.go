@@ -74,9 +74,18 @@ func (s *FilesService) CreateFolder(ctx context.Context, userID, storageID uuid.
 		return err
 	}
 
-	fullPath := folderName
-	if path != "" {
-		fullPath = path + "/" + folderName
+	basePath := strings.Trim(path, "/")
+	name := strings.Trim(folderName, "/")
+	if name == "" {
+		return domain.ErrBadRequest("folder_name is required")
+	}
+	if strings.Contains(name, "/") {
+		return domain.ErrBadRequest("folder_name cannot contain /")
+	}
+
+	fullPath := name
+	if basePath != "" {
+		fullPath = basePath + "/" + name
 	}
 
 	return s.filesRepo.CreateFolder(ctx, storageID, fullPath)
