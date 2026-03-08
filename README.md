@@ -126,32 +126,14 @@ All settings are via environment variables (see `.env.example`):
 | `make ui-install` | Install UI dependencies inside dev container |
 | `make ui-build` | Build UI bundle inside dev container |
 | `make dev-shell` | Open a shell inside the dev container |
-| `make dev-up` | Start local dev stack (DB + API + UI) |
+| `make dev-up` | Start containerized dev stack (DB + API + UI) |
 
-### Typical workflow
+### Typical development workflow
 
 ```bash
 cp .env.example .env
-make mod-tidy
-make ui-install
-make dev-up
-```
-
-Follow logs:
-
-```bash
-docker compose logs -f pentaract
-```
-
-## Testing
-
-```bash
-# Containerized (recommended)
 make test
-
-# Local
-go test ./...
-cd ui && pnpm test
+make dev-up
 ```
 
 CI runs automatically via GitHub Actions (`.github/workflows/tests.yml`).
