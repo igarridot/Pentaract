@@ -8,6 +8,7 @@ import {
   Search as SearchIcon,
   CreateNewFolder as FolderAddIcon,
   Upload as UploadIcon,
+  DriveFolderUpload as FolderUploadIcon,
 } from '@mui/icons-material'
 import API from '../../api'
 import { createOperationId } from '../../common/operation_id'
@@ -23,6 +24,7 @@ import DownloadProgress from '../../components/DownloadProgress'
 import DeleteProgress from '../../components/DeleteProgress'
 import MoveDialog from '../../components/MoveDialog'
 import MediaPreviewDialog from '../../components/MediaPreviewDialog'
+import RenameFolderDialog from '../../components/RenameFolderDialog'
 
 export default function Files() {
   const { id: storageId } = useParams()
@@ -43,6 +45,7 @@ export default function Files() {
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [moveTarget, setMoveTarget] = useState(null)
+  const [renameTarget, setRenameTarget] = useState(null)
   const [uploadStates, setUploadStates] = useState([])
   const [downloadStates, setDownloadStates] = useState([])
   const [deleteState, setDeleteState] = useState(null)
@@ -130,10 +133,7 @@ export default function Files() {
     }
   }
 
-  const handleUpload = async (e) => {
-    const file = e.target.files[0]
-    if (!file) return
-
+  const uploadSingleFile = async (file, targetPath) => {
     const filename = file.name
     const uploadId = createOperationId()
     setUploadStates((prev) => [...prev, {
@@ -183,7 +183,7 @@ export default function Files() {
     uploadAbortControllersRef.current.set(uploadId, controller)
 
     try {
-      await API.files.upload(storageId, currentPath.replace(/\/+$/, ''), file, uploadId, { signal: controller.signal })
+      await API.files.upload(storageId, targetPath.replace(/\/+$/, ''), file, uploadId, { signal: controller.signal })
     } catch (err) {
       if (err?.name !== 'AbortError') {
         updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
@@ -195,6 +195,32 @@ export default function Files() {
       setTimeout(() => {
         setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
       }, 1500)
+    }
+  }
+
+  const handleUpload = async (e) => {
+    const file = e.target.files[0]
+    if (!file) return
+    await uploadSingleFile(file, currentPath)
+    e.target.value = ''
+  }
+
+  const handleUploadDirectory = async (e) => {
+    const files = Array.from(e.target.files || [])
+    if (files.length === 0) return
+
+    for (const file of files) {
+      const relativePath = file.webkitRelativePath || file.name
+      const relativeDir = relativePath.includes('/')
+        ? relativePath.slice(0, relativePath.lastIndexOf('/'))
+        : ''
+      const targetPath = [currentPath.replace(/\/+$/, ''), relativeDir]
+        .filter(Boolean)
+        .join('/')
+      // Upload sequentially to preserve stable progress/cancel behavior.
+      // This also avoids opening too many concurrent requests at once.
+      // eslint-disable-next-line no-await-in-loop
+      await uploadSingleFile(file, targetPath)
     }
     e.target.value = ''
   }
@@ -316,12 +342,17 @@ export default function Files() {
   }
 
   const handleDelete = async () => {
+    const target = deleteTarget
+    if (!target) return
+
+    setDeleteTarget(null)
+
     try {
-      const path = (deleteTarget.path || deleteTarget.name).replace(/\/+$/, '')
+      const path = (target.path || target.name).replace(/\/+$/, '')
       const deleteId = createOperationId()
       if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
       setDeleteState({
-        label: deleteTarget?.name || path,
+        label: target.name || path,
         totalChunks: 0,
         deletedChunks: 0,
         status: 'deleting',
@@ -352,7 +383,6 @@ export default function Files() {
 
       await API.files.delete(storageId, path, deleteId)
       addAlert('Deleted', 'success')
-      setDeleteTarget(null)
       loadTree()
     } catch (err) {
       if (cancelDeleteProgressRef.current) {
@@ -373,6 +403,21 @@ export default function Files() {
       await API.files.move(storageId, oldPath, newPath)
       addAlert('Moved successfully', 'success')
       setMoveTarget(null)
+      loadTree()
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
+
+  const handleRename = async (item, newName) => {
+    try {
+      const sourcePath = (item.path || item.name).replace(/\/$/, '')
+      const pathParts = sourcePath.split('/').filter(Boolean)
+      pathParts[pathParts.length - 1] = newName
+      const targetPath = pathParts.join('/')
+      await API.files.move(storageId, sourcePath, targetPath)
+      addAlert('Folder renamed', 'success')
+      setRenameTarget(null)
       loadTree()
     } catch (err) {
       addAlert(err.message, 'error')
@@ -493,6 +538,7 @@ export default function Files() {
                 onDelete={setDeleteTarget}
                 onDownload={handleDownload}
                 onMove={setMoveTarget}
+                onRename={setRenameTarget}
               />
             </Box>
           ))}
@@ -514,6 +560,17 @@ export default function Files() {
           <MenuItem key="upload" component="label">
             <UploadIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> Upload File
             <input type="file" hidden onChange={(e) => { close(); handleUpload(e) }} />
+          </MenuItem>,
+          <MenuItem key="upload-folder" component="label">
+            <FolderUploadIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> Upload Folder
+            <input
+              type="file"
+              hidden
+              multiple
+              webkitdirectory=""
+              directory=""
+              onChange={(e) => { close(); handleUploadDirectory(e) }}
+            />
           </MenuItem>,
         ]}
       </FloatingMenu>
@@ -556,6 +613,13 @@ export default function Files() {
         storageId={storageId}
         onMove={handleMove}
         onClose={() => setMoveTarget(null)}
+      />
+
+      <RenameFolderDialog
+        open={!!renameTarget}
+        folder={renameTarget}
+        onRename={handleRename}
+        onClose={() => setRenameTarget(null)}
       />
     </Box>
   )
