@@ -33,11 +33,11 @@ type LoginResponse struct {
 func (s *AuthService) Login(ctx context.Context, email, pass string) (*LoginResponse, error) {
 	user, err := s.usersRepo.GetByEmail(ctx, email)
 	if err != nil {
-		return nil, domain.ErrNotAuthenticated()
+		return nil, domain.ErrUnauthorized("not authenticated")
 	}
 
 	if err := password.Verify(pass, user.PasswordHash); err != nil {
-		return nil, domain.ErrNotAuthenticated()
+		return nil, domain.ErrUnauthorized("not authenticated")
 	}
 
 	token, err := appjwt.Generate(appjwt.AuthUser{

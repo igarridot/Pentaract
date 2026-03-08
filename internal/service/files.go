@@ -64,28 +64,6 @@ func (s *FilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, 
 	return file, nil
 }
 
-func (s *FilesService) Download(ctx context.Context, userID, storageID uuid.UUID, path string) ([]byte, string, error) {
-	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
-	if err != nil {
-		return nil, "", err
-	}
-	if !ok {
-		return nil, "", domain.ErrForbidden()
-	}
-
-	file, err := s.filesRepo.GetByPath(ctx, storageID, path)
-	if err != nil {
-		return nil, "", err
-	}
-
-	data, err := s.manager.Download(ctx, file)
-	if err != nil {
-		return nil, "", err
-	}
-
-	return data, file.Path, nil
-}
-
 func (s *FilesService) GetFileForDownload(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
 	if err != nil {
@@ -102,6 +80,14 @@ func (s *FilesService) DownloadFileToWriter(ctx context.Context, file *domain.Fi
 	return s.manager.DownloadToWriter(ctx, file, w, progress)
 }
 
+func (s *FilesService) ExactFileSize(ctx context.Context, file *domain.File) (int64, error) {
+	return s.manager.ExactFileSize(ctx, file)
+}
+
+func (s *FilesService) DownloadFileRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error {
+	return s.manager.DownloadRangeToWriter(ctx, file, w, start, end, totalSize, progress)
+}
+
 func (s *FilesService) ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error) {
 	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
 	if err != nil {
@@ -114,7 +100,7 @@ func (s *FilesService) ListDir(ctx context.Context, userID, storageID uuid.UUID,
 	return s.filesRepo.ListDir(ctx, storageID, path)
 }
 
-func (s *FilesService) Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.SearchFSElement, error) {
+func (s *FilesService) Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error) {
 	ok, err := s.accessRepo.HasAccess(ctx, userID, storageID, domain.AccessRead)
 	if err != nil {
 		return nil, err

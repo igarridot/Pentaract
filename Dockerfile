@@ -25,9 +25,10 @@ ENV VITE_API_BASE=/api
 RUN pnpm run build
 
 # Stage 3: Runtime
-FROM scratch
+FROM public.ecr.aws/docker/library/alpine:3.21
 
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/
+RUN apk add --no-cache ca-certificates
+
 COPY --from=builder /app/pentaract /pentaract
 COPY --from=ui /app/dist /ui/dist
 

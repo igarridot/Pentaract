@@ -55,11 +55,10 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	r.Use(middleware.Logger)
 	r.Use(middleware.Recoverer)
 	r.Use(cors.Handler(cors.Options{
-		AllowedOrigins:   []string{"*"},
-		AllowedMethods:   []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
-		AllowedHeaders:   []string{"Accept", "Authorization", "Content-Type"},
-		AllowCredentials: true,
-		MaxAge:           300,
+		AllowedOrigins: []string{"*"},
+		AllowedMethods: []string{"GET", "POST", "PUT", "DELETE", "OPTIONS"},
+		AllowedHeaders: []string{"Accept", "Authorization", "Content-Type"},
+		MaxAge:         300,
 	}))
 
 	// API routes
@@ -98,6 +97,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Get("/download_progress", filesH.DownloadProgress)
 			r.Get("/delete_progress", filesH.DeleteProgress)
 			r.Post("/upload_cancel/{uploadID}", filesH.CancelUpload)
+			r.Post("/download_cancel/{downloadID}", filesH.CancelDownload)
 		})
 	})
 

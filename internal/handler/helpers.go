@@ -12,7 +12,7 @@ import (
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
-func writeJSON(w http.ResponseWriter, status int, data interface{}) {
+func writeJSON(w http.ResponseWriter, status int, data any) {
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(status)
 	if data != nil {
@@ -42,7 +42,7 @@ func parseUUIDParam(r *http.Request, name string) (uuid.UUID, error) {
 	return id, nil
 }
 
-func parseBody(r *http.Request, dst interface{}) error {
+func parseBody(r *http.Request, dst any) error {
 	if err := json.NewDecoder(r.Body).Decode(dst); err != nil {
 		return domain.ErrBadRequest("invalid request body")
 	}

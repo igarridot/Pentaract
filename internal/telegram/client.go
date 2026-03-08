@@ -2,6 +2,7 @@ package telegram
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -167,15 +168,19 @@ func (c *Client) DeleteMessage(token string, chatID int64, messageID int64) erro
 	return fmt.Errorf("telegram deleteMessage failed after %d retries", maxRetries)
 }
 
-// Download retrieves a file from Telegram by its file_id.
+// Download retrieves a file from Telegram by its file_id honoring request cancellation.
 // Automatically retries on 429 (Too Many Requests).
-func (c *Client) Download(token string, telegramFileID string) ([]byte, error) {
+func (c *Client) Download(ctx context.Context, token string, telegramFileID string) ([]byte, error) {
 	// Step 1: Get file path (with retry on 429)
 	var filePath string
 	getFileURL := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", c.baseURL, token, telegramFileID)
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		resp, err := c.httpClient.Get(getFileURL)
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, getFileURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating getFile request: %w", err)
+		}
+		resp, err := c.httpClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("getting file info: %w", err)
 		}
@@ -206,18 +211,42 @@ func (c *Client) Download(token string, telegramFileID string) ([]byte, error) {
 
 	// Step 2: Download the file
 	downloadURL := fmt.Sprintf("%s/file/bot%s/%s", c.baseURL, token, filePath)
-	dlResp, err := c.httpClient.Get(downloadURL)
-	if err != nil {
-		return nil, fmt.Errorf("downloading file: %w", err)
-	}
-	defer dlResp.Body.Close()
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
+		if err != nil {
+			return nil, fmt.Errorf("creating file download request: %w", err)
+		}
+		dlResp, err := c.httpClient.Do(req)
+		if err != nil {
+			return nil, fmt.Errorf("downloading file: %w", err)
+		}
 
-	data, err := io.ReadAll(dlResp.Body)
-	if err != nil {
-		return nil, fmt.Errorf("reading file data: %w", err)
+		if rlErr := parseRateLimitError(dlResp); rlErr != nil {
+			dlResp.Body.Close()
+			if attempt == maxRetries {
+				return nil, rlErr
+			}
+			log.Printf("[telegram] 429 rate limited on file download, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
+			time.Sleep(time.Duration(rlErr.RetryAfter) * time.Second)
+			continue
+		}
+
+		if dlResp.StatusCode != http.StatusOK {
+			respBody, _ := io.ReadAll(dlResp.Body)
+			dlResp.Body.Close()
+			return nil, fmt.Errorf("telegram file download error (status %d): %s", dlResp.StatusCode, string(respBody))
+		}
+
+		data, err := io.ReadAll(dlResp.Body)
+		dlResp.Body.Close()
+		if err != nil {
+			return nil, fmt.Errorf("reading file data: %w", err)
+		}
+
+		return data, nil
 	}
 
-	return data, nil
+	return nil, fmt.Errorf("telegram file download failed after %d retries", maxRetries)
 }
 
 // GenerateChunkFilename generates a filename for a chunk.

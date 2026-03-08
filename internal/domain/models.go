@@ -76,9 +76,3 @@ type FSElement struct {
 	IsFile bool   `json:"is_file"`
 }
 
-type SearchFSElement struct {
-	Path   string `json:"path"`
-	Name   string `json:"name"`
-	Size   int64  `json:"size"`
-	IsFile bool   `json:"is_file"`
-}

@@ -23,6 +23,23 @@ type createWorkerRequest struct {
 	StorageID *string `json:"storage_id"`
 }
 
+type updateWorkerRequest struct {
+	Name      string  `json:"name"`
+	StorageID *string `json:"storage_id"`
+}
+
+// parseOptionalUUID parses a *string into a *uuid.UUID, returning nil for empty/nil.
+func parseOptionalUUID(s *string) (*uuid.UUID, error) {
+	if s == nil || *s == "" {
+		return nil, nil
+	}
+	id, err := uuid.Parse(*s)
+	if err != nil {
+		return nil, domain.ErrBadRequest("invalid storage_id")
+	}
+	return &id, nil
+}
+
 func (h *StorageWorkersHandler) Create(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
 
@@ -32,14 +49,10 @@ func (h *StorageWorkersHandler) Create(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var storageID *uuid.UUID
-	if req.StorageID != nil && *req.StorageID != "" {
-		id, err := uuid.Parse(*req.StorageID)
-		if err != nil {
-			writeError(w, domain.ErrBadRequest("invalid storage_id"))
-			return
-		}
-		storageID = &id
+	storageID, err := parseOptionalUUID(req.StorageID)
+	if err != nil {
+		writeError(w, err)
+		return
 	}
 
 	worker, err := h.svc.Create(r.Context(), req.Name, user.ID, req.Token, storageID)
@@ -66,11 +79,6 @@ func (h *StorageWorkersHandler) List(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, workers)
 }
 
-type updateWorkerRequest struct {
-	Name      string  `json:"name"`
-	StorageID *string `json:"storage_id"`
-}
-
 func (h *StorageWorkersHandler) Update(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
 	workerID, err := parseUUIDParam(r, "workerID")
@@ -85,14 +93,10 @@ func (h *StorageWorkersHandler) Update(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var storageID *uuid.UUID
-	if req.StorageID != nil && *req.StorageID != "" {
-		id, err := uuid.Parse(*req.StorageID)
-		if err != nil {
-			writeError(w, domain.ErrBadRequest("invalid storage_id"))
-			return
-		}
-		storageID = &id
+	storageID, err := parseOptionalUUID(req.StorageID)
+	if err != nil {
+		writeError(w, err)
+		return
 	}
 
 	worker, err := h.svc.Update(r.Context(), workerID, user.ID, req.Name, storageID)

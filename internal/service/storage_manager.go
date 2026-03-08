@@ -1,7 +1,6 @@
 package service
 
 import (
-	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -249,8 +248,7 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 		progress.TotalChunks = total
 	}
 
-	for _, chunk := range chunks {
-		c := chunk
+	for _, c := range chunks {
 		if c.TelegramMessageID == 0 {
 			continue
 		}
@@ -275,16 +273,6 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 	}
 	log.Printf("[delete] finished removing chunks from chat=%s", storage.Name)
 	return nil
-}
-
-// Download retrieves all chunks from Telegram in parallel and reassembles the file.
-// Download returns the full file contents in memory. Only suitable for smaller files.
-func (m *StorageManager) Download(ctx context.Context, file *domain.File) ([]byte, error) {
-	var buf bytes.Buffer
-	if err := m.DownloadToWriter(ctx, file, &buf, nil); err != nil {
-		return nil, err
-	}
-	return buf.Bytes(), nil
 }
 
 // DownloadToWriter streams a file's chunks sequentially to the given writer.
@@ -327,7 +315,7 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 
 		log.Printf("[download] chunk %d of file=%s via worker=%s chat=%s", chunk.Position, file.Path, wt.Name, storage.Name)
 
-		data, err := m.tgClient.Download(wt.Token, chunk.TelegramFileID)
+		data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
 		if err != nil {
 			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
 		}
@@ -343,5 +331,116 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 	}
 
 	log.Printf("[download] completed file=%s storage=%s chat=%s", file.Path, storage.Name, storage.Name)
+	return nil
+}
+
+// ExactFileSize derives the exact file size using chunk count and actual last-chunk bytes.
+// This avoids relying on persisted file.Size when legacy rows contain multipart envelope overhead.
+func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (int64, error) {
+	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
+	if err != nil {
+		return 0, fmt.Errorf("listing chunks: %w", err)
+	}
+	if len(chunks) == 0 {
+		return 0, domain.ErrNotFound("file chunks")
+	}
+
+	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
+	if err != nil {
+		return 0, fmt.Errorf("getting storage: %w", err)
+	}
+
+	last := chunks[len(chunks)-1]
+	wt, err := m.scheduler.GetToken(ctx, storage.ID)
+	if err != nil {
+		return 0, fmt.Errorf("getting token for last chunk %d: %w", last.Position, err)
+	}
+
+	data, err := m.tgClient.Download(ctx, wt.Token, last.TelegramFileID)
+	if err != nil {
+		return 0, fmt.Errorf("downloading last chunk %d: %w", last.Position, err)
+	}
+
+	return int64(len(chunks)-1)*chunkSize + int64(len(data)), nil
+}
+
+// DownloadRangeToWriter streams only the requested byte range [start, end] (inclusive).
+// It downloads only the needed Telegram chunks and trims boundaries in memory.
+func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error {
+	if start < 0 || end < start || end >= totalSize {
+		return fmt.Errorf("invalid range %d-%d for file size %d", start, end, totalSize)
+	}
+
+	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
+	if err != nil {
+		return fmt.Errorf("listing chunks: %w", err)
+	}
+	if len(chunks) == 0 {
+		return domain.ErrNotFound("file chunks")
+	}
+
+	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
+	if err != nil {
+		return fmt.Errorf("getting storage: %w", err)
+	}
+
+	if progress != nil && progress.TotalBytes == 0 {
+		progress.TotalBytes = end - start + 1
+	}
+
+	startChunk := int(start / chunkSize)
+	endChunk := int(end / chunkSize)
+	if startChunk < 0 || endChunk >= len(chunks) {
+		return fmt.Errorf("range maps to invalid chunk indexes %d-%d (len=%d)", startChunk, endChunk, len(chunks))
+	}
+
+	for i := startChunk; i <= endChunk; i++ {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		chunk := chunks[i]
+		wt, err := m.scheduler.GetToken(ctx, storage.ID)
+		if err != nil {
+			return fmt.Errorf("getting token for chunk %d: %w", chunk.Position, err)
+		}
+
+		data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
+		if err != nil {
+			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
+		}
+
+		chunkStart := int64(i) * chunkSize
+		left := int64(0)
+		if start > chunkStart {
+			left = start - chunkStart
+		}
+		right := int64(len(data))
+		chunkEndExclusive := chunkStart + int64(len(data))
+		if end+1 < chunkEndExclusive {
+			right = end + 1 - chunkStart
+		}
+		if left < 0 {
+			left = 0
+		}
+		if right > int64(len(data)) {
+			right = int64(len(data))
+		}
+		if left >= right {
+			continue
+		}
+
+		if _, err := w.Write(data[left:right]); err != nil {
+			return fmt.Errorf("writing ranged chunk %d: %w", chunk.Position, err)
+		}
+
+		if progress != nil {
+			progress.DownloadedChunks.Add(1)
+			progress.DownloadedBytes.Add(right - left)
+		}
+	}
+
 	return nil
 }
