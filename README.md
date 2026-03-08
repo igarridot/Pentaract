@@ -1,6 +1,9 @@
 # Pentaract
 
 [![Tests](https://img.shields.io/github/actions/workflow/status/igarridot/Pentaract/tests.yml?style=plastic&logo=github)](https://github.com/igarridot/Pentaract/actions/workflows/tests.yml)
+[<img alt="Dockerhub latest" src="https://img.shields.io/badge/dockerhub-latest-blue?logo=docker&style=plastic">](https://hub.docker.com/r/norbega/pentaract)
+[<img alt="Docker Image Size (tag)" src="https://img.shields.io/docker/image-size/norbega/pentaract/latest?style=plastic&logo=docker&color=gold">](https://hub.docker.com/r/thedominux/pentaract/tags?page=1&name=latest)
+[<img alt="Any platform" src="https://img.shields.io/badge/platform-any-green?style=plastic&logo=linux&logoColor=white">](https://github.com/igarridot/Pentaract)
 
 Pentaract is a self-hosted cloud storage that uses **Telegram as the storage backend**.
 Files are split into **20 MB chunks**, uploaded through Telegram bot workers, and reassembled on download.
@@ -24,10 +27,13 @@ Files are split into **20 MB chunks**, uploaded through Telegram bot workers, an
 - **Access control:** read / write / admin per storage, with user grants.
 - **Multi-worker model:** multiple Telegram bots, optional per-storage assignment, rate-limit aware scheduling.
 
-## Credits
+## Support
 
-Based on the original [Pentaract](https://github.com/Dominux/Pentaract) concept by Dominux.
-The codebase has been rewritten.
+If you would like to support this project
+
+**BTC**: `bc1qgx8f76qy3eekfhtsr9eauqvjt30utvts4r8n4h`
+
+**ETH**: `0x032C9ABEb3055ae5E0e58df94a7309823e70eBcB`
 
 ## Prerequisites
 
@@ -252,6 +258,13 @@ ui/
     pages/              Route pages
 ```
 
-## License
+## Kudos
 
-Based on the original [Pentaract](https://github.com/Dominux/Pentaract) by Dominux.
+Inspired on the [Pentaract](https://github.com/Dominux/Pentaract) by Dominux.
+To support him:
+
+**BTC**: `18mquj59AcB4y4VBevdn5HekG5y7gvPYGk`
+
+**TON**: `UQDoGRgUIEDA30cko8k-icnI8S5i8QIq2jFvqswNvVUc9F2U`
+
+**USDT TON**: `UQDoGRgUIEDA30cko8k-icnI8S5i8QIq2jFvqswNvVUc9F2U`
