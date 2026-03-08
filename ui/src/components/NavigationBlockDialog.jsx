@@ -7,6 +7,7 @@ export default function NavigationBlockDialog({
   isUploading = false,
   isDownloading = false,
   isDeleting = false,
+  isMoving = false,
 }) {
   if (!blocker || blocker.state !== 'blocked') return null
 
@@ -14,6 +15,7 @@ export default function NavigationBlockDialog({
     isUploading ? 'upload' : null,
     isDownloading ? 'download' : null,
     isDeleting ? 'delete' : null,
+    isMoving ? 'move' : null,
   ].filter(Boolean)
 
   const opText = activeOps.length > 1
