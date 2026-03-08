@@ -83,6 +83,31 @@ func TestFilesRepoNotFoundCases(t *testing.T) {
 	}
 }
 
+func TestFilesRepoCreateFileIfNotExists(t *testing.T) {
+	mock, repo := newFilesRepoMock(t)
+	defer mock.Close()
+	ctx := context.Background()
+	storageID := uuid.New()
+	fileID := uuid.New()
+
+	mock.ExpectQuery("INSERT INTO files \\(path, size, storage_id, is_uploaded\\)").
+		WithArgs("docs/a.txt", int64(4), storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "path", "size", "storage_id", "is_uploaded"}).
+			AddRow(fileID, "docs/a.txt", int64(4), storageID, false))
+	f, skipped, err := repo.CreateFileIfNotExists(ctx, "docs/a.txt", 4, storageID)
+	if err != nil || skipped || f == nil || f.ID != fileID {
+		t.Fatalf("expected created file, got file=%+v skipped=%v err=%v", f, skipped, err)
+	}
+
+	mock.ExpectQuery("INSERT INTO files \\(path, size, storage_id, is_uploaded\\)").
+		WithArgs("docs/a.txt", int64(4), storageID).
+		WillReturnError(pgx.ErrNoRows)
+	f, skipped, err = repo.CreateFileIfNotExists(ctx, "docs/a.txt", 4, storageID)
+	if err != nil || !skipped || f != nil {
+		t.Fatalf("expected skipped duplicate, got file=%+v skipped=%v err=%v", f, skipped, err)
+	}
+}
+
 func TestFilesRepoListDirAndSearch(t *testing.T) {
 	mock, repo := newFilesRepoMock(t)
 	defer mock.Close()

@@ -53,6 +53,7 @@ type uploadTracker struct {
 	storageID uuid.UUID
 	filePath  string
 	err       error
+	skipped   bool
 	done      bool
 }
 
@@ -78,7 +79,7 @@ type FilesHandler struct {
 type filesService interface {
 	Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error
 	CreateFolder(ctx context.Context, userID, storageID uuid.UUID, path, folderName string) error
-	Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress) (*domain.File, error)
+	Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error)
 	Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error
 	WorkersStatus(storageID uuid.UUID) string
 	GetFileForDownload(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error)
@@ -258,7 +259,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var path, filename, uploadID string
+	var path, filename, uploadID, onConflict string
 	var fileSize int64
 	var filePart io.ReadCloser
 
@@ -274,6 +275,9 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		case "upload_id":
 			b, _ := io.ReadAll(part)
 			uploadID = string(b)
+		case "on_conflict":
+			b, _ := io.ReadAll(part)
+			onConflict = string(b)
 		case "file":
 			filename = part.FileName()
 			filePart = part
@@ -293,6 +297,9 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path = strings.TrimSuffix(path, "/")
+	if onConflict == "" {
+		onConflict = service.UploadConflictKeepBoth
+	}
 	fullPath := filename
 	if path != "" {
 		fullPath = path + "/" + filename
@@ -330,11 +337,12 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			h.scheduleUploadTrackerCleanup(uploadID)
 		}()
 
-		_, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress)
+		_, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress, onConflict)
 
 		h.mu.Lock()
 		tracker.done = true
 		tracker.err = uploadErr
+		tracker.skipped = skipped
 		h.mu.Unlock()
 
 		if uploadErr != nil {
@@ -421,10 +429,13 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		h.mu.RLock()
 		isDone := tracker.done
 		uploadErr := tracker.err
+		isSkipped := tracker.skipped
 		h.mu.RUnlock()
 
 		if isDone && uploadErr != nil {
 			status = "error"
+		} else if isDone && isSkipped {
+			status = "skipped"
 		} else if isDone {
 			status = "done"
 		}

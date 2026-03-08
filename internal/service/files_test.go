@@ -13,16 +13,17 @@ import (
 )
 
 type fakeFilesRepo struct {
-	createFolderFn       func(ctx context.Context, storageID uuid.UUID, path string) error
-	createFileAnywayFn   func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error)
-	getByPathFn          func(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error)
-	listDirFn            func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FSElement, error)
-	searchFn             func(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
-	listChunksByPathFn   func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FileChunk, error)
-	deleteFn             func(ctx context.Context, storageID uuid.UUID, path string) error
-	dirStatsFn           func(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error)
-	listFilesUnderPathFn func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error)
-	moveFn               func(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error
+	createFolderFn          func(ctx context.Context, storageID uuid.UUID, path string) error
+	createFileAnywayFn      func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error)
+	createFileIfNotExistsFn func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error)
+	getByPathFn             func(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error)
+	listDirFn               func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FSElement, error)
+	searchFn                func(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
+	listChunksByPathFn      func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FileChunk, error)
+	deleteFn                func(ctx context.Context, storageID uuid.UUID, path string) error
+	dirStatsFn              func(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error)
+	listFilesUnderPathFn    func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error)
+	moveFn                  func(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error
 }
 
 func (f *fakeFilesRepo) CreateFolder(ctx context.Context, storageID uuid.UUID, path string) error {
@@ -30,6 +31,9 @@ func (f *fakeFilesRepo) CreateFolder(ctx context.Context, storageID uuid.UUID, p
 }
 func (f *fakeFilesRepo) CreateFileAnyway(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error) {
 	return f.createFileAnywayFn(ctx, path, size, storageID)
+}
+func (f *fakeFilesRepo) CreateFileIfNotExists(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error) {
+	return f.createFileIfNotExistsFn(ctx, path, size, storageID)
 }
 func (f *fakeFilesRepo) GetByPath(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error) {
 	return f.getByPathFn(ctx, storageID, path)
@@ -105,6 +109,9 @@ func TestFilesServiceMainFlows(t *testing.T) {
 		createFileAnywayFn: func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: path, StorageID: storageID, Size: size}, nil
 		},
+		createFileIfNotExistsFn: func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error) {
+			return &domain.File{ID: fileID, Path: path, StorageID: storageID, Size: size}, false, nil
+		},
 		getByPathFn: func(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: path, StorageID: storageID}, nil
 		},
@@ -154,8 +161,8 @@ func TestFilesServiceMainFlows(t *testing.T) {
 	if err := svc.CreateFolder(context.Background(), userID, storageID, "base", "folder"); err != nil {
 		t.Fatalf("create folder failed: %v", err)
 	}
-	f, err := svc.Upload(context.Background(), userID, storageID, "a.txt", 1, bytes.NewBufferString("x"), nil)
-	if err != nil || f == nil {
+	f, skipped, err := svc.Upload(context.Background(), userID, storageID, "a.txt", 1, bytes.NewBufferString("x"), nil, UploadConflictKeepBoth)
+	if err != nil || f == nil || skipped {
 		t.Fatalf("upload failed: %v", err)
 	}
 	if _, err := svc.GetFileForDownload(context.Background(), userID, storageID, "a.txt"); err != nil {
@@ -192,6 +199,9 @@ func TestFilesServiceForbiddenAndErrors(t *testing.T) {
 		createFolderFn: func(ctx context.Context, storageID uuid.UUID, path string) error { return nil },
 		createFileAnywayFn: func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error) {
 			return nil, errors.New("x")
+		},
+		createFileIfNotExistsFn: func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error) {
+			return nil, false, errors.New("x")
 		},
 		getByPathFn: func(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error) {
 			return nil, errors.New("x")
@@ -236,7 +246,7 @@ func TestFilesServiceForbiddenAndErrors(t *testing.T) {
 	if err := svc.CreateFolder(context.Background(), uuid.New(), uuid.New(), "", "folder"); err == nil {
 		t.Fatalf("expected forbidden")
 	}
-	if _, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), "a", 1, bytes.NewBufferString("x"), nil); err == nil {
+	if _, _, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), "a", 1, bytes.NewBufferString("x"), nil, UploadConflictKeepBoth); err == nil {
 		t.Fatalf("expected forbidden")
 	}
 	if _, err := svc.GetFileForDownload(context.Background(), uuid.New(), uuid.New(), "a"); err == nil {
@@ -268,5 +278,122 @@ func TestFilesServiceWorkersStatus(t *testing.T) {
 	svc = NewFilesServiceWithDeps(nil, nil, nil, nil, scheduler)
 	if got := svc.WorkersStatus(storageID); got != "waiting_rate_limit" {
 		t.Fatalf("expected waiting_rate_limit, got %q", got)
+	}
+}
+
+func TestFilesServiceUploadSkipConflict(t *testing.T) {
+	userID := uuid.New()
+	storageID := uuid.New()
+	access := &fakeFilesAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return true, nil
+		},
+	}
+	managerCalled := false
+	repo := &fakeFilesRepo{
+		createFolderFn: func(ctx context.Context, storageID uuid.UUID, path string) error { return nil },
+		createFileAnywayFn: func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error) {
+			return &domain.File{}, nil
+		},
+		createFileIfNotExistsFn: func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error) {
+			return nil, true, nil
+		},
+		getByPathFn: func(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error) { return nil, nil },
+		listDirFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FSElement, error) {
+			return nil, nil
+		},
+		searchFn: func(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error) {
+			return nil, nil
+		},
+		listChunksByPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FileChunk, error) {
+			return nil, nil
+		},
+		deleteFn:             func(ctx context.Context, storageID uuid.UUID, path string) error { return nil },
+		dirStatsFn:           func(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error) { return 0, 0, nil },
+		listFilesUnderPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) { return nil, nil },
+		moveFn:               func(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error { return nil },
+	}
+	manager := &fakeFilesManager{
+		uploadFn: func(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
+			managerCalled = true
+			return nil
+		},
+		downloadFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+			return nil
+		},
+		exactFn: func(ctx context.Context, file *domain.File) (int64, error) { return 0, nil },
+		rangeFn: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error {
+			return nil
+		},
+		deleteFromTelegramFn: func(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error {
+			return nil
+		},
+	}
+	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
+		return &domain.Storage{ID: id}, nil
+	}}, nil)
+
+	file, skipped, err := svc.Upload(context.Background(), userID, storageID, "a.txt", 1, bytes.NewBufferString("x"), nil, UploadConflictSkip)
+	if err != nil {
+		t.Fatalf("upload skip returned error: %v", err)
+	}
+	if file != nil || !skipped {
+		t.Fatalf("expected skipped upload, got file=%v skipped=%v", file, skipped)
+	}
+	if managerCalled {
+		t.Fatalf("manager upload should not be called when skipped")
+	}
+}
+
+func TestFilesServiceUploadInvalidConflictPolicy(t *testing.T) {
+	access := &fakeFilesAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return true, nil
+		},
+	}
+	repo := &fakeFilesRepo{
+		createFolderFn: func(ctx context.Context, storageID uuid.UUID, path string) error { return nil },
+		createFileAnywayFn: func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error) {
+			return &domain.File{}, nil
+		},
+		createFileIfNotExistsFn: func(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error) {
+			return &domain.File{}, false, nil
+		},
+		getByPathFn: func(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error) { return nil, nil },
+		listDirFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FSElement, error) {
+			return nil, nil
+		},
+		searchFn: func(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error) {
+			return nil, nil
+		},
+		listChunksByPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FileChunk, error) {
+			return nil, nil
+		},
+		deleteFn:             func(ctx context.Context, storageID uuid.UUID, path string) error { return nil },
+		dirStatsFn:           func(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error) { return 0, 0, nil },
+		listFilesUnderPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) { return nil, nil },
+		moveFn:               func(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error { return nil },
+	}
+	manager := &fakeFilesManager{
+		uploadFn: func(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
+			return nil
+		},
+		downloadFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+			return nil
+		},
+		exactFn: func(ctx context.Context, file *domain.File) (int64, error) { return 0, nil },
+		rangeFn: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error {
+			return nil
+		},
+		deleteFromTelegramFn: func(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error {
+			return nil
+		},
+	}
+	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
+		return &domain.Storage{ID: id}, nil
+	}}, nil)
+
+	if _, _, err := svc.Upload(context.Background(), uuid.New(), uuid.New(), "a.txt", 1, bytes.NewBufferString("x"), nil, "invalid"); err == nil {
+		t.Fatalf("expected invalid on_conflict error")
 	}
 }

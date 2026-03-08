@@ -23,6 +23,7 @@ type FilesService struct {
 type filesRepository interface {
 	CreateFolder(ctx context.Context, storageID uuid.UUID, path string) error
 	CreateFileAnyway(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error)
+	CreateFileIfNotExists(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error)
 	GetByPath(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error)
 	ListDir(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FSElement, error)
 	Search(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
@@ -32,6 +33,11 @@ type filesRepository interface {
 	ListFilesUnderPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error)
 	Move(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error
 }
+
+const (
+	UploadConflictKeepBoth = "keep_both"
+	UploadConflictSkip     = "skip"
+)
 
 type filesAccessRepository interface {
 	HasAccess(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error)
@@ -76,21 +82,40 @@ func (s *FilesService) CreateFolder(ctx context.Context, userID, storageID uuid.
 	return s.filesRepo.CreateFolder(ctx, storageID, fullPath)
 }
 
-func (s *FilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *UploadProgress) (*domain.File, error) {
+func (s *FilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *UploadProgress, onConflict string) (*domain.File, bool, error) {
 	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessWrite); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	file, err := s.filesRepo.CreateFileAnyway(ctx, path, size, storageID)
+	if onConflict == "" {
+		onConflict = UploadConflictKeepBoth
+	}
+
+	var (
+		file    *domain.File
+		skipped bool
+		err     error
+	)
+	switch onConflict {
+	case UploadConflictKeepBoth:
+		file, err = s.filesRepo.CreateFileAnyway(ctx, path, size, storageID)
+	case UploadConflictSkip:
+		file, skipped, err = s.filesRepo.CreateFileIfNotExists(ctx, path, size, storageID)
+	default:
+		return nil, false, domain.ErrBadRequest("invalid on_conflict value")
+	}
 	if err != nil {
-		return nil, err
+		return nil, false, err
+	}
+	if skipped {
+		return nil, true, nil
 	}
 
 	if err := s.manager.Upload(ctx, file, reader, progress); err != nil {
-		return nil, err
+		return nil, false, err
 	}
 
-	return file, nil
+	return file, false, nil
 }
 
 func (s *FilesService) GetFileForDownload(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {

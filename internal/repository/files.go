@@ -87,6 +87,28 @@ func (r *FilesRepo) CreateFileAnyway(ctx context.Context, path string, size int6
 	return f, nil
 }
 
+// CreateFileIfNotExists creates a file record only when the exact path does not
+// exist yet. Returns (nil, true, nil) when the file already exists.
+func (r *FilesRepo) CreateFileIfNotExists(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error) {
+	f := &domain.File{}
+	err := r.pool.QueryRow(ctx,
+		`INSERT INTO files (path, size, storage_id, is_uploaded)
+		SELECT $1, $2, $3, false
+		WHERE NOT EXISTS (
+			SELECT 1 FROM files WHERE storage_id = $3 AND path = $1
+		)
+		RETURNING id, path, size, storage_id, is_uploaded`,
+		path, size, storageID,
+	).Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded)
+	if err != nil {
+		if errors.Is(err, pgx.ErrNoRows) {
+			return nil, true, nil
+		}
+		return nil, false, err
+	}
+	return f, false, nil
+}
+
 func (r *FilesRepo) MarkUploaded(ctx context.Context, fileID uuid.UUID) error {
 	_, err := r.pool.Exec(ctx,
 		`UPDATE files SET is_uploaded = true WHERE id = $1`,

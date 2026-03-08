@@ -49,6 +49,8 @@ export default function Files() {
   const [forceDelete, setForceDelete] = useState(false)
   const [moveTarget, setMoveTarget] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
+  const [selectedFilePaths, setSelectedFilePaths] = useState([])
+  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [uploadStates, setUploadStates] = useState([])
   const [downloadStates, setDownloadStates] = useState([])
   const [deleteState, setDeleteState] = useState(null)
@@ -80,6 +82,7 @@ export default function Files() {
     loadTree()
     setSearchResults(null)
     setSearch('')
+    setSelectedFilePaths([])
   }, [loadTree])
 
   useEffect(() => {
@@ -153,7 +156,7 @@ export default function Files() {
     }
   }
 
-  const uploadSingleFile = async (file, targetPath) => {
+  const uploadSingleFile = async (file, targetPath, onConflict = 'keep_both') => {
     const filename = file.name
     const uploadId = createOperationId()
     setUploadStates((prev) => [...prev, {
@@ -197,13 +200,22 @@ export default function Files() {
           setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
         }, 3000)
       }
+      if (data.status === 'skipped') {
+        uploadProgressCancelsRef.current.get(uploadId)?.()
+        uploadProgressCancelsRef.current.delete(uploadId)
+        uploadAbortControllersRef.current.delete(uploadId)
+        addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
+        setTimeout(() => {
+          setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
+        }, 1500)
+      }
     })
     uploadProgressCancelsRef.current.set(uploadId, cancel)
     const controller = new AbortController()
     uploadAbortControllersRef.current.set(uploadId, controller)
 
     try {
-      await API.files.upload(storageId, targetPath.replace(/\/+$/, ''), file, uploadId, { signal: controller.signal })
+      await API.files.upload(storageId, targetPath.replace(/\/+$/, ''), file, uploadId, { signal: controller.signal, onConflict })
     } catch (err) {
       if (err?.name !== 'AbortError') {
         updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
@@ -256,17 +268,26 @@ export default function Files() {
   }, [getDirFileNames])
 
   const runUploadBatch = useCallback(async (entries) => {
+    let defaultConflictMode = 'keep_both'
+    const askConflictDecision = async (filename, targetPath) => {
+      const decision = await askUploadConflictDecision(filename, targetPath)
+      if (decision.applyForAll && decision.action === 'skip') {
+        defaultConflictMode = 'skip'
+      }
+      return decision
+    }
+
     const entriesToUpload = await resolveUploadEntries(
       entries,
       hasUploadConflict,
-      askUploadConflictDecision,
+      askConflictDecision,
     )
 
     const uploadedKeys = new Set(entriesToUpload.map((entry) => `${entry.targetPath}::${entry.filename}`))
     entries.forEach((entry) => {
       const key = `${entry.targetPath}::${entry.filename}`
       if (!uploadedKeys.has(key)) {
-        addAlert(`Skipped upload for "${entry.filename}"`, 'info')
+        addAlert(`Skipped upload for "${entry.filename}"`, 'info', { persistent: false })
       }
     })
 
@@ -274,7 +295,7 @@ export default function Files() {
       // Upload sequentially to preserve stable progress/cancel behavior.
       // This also avoids opening too many concurrent requests at once.
       // eslint-disable-next-line no-await-in-loop
-      await uploadSingleFile(entry.file, entry.targetPath)
+      await uploadSingleFile(entry.file, entry.targetPath, defaultConflictMode)
       dirFileNamesCacheRef.current.delete(normalizeUploadPath(entry.targetPath))
     }
   }, [addAlert, askUploadConflictDecision, hasUploadConflict])
@@ -440,6 +461,7 @@ export default function Files() {
         if (data.status === 'done') {
           cancel()
           cancelDeleteProgressRef.current = null
+          loadTree()
           setTimeout(() => setDeleteState(null), 1500)
         }
         if (data.status === 'error') {
@@ -523,6 +545,66 @@ export default function Files() {
   ]
 
   const displayItems = searchResults || items
+  const selectableFiles = displayItems.filter((item) => item.is_file)
+  const selectedFiles = selectableFiles.filter((item) => selectedFilePaths.includes(item.path))
+  const allFilesSelected = selectableFiles.length > 0 && selectedFiles.length === selectableFiles.length
+
+  useEffect(() => {
+    const visiblePaths = new Set(selectableFiles.map((item) => item.path))
+    setSelectedFilePaths((prev) => {
+      const next = prev.filter((path) => visiblePaths.has(path))
+      if (next.length === prev.length && next.every((path, i) => path === prev[i])) {
+        return prev
+      }
+      return next
+    })
+  }, [selectableFiles])
+
+  const toggleFileSelection = (item) => {
+    if (!item?.is_file || !item.path) return
+    setSelectedFilePaths((prev) => (
+      prev.includes(item.path)
+        ? prev.filter((path) => path !== item.path)
+        : [...prev, item.path]
+    ))
+  }
+
+  const toggleSelectAllFiles = () => {
+    if (allFilesSelected) {
+      setSelectedFilePaths([])
+      return
+    }
+    setSelectedFilePaths(selectableFiles.map((item) => item.path))
+  }
+
+  const handleBulkDownload = async () => {
+    for (const item of selectedFiles) {
+      // Keep stable progress state behavior.
+      // eslint-disable-next-line no-await-in-loop
+      await handleDownload(item)
+    }
+  }
+
+  const deleteSingleItem = async (item) => {
+    const path = (item.path || item.name).replace(/\/+$/, '')
+    await API.files.delete(storageId, path)
+  }
+
+  const handleBulkDelete = async () => {
+    setBulkDeleteOpen(false)
+    try {
+      for (const item of selectedFiles) {
+        // Keep API calls sequential to avoid overwhelming the backend.
+        // eslint-disable-next-line no-await-in-loop
+        await deleteSingleItem(item)
+      }
+      addAlert(`Deleted ${selectedFiles.length} file(s)`, 'success')
+      setSelectedFilePaths([])
+      loadTree()
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
 
   return (
     <Box>
@@ -590,6 +672,34 @@ export default function Files() {
         )}
       </Box>
 
+      {selectableFiles.length > 0 && (
+        <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
+          <FormControlLabel
+            control={<Checkbox checked={allFilesSelected} onChange={toggleSelectAllFiles} />}
+            label={`Select all files (${selectableFiles.length})`}
+          />
+          <Button size="small" onClick={() => setSelectedFilePaths([])} disabled={selectedFiles.length === 0}>
+            Clear
+          </Button>
+          <Button size="small" onClick={handleBulkDownload} disabled={selectedFiles.length === 0}>
+            Download selected
+          </Button>
+          <Button
+            size="small"
+            color="error"
+            onClick={() => setBulkDeleteOpen(true)}
+            disabled={selectedFiles.length === 0}
+          >
+            Delete selected
+          </Button>
+          {selectedFiles.length > 0 && (
+            <Typography variant="body2" color="text.secondary">
+              {`${selectedFiles.length} selected`}
+            </Typography>
+          )}
+        </Box>
+      )}
+
       <Box sx={{
         bgcolor: 'background.paper',
         borderRadius: 3,
@@ -610,6 +720,9 @@ export default function Files() {
                 onDownload={handleDownload}
                 onMove={setMoveTarget}
                 onRename={setRenameTarget}
+                selectionEnabled
+                isSelected={selectedFilePaths.includes(item.path)}
+                onToggleSelect={toggleFileSelection}
               />
             </Box>
           ))}
@@ -694,6 +807,15 @@ export default function Files() {
           </Typography>
         </Box>
       </ActionConfirmDialog>
+
+      <ActionConfirmDialog
+        open={bulkDeleteOpen}
+        entity={`${selectedFiles.length} file(s)`}
+        action="Delete"
+        description={`Are you sure you want to delete ${selectedFiles.length} selected file(s)?`}
+        onConfirm={handleBulkDelete}
+        onCancel={() => setBulkDeleteOpen(false)}
+      />
 
       <NavigationBlockDialog
         blocker={blocker}

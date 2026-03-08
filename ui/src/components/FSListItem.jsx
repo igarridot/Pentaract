@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import {
   ListItem, ListItemButton, ListItemIcon, ListItemText,
-  IconButton, Menu, MenuItem,
+  IconButton, Menu, MenuItem, Checkbox,
 } from '@mui/material'
 import {
   InsertDriveFile as FileIcon,
@@ -19,6 +19,9 @@ export default function FSListItem({
   onDownload,
   onMove,
   onRename,
+  selectionEnabled = false,
+  isSelected = false,
+  onToggleSelect,
 }) {
   const navigate = useNavigate()
   const [anchorEl, setAnchorEl] = useState(null)
@@ -40,17 +43,30 @@ export default function FSListItem({
   }
 
   return (
-    <ListItem
-      disablePadding
-      secondaryAction={
-        <IconButton
-          onClick={(e) => setAnchorEl(e.currentTarget)}
-          size="small"
-          sx={{ opacity: 0.5, '&:hover': { opacity: 1 } }}
-        >
-          <MoreIcon fontSize="small" />
-        </IconButton>
-      }
+      <ListItem
+        disablePadding
+        secondaryAction={(
+          <>
+            {selectionEnabled && item.is_file && (
+              <Checkbox
+                checked={isSelected}
+                onChange={(e) => {
+                  e.stopPropagation()
+                  if (onToggleSelect) onToggleSelect(item)
+                }}
+                onClick={(e) => e.stopPropagation()}
+                size="small"
+              />
+            )}
+            <IconButton
+              onClick={(e) => setAnchorEl(e.currentTarget)}
+              size="small"
+              sx={{ opacity: 0.5, '&:hover': { opacity: 1 } }}
+            >
+              <MoreIcon fontSize="small" />
+            </IconButton>
+          </>
+        )}
     >
       <ListItemButton onClick={handleClick} sx={{ py: 1 }}>
         <ListItemIcon sx={{ minWidth: 40 }}>
