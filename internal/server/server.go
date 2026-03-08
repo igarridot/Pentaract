@@ -5,6 +5,7 @@ import (
 	"net/http"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -114,12 +115,26 @@ func serveUI(r chi.Router) {
 		return
 	}
 
+	absUI, err := filepath.Abs(uiDir)
+	if err != nil {
+		log.Printf("Failed to resolve UI directory path: %v", err)
+		return
+	}
+	indexPath := filepath.Join(absUI, "index.html")
+	safePrefix := absUI + string(os.PathSeparator)
+
 	r.Get("/*", func(w http.ResponseWriter, r *http.Request) {
-		path := filepath.Join(uiDir, r.URL.Path)
-		if info, err := os.Stat(path); err == nil && !info.IsDir() {
-			http.ServeFile(w, r, path)
-			return
+		requested := filepath.Clean(r.URL.Path)
+		requested = strings.TrimPrefix(requested, "/")
+
+		absPath, err := filepath.Abs(filepath.Join(absUI, requested))
+		if err == nil && (absPath == absUI || strings.HasPrefix(absPath, safePrefix)) {
+			if info, statErr := os.Stat(absPath); statErr == nil && !info.IsDir() {
+				http.ServeFile(w, r, absPath)
+				return
+			}
 		}
-		http.ServeFile(w, r, filepath.Join(uiDir, "index.html"))
+
+		http.ServeFile(w, r, indexPath)
 	})
 }
