@@ -5,9 +5,11 @@ import (
 	"fmt"
 	"io"
 	"log"
+	"strings"
 	"sync"
 	"sync/atomic"
 
+	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
 
 	"github.com/Dominux/Pentaract/internal/domain"
@@ -15,11 +17,16 @@ import (
 	"github.com/Dominux/Pentaract/internal/telegram"
 )
 
-const chunkSize = 20 * 1024 * 1024 // 20MB
+const (
+	maxTelegramGetFileBytes   = 20 * 1024 * 1024
+	uploadChunkSafetyMargin   = 64 * 1024 // keep encrypted chunk comfortably below 20MB
+	uploadChunkSize           = maxTelegramGetFileBytes - uploadChunkSafetyMargin
+)
 
 type StorageManager struct {
 	filesRepo    *repository.FilesRepo
 	storagesRepo *repository.StoragesRepo
+	workersRepo  *repository.StorageWorkersRepo
 	scheduler    *WorkerScheduler
 	tgClient     *telegram.Client
 	chunkCipher  *ChunkCipher
@@ -28,6 +35,7 @@ type StorageManager struct {
 func NewStorageManager(
 	filesRepo *repository.FilesRepo,
 	storagesRepo *repository.StoragesRepo,
+	workersRepo *repository.StorageWorkersRepo,
 	scheduler *WorkerScheduler,
 	tgClient *telegram.Client,
 	encryptionSecret string,
@@ -35,10 +43,97 @@ func NewStorageManager(
 	return &StorageManager{
 		filesRepo:    filesRepo,
 		storagesRepo: storagesRepo,
+		workersRepo:  workersRepo,
 		scheduler:    scheduler,
 		tgClient:     tgClient,
 		chunkCipher:  NewChunkCipher(encryptionSecret),
 	}
+}
+
+func isGetFileFailure(err error) bool {
+	return err != nil && strings.Contains(err.Error(), "telegram getFile failed")
+}
+
+func isTelegramFileTooBig(err error) bool {
+	return err != nil && strings.Contains(strings.ToLower(err.Error()), "file is too big")
+}
+
+func (m *StorageManager) downloadChunkWithWorker(ctx context.Context, storage domain.Storage, chunk domain.FileChunk, wt repository.WorkerToken) ([]byte, error) {
+	data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
+	if err == nil {
+		return data, nil
+	}
+	if !isGetFileFailure(err) || chunk.TelegramMessageID == 0 {
+		return nil, err
+	}
+
+	fileID, resolveErr := m.tgClient.ResolveFileIDByMessage(ctx, wt.Token, storage.ChatID, chunk.TelegramMessageID)
+	if resolveErr != nil {
+		return nil, fmt.Errorf("%w; resolving file_id from message failed: %v", err, resolveErr)
+	}
+
+	data, err = m.tgClient.Download(ctx, wt.Token, fileID)
+	if err != nil {
+		return nil, err
+	}
+
+	if fileID != chunk.TelegramFileID && chunk.ID != uuid.Nil {
+		if updateErr := m.filesRepo.UpdateChunkTelegramFileID(ctx, chunk.ID, fileID); updateErr != nil {
+			log.Printf("[download] warning: failed updating chunk %d file_id: %v", chunk.Position, updateErr)
+		}
+	}
+
+	return data, nil
+}
+
+func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
+	wt, err := m.scheduler.GetToken(ctx, storage.ID)
+	if err != nil {
+		return nil, fmt.Errorf("getting token for chunk %d: %w", chunk.Position, err)
+	}
+
+	data, err := m.downloadChunkWithWorker(ctx, storage, chunk, *wt)
+	if err == nil {
+		return data, nil
+	}
+	if !isGetFileFailure(err) {
+		return nil, err
+	}
+
+	workers, listErr := m.workersRepo.ListTokensByStorage(ctx, storage.ID)
+	if listErr != nil {
+		return nil, fmt.Errorf("fallback workers lookup failed after getFile error: %w", listErr)
+	}
+
+	lastErr := err
+	for _, candidate := range workers {
+		if candidate.Token == wt.Token {
+			continue
+		}
+		data, tryErr := m.downloadChunkWithWorker(ctx, storage, chunk, candidate)
+		if tryErr == nil {
+			log.Printf("[download] chunk %d recovered via fallback worker=%s", chunk.Position, candidate.Name)
+			return data, nil
+		}
+		lastErr = tryErr
+	}
+
+	return nil, lastErr
+}
+
+func (m *StorageManager) downloadAndDecryptChunk(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
+	data, err := m.downloadChunk(ctx, storage, chunk)
+	if err != nil {
+		if isTelegramFileTooBig(err) {
+			return nil, fmt.Errorf("downloading chunk %d: telegram chunk exceeds Bot API download limit (20MB). re-upload file with smaller chunk size", chunk.Position)
+		}
+		return nil, fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
+	}
+	data, err = m.chunkCipher.DecryptChunk(fileID, chunk.Position, data)
+	if err != nil {
+		return nil, fmt.Errorf("decrypting chunk %d: %w", chunk.Position, err)
+	}
+	return data, nil
 }
 
 // UploadProgress tracks chunk upload progress.
@@ -75,8 +170,8 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 
 	// Calculate total chunks from file size if known
 	if progress != nil && progress.TotalBytes > 0 {
-		total := int32(progress.TotalBytes / chunkSize)
-		if progress.TotalBytes%chunkSize != 0 {
+		total := int32(progress.TotalBytes / uploadChunkSize)
+		if progress.TotalBytes%uploadChunkSize != 0 {
 			total++
 		}
 		progress.TotalChunks = total
@@ -143,7 +238,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			break
 		}
 
-		buf := make([]byte, chunkSize)
+		buf := make([]byte, uploadChunkSize)
 		n, readErr := io.ReadFull(reader, buf)
 		if n == 0 && readErr != nil {
 			// Check if the read failed due to cancellation
@@ -316,20 +411,9 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 		default:
 		}
 
-		wt, err := m.scheduler.GetToken(ctx, storage.ID)
+		data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
 		if err != nil {
-			return fmt.Errorf("getting token for chunk %d: %w", chunk.Position, err)
-		}
-
-		log.Printf("[download] chunk %d of file=%s via worker=%s chat=%s", chunk.Position, file.Path, wt.Name, storage.Name)
-
-		data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
-		if err != nil {
-			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
-		}
-		data, err = m.chunkCipher.DecryptChunk(file.ID, chunk.Position, data)
-		if err != nil {
-			return fmt.Errorf("decrypting chunk %d: %w", chunk.Position, err)
+			return err
 		}
 
 		if _, err := w.Write(data); err != nil {
@@ -362,22 +446,15 @@ func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (
 		return 0, fmt.Errorf("getting storage: %w", err)
 	}
 
-	last := chunks[len(chunks)-1]
-	wt, err := m.scheduler.GetToken(ctx, storage.ID)
-	if err != nil {
-		return 0, fmt.Errorf("getting token for last chunk %d: %w", last.Position, err)
+	var total int64
+	for _, chunk := range chunks {
+		data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
+		if err != nil {
+			return 0, err
+		}
+		total += int64(len(data))
 	}
-
-	data, err := m.tgClient.Download(ctx, wt.Token, last.TelegramFileID)
-	if err != nil {
-		return 0, fmt.Errorf("downloading last chunk %d: %w", last.Position, err)
-	}
-	data, err = m.chunkCipher.DecryptChunk(file.ID, last.Position, data)
-	if err != nil {
-		return 0, fmt.Errorf("decrypting last chunk %d: %w", last.Position, err)
-	}
-
-	return int64(len(chunks)-1)*chunkSize + int64(len(data)), nil
+	return total, nil
 }
 
 // DownloadRangeToWriter streams only the requested byte range [start, end] (inclusive).
@@ -404,41 +481,35 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 		progress.TotalBytes = end - start + 1
 	}
 
-	startChunk := int(start / chunkSize)
-	endChunk := int(end / chunkSize)
-	if startChunk < 0 || endChunk >= len(chunks) {
-		return fmt.Errorf("range maps to invalid chunk indexes %d-%d (len=%d)", startChunk, endChunk, len(chunks))
-	}
-
-	for i := startChunk; i <= endChunk; i++ {
+	offset := int64(0)
+	for _, chunk := range chunks {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		chunk := chunks[i]
-		wt, err := m.scheduler.GetToken(ctx, storage.ID)
+		data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
 		if err != nil {
-			return fmt.Errorf("getting token for chunk %d: %w", chunk.Position, err)
+			return err
 		}
 
-		data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
-		if err != nil {
-			return fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
+		chunkStart := offset
+		chunkEndExclusive := chunkStart + int64(len(data))
+		offset = chunkEndExclusive
+
+		if chunkEndExclusive <= start {
+			continue
 		}
-		data, err = m.chunkCipher.DecryptChunk(file.ID, chunk.Position, data)
-		if err != nil {
-			return fmt.Errorf("decrypting chunk %d: %w", chunk.Position, err)
+		if chunkStart > end {
+			break
 		}
 
-		chunkStart := int64(i) * chunkSize
 		left := int64(0)
 		if start > chunkStart {
 			left = start - chunkStart
 		}
 		right := int64(len(data))
-		chunkEndExclusive := chunkStart + int64(len(data))
 		if end+1 < chunkEndExclusive {
 			right = end + 1 - chunkStart
 		}
@@ -459,6 +530,10 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 		if progress != nil {
 			progress.DownloadedChunks.Add(1)
 			progress.DownloadedBytes.Add(right - left)
+		}
+
+		if chunkEndExclusive > end {
+			break
 		}
 	}
 

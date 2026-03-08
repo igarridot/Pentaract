@@ -17,6 +17,16 @@ type GetFileResponse struct {
 	} `json:"result"`
 }
 
+type ForwardMessageResponse struct {
+	OK     bool `json:"ok"`
+	Result struct {
+		MessageID int64 `json:"message_id"`
+		Document  struct {
+			FileID string `json:"file_id"`
+		} `json:"document"`
+	} `json:"result"`
+}
+
 // TelegramErrorResponse represents a Telegram API error with retry_after.
 type TelegramErrorResponse struct {
 	OK          bool `json:"ok"`

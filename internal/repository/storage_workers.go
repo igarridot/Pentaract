@@ -66,6 +66,28 @@ func (r *StorageWorkersRepo) HasWorkers(ctx context.Context, storageID uuid.UUID
 	return exists, err
 }
 
+// ListTokensByStorage returns all worker tokens assigned to a storage.
+func (r *StorageWorkersRepo) ListTokensByStorage(ctx context.Context, storageID uuid.UUID) ([]WorkerToken, error) {
+	rows, err := r.pool.Query(ctx,
+		`SELECT token, name FROM storage_workers WHERE storage_id = $1 ORDER BY name`,
+		storageID,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	tokens := make([]WorkerToken, 0)
+	for rows.Next() {
+		var wt WorkerToken
+		if err := rows.Scan(&wt.Token, &wt.Name); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, wt)
+	}
+	return tokens, rows.Err()
+}
+
 func (r *StorageWorkersRepo) Delete(ctx context.Context, id, userID uuid.UUID) error {
 	ct, err := r.pool.Exec(ctx,
 		`DELETE FROM storage_workers WHERE id = $1 AND user_id = $2`,

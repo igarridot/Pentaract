@@ -288,6 +288,14 @@ func (r *FilesRepo) ListChunks(ctx context.Context, fileID uuid.UUID) ([]domain.
 	return scanChunks(rows)
 }
 
+func (r *FilesRepo) UpdateChunkTelegramFileID(ctx context.Context, chunkID uuid.UUID, telegramFileID string) error {
+	_, err := r.pool.Exec(ctx,
+		`UPDATE file_chunks SET telegram_file_id = $2 WHERE id = $1`,
+		chunkID, telegramFileID,
+	)
+	return err
+}
+
 // ListFilesUnderPath returns all uploaded files under a directory prefix.
 func (r *FilesRepo) ListFilesUnderPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) {
 	if path != "" && !strings.HasSuffix(path, "/") {
