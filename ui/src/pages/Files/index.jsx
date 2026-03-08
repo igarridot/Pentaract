@@ -199,34 +199,36 @@ export default function Files() {
         status: data.status,
         workersStatus: data.workers_status || prev?.workersStatus || 'active',
       }))
-      if (data.status === 'done') {
-        uploadProgressCancelsRef.current.get(uploadId)?.()
-        uploadProgressCancelsRef.current.delete(uploadId)
-        uploadAbortControllersRef.current.delete(uploadId)
-        addAlert('File uploaded', 'success')
-        loadTree()
+        if (data.status === 'done') {
+          uploadProgressCancelsRef.current.get(uploadId)?.()
+          uploadProgressCancelsRef.current.delete(uploadId)
+          uploadAbortControllersRef.current.delete(uploadId)
+          addAlert('File uploaded', 'success')
+          loadTree()
         setTimeout(() => {
           setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
         }, 2000)
       }
-      if (data.status === 'error') {
-        uploadProgressCancelsRef.current.get(uploadId)?.()
-        uploadProgressCancelsRef.current.delete(uploadId)
-        uploadAbortControllersRef.current.delete(uploadId)
-        addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
-        setTimeout(() => {
-          setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
-        }, 3000)
-      }
-      if (data.status === 'skipped') {
-        uploadProgressCancelsRef.current.get(uploadId)?.()
-        uploadProgressCancelsRef.current.delete(uploadId)
-        uploadAbortControllersRef.current.delete(uploadId)
-        addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
-        setTimeout(() => {
-          setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
-        }, 1500)
-      }
+        if (data.status === 'error') {
+          uploadProgressCancelsRef.current.get(uploadId)?.()
+          uploadProgressCancelsRef.current.delete(uploadId)
+          uploadAbortControllersRef.current.delete(uploadId)
+          loadTree()
+          addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
+          setTimeout(() => {
+            setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
+          }, 3000)
+        }
+        if (data.status === 'skipped') {
+          uploadProgressCancelsRef.current.get(uploadId)?.()
+          uploadProgressCancelsRef.current.delete(uploadId)
+          uploadAbortControllersRef.current.delete(uploadId)
+          loadTree()
+          addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
+          setTimeout(() => {
+            setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
+          }, 1500)
+        }
     })
     uploadProgressCancelsRef.current.set(uploadId, cancel)
     const controller = new AbortController()
@@ -242,6 +244,7 @@ export default function Files() {
       uploadProgressCancelsRef.current.get(uploadId)?.()
       uploadProgressCancelsRef.current.delete(uploadId)
       uploadAbortControllersRef.current.delete(uploadId)
+      loadTree()
       setTimeout(() => {
         setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
       }, 1500)
@@ -360,9 +363,10 @@ export default function Files() {
       }
       throw err
     } finally {
+      loadTree()
       if (showBulkProgress) bulkCancelRef.current = null
     }
-  }, [addAlert, askUploadConflictDecision, hasUploadConflict, uploadStates])
+  }, [addAlert, askUploadConflictDecision, hasUploadConflict, loadTree, uploadStates])
 
   const handleUpload = async (e) => {
     const files = Array.from(e.target.files || [])
@@ -426,6 +430,7 @@ export default function Files() {
         if (data.status === 'done') {
           downloadProgressCancelsRef.current.get(downloadId)?.()
           downloadProgressCancelsRef.current.delete(downloadId)
+          loadTree()
           setTimeout(() => {
             setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
           }, 2000)
@@ -433,6 +438,7 @@ export default function Files() {
         if (data.status === 'error') {
           downloadProgressCancelsRef.current.get(downloadId)?.()
           downloadProgressCancelsRef.current.delete(downloadId)
+          loadTree()
           addAlert('Download failed unexpectedly. Please try again.', 'error', { persistent: true })
           setTimeout(() => {
             setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
@@ -441,6 +447,7 @@ export default function Files() {
         if (data.status === 'cancelled') {
           downloadProgressCancelsRef.current.get(downloadId)?.()
           downloadProgressCancelsRef.current.delete(downloadId)
+          loadTree()
           addAlert('Download cancelled', 'info')
           setTimeout(() => {
             setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
@@ -473,6 +480,7 @@ export default function Files() {
       downloadProgressCancelsRef.current.delete(downloadId)
       updateDownloadState(downloadId, (prev) => (prev ? { ...prev, status: 'cancelled' } : prev))
       addAlert('Download cancelled', 'info')
+      loadTree()
       setTimeout(() => {
         setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
       }, 1500)
@@ -705,6 +713,7 @@ export default function Files() {
       addAlert(err.message, 'error')
     } finally {
       bulkCancelRef.current = null
+      loadTree()
     }
   }
 
