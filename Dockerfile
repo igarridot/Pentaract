@@ -1,5 +1,5 @@
 # Stage 1: Build Go binary
-FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.24-alpine AS builder
+FROM --platform=$BUILDPLATFORM public.ecr.aws/docker/library/golang:1.26-alpine AS builder
 
 ARG TARGETOS
 ARG TARGETARCH
