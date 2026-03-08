@@ -37,9 +37,15 @@ export default function Files() {
   const addAlert = useAlert()
 
   const prefix = `/storages/${storageId}/files/`
-  const currentPath = location.pathname.startsWith(prefix)
+  const currentPathFromUrl = location.pathname.startsWith(prefix)
     ? location.pathname.slice(prefix.length)
     : ''
+  let currentPath = currentPathFromUrl
+  try {
+    currentPath = decodeURIComponent(currentPathFromUrl)
+  } catch {
+    currentPath = currentPathFromUrl
+  }
 
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
