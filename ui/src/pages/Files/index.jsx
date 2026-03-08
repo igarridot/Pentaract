@@ -2,7 +2,7 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import { useParams, useNavigate, useLocation, useBlocker } from 'react-router-dom'
 import {
   Typography, List, Box, TextField, InputAdornment,
-  MenuItem, Divider, Breadcrumbs, Link as MuiLink, Button,
+  MenuItem, Divider, Breadcrumbs, Link as MuiLink, Button, FormControlLabel, Checkbox,
 } from '@mui/material'
 import {
   Search as SearchIcon,
@@ -44,6 +44,7 @@ export default function Files() {
   const [previewFile, setPreviewFile] = useState(null)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [deleteTarget, setDeleteTarget] = useState(null)
+  const [forceDelete, setForceDelete] = useState(false)
   const [moveTarget, setMoveTarget] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
   const [uploadStates, setUploadStates] = useState([])
@@ -88,18 +89,25 @@ export default function Files() {
   }, [])
 
   const isUploading = uploadStates.some((u) => u.status === 'uploading')
+  const isDownloading = downloadStates.some((d) => d.status === 'downloading')
+  const isDeleting = deleteState?.status === 'deleting'
+  const hasActiveFileOperation = isUploading || isDownloading || isDeleting
 
   useEffect(() => {
-    if (!isUploading) return
+    if (!hasActiveFileOperation) return
     const handler = (e) => {
+      const message = isDeleting
+        ? 'Operation in progress. Leaving will cancel it. If delete is interrupted, the file will be irrecoverable and orphaned data may remain in storage.'
+        : 'Operation in progress. Leaving will cancel it.'
       e.preventDefault()
-      e.returnValue = ''
+      e.returnValue = message
+      return message
     }
     window.addEventListener('beforeunload', handler)
     return () => window.removeEventListener('beforeunload', handler)
-  }, [isUploading])
+  }, [hasActiveFileOperation, isDeleting])
 
-  const blocker = useBlocker(isUploading)
+  const blocker = useBlocker(hasActiveFileOperation)
 
   const updateUploadState = useCallback((id, updater) => {
     setUploadStates((prev) => prev.map((u) => (u.id === id ? updater(u) : u)))
@@ -381,7 +389,7 @@ export default function Files() {
       })
       cancelDeleteProgressRef.current = cancel
 
-      await API.files.delete(storageId, path, deleteId)
+      await API.files.delete(storageId, path, deleteId, forceDelete)
       addAlert('Deleted', 'success')
       loadTree()
     } catch (err) {
@@ -392,6 +400,8 @@ export default function Files() {
       setDeleteState((prev) => (prev ? { ...prev, status: 'error' } : null))
       setTimeout(() => setDeleteState(null), 3000)
       addAlert(err.message, 'error')
+    } finally {
+      setForceDelete(false)
     }
   }
 
@@ -602,10 +612,34 @@ export default function Files() {
         action="Delete"
         description={`Are you sure you want to delete "${deleteTarget?.name}"?`}
         onConfirm={handleDelete}
-        onCancel={() => setDeleteTarget(null)}
-      />
+        onCancel={() => { setDeleteTarget(null); setForceDelete(false) }}
+      >
+        <Box sx={{ mt: 2 }}>
+          <FormControlLabel
+            control={(
+              <Checkbox
+                checked={forceDelete}
+                onChange={(e) => setForceDelete(e.target.checked)}
+                color="error"
+              />
+            )}
+            label="Force delete"
+          />
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 0.5 }}>
+            This operation deletes file records from the database only and skips backend storage cleanup.
+          </Typography>
+          <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 1 }}>
+            Warning: this is irreversible and leaves orphaned data in backend storage.
+          </Typography>
+        </Box>
+      </ActionConfirmDialog>
 
-      <NavigationBlockDialog blocker={blocker} />
+      <NavigationBlockDialog
+        blocker={blocker}
+        isUploading={isUploading}
+        isDownloading={isDownloading}
+        isDeleting={isDeleting}
+      />
 
       <MoveDialog
         open={!!moveTarget}
