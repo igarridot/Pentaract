@@ -1,10 +1,26 @@
+import { useEffect, useState } from 'react'
 import { Drawer, List, Toolbar, Box } from '@mui/material'
-import { Storage as StorageIcon, SmartToy as WorkerIcon } from '@mui/icons-material'
+import { Storage as StorageIcon, SmartToy as WorkerIcon, ManageAccounts as UsersIcon } from '@mui/icons-material'
 import SideBarItem from './SideBarItem'
+import API from '../api'
 
 const DRAWER_WIDTH = 220
 
 export default function SideBar({ open }) {
+  const [isAdmin, setIsAdmin] = useState(false)
+
+  useEffect(() => {
+    let cancelled = false
+    API.users.adminStatus()
+      .then((data) => {
+        if (!cancelled) setIsAdmin(!!data?.is_admin)
+      })
+      .catch(() => {
+        if (!cancelled) setIsAdmin(false)
+      })
+    return () => { cancelled = true }
+  }, [])
+
   return (
     <Drawer
       variant="permanent"
@@ -30,6 +46,7 @@ export default function SideBar({ open }) {
         <List disablePadding>
           <SideBarItem to="/storages" icon={<StorageIcon />} label="Storages" showLabel={open} />
           <SideBarItem to="/storage_workers" icon={<WorkerIcon />} label="Workers" showLabel={open} />
+          {isAdmin && <SideBarItem to="/users" icon={<UsersIcon />} label="Users" showLabel={open} />}
         </List>
       </Box>
     </Drawer>

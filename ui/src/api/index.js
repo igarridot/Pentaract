@@ -71,6 +71,10 @@ const API = {
 
   users: {
     register: (email, password) => apiRequest('/users', 'POST', { email, password }, false),
+    adminStatus: () => apiRequest('/users/admin'),
+    listManaged: () => apiRequest('/users/manage'),
+    updatePassword: (userId, password) => apiRequest(`/users/${userId}/password`, 'PUT', { password }),
+    deleteManaged: (userId) => apiRequest(`/users/manage?user_id=${encodeURIComponent(userId)}`, 'DELETE'),
   },
 
   storages: {
@@ -83,6 +87,7 @@ const API = {
 
   access: {
     list: (storageId) => apiRequest(`/storages/${storageId}/access`),
+    candidates: (storageId) => apiRequest(`/storages/${storageId}/access/candidates`),
     grant: (storageId, email, access_type) =>
       apiRequest(`/storages/${storageId}/access`, 'POST', { email, access_type }),
     revoke: (storageId, user_id) =>

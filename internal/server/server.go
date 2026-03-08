@@ -37,7 +37,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	storageManager := service.NewStorageManager(filesRepo, storagesRepo, workersRepo, scheduler, tgClient, cfg.SecretKey)
 
 	authSvc := service.NewAuthService(usersRepo, cfg.SecretKey, cfg.AccessTokenExpireInSec)
-	usersSvc := service.NewUsersService(usersRepo)
+	usersSvc := service.NewUsersService(usersRepo, cfg.SuperuserEmail)
 	storagesSvc := service.NewStoragesService(storagesRepo, accessRepo, filesRepo, storageManager)
 	accessSvc := service.NewAccessService(accessRepo, usersRepo)
 	workersSvc := service.NewStorageWorkersService(workersRepo)
@@ -78,8 +78,14 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Delete("/storages/{storageID}", storagesH.Delete)
 
 			r.Get("/storages/{storageID}/access", accessH.List)
+			r.Get("/storages/{storageID}/access/candidates", accessH.GrantCandidates)
 			r.Post("/storages/{storageID}/access", accessH.Grant)
 			r.Delete("/storages/{storageID}/access", accessH.Revoke)
+
+			r.Get("/users/admin", usersH.AdminStatus)
+			r.Get("/users/manage", usersH.ListManaged)
+			r.Put("/users/{userID}/password", usersH.UpdatePassword)
+			r.Delete("/users/manage", usersH.DeleteManaged)
 
 			r.Get("/storage_workers", workersH.List)
 			r.Post("/storage_workers", workersH.Create)

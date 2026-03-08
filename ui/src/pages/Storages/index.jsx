@@ -27,6 +27,7 @@ export default function Storages() {
   const [accessStorageId, setAccessStorageId] = useState(null)
   const [accessUsers, setAccessUsers] = useState([])
   const [grantOpen, setGrantOpen] = useState(false)
+  const [grantCandidates, setGrantCandidates] = useState([])
   const [editUser, setEditUser] = useState(null)
   const [deleteState, setDeleteState] = useState(null)
   const cancelDeleteProgressRef = useRef(null)
@@ -109,6 +110,18 @@ export default function Storages() {
       await API.access.grant(accessStorageId, email, accessType)
       addAlert('Access granted', 'success')
       loadAccess(accessStorageId)
+    } catch (err) {
+      addAlert(err.message, 'error')
+    }
+  }
+
+  const openGrantDialog = async () => {
+    if (!accessStorageId) return
+    try {
+      const data = await API.access.candidates(accessStorageId)
+      setGrantCandidates(data || [])
+      setEditUser(null)
+      setGrantOpen(true)
     } catch (err) {
       addAlert(err.message, 'error')
     }
@@ -230,7 +243,7 @@ export default function Storages() {
           <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
             <Typography variant="h6" sx={{ fontSize: '1rem' }}>Access Control</Typography>
             <Box>
-              <IconButton size="small" onClick={() => { setEditUser(null); setGrantOpen(true) }}>
+              <IconButton size="small" onClick={openGrantDialog}>
                 <AddIcon sx={{ fontSize: 18 }} />
               </IconButton>
               <IconButton size="small" onClick={() => setAccessStorageId(null)}>
@@ -249,9 +262,10 @@ export default function Storages() {
 
       <GrantAccess
         open={grantOpen}
-        onClose={() => { setGrantOpen(false); setEditUser(null) }}
+        onClose={() => { setGrantOpen(false); setEditUser(null); setGrantCandidates([]) }}
         onGrant={handleGrant}
         editUser={editUser}
+        candidates={grantCandidates}
       />
     </Box>
   )
