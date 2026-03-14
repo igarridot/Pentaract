@@ -3,6 +3,7 @@ package service
 import (
 	"archive/zip"
 	"context"
+	"fmt"
 	"io"
 	"strings"
 
@@ -222,7 +223,6 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 	dirName := pathutil.ArchiveName(dirPath)
 
 	zipWriter := zip.NewWriter(w)
-	defer zipWriter.Close()
 
 	prefix := dirPath
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
@@ -242,6 +242,10 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 		if err := s.manager.DownloadToWriter(ctx, &file, entry, progress); err != nil {
 			return "", err
 		}
+	}
+
+	if err := zipWriter.Close(); err != nil {
+		return "", fmt.Errorf("closing zip archive: %w", err)
 	}
 
 	return dirName, nil

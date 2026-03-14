@@ -552,7 +552,10 @@ export default function Files() {
       a.href = url
       a.download = filename
       a.rel = 'noopener'
+      a.style.display = 'none'
+      document.body.appendChild(a)
       a.click()
+      a.remove()
       return downloadId
     } catch (err) {
       markBulkTransferTerminal('download', providedDownloadId, 'error')
