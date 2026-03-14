@@ -18,6 +18,11 @@ import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import Access from '../../components/Access'
 import GrantAccess from '../../components/GrantAccess'
 import DeleteProgress from '../../components/DeleteProgress'
+import {
+  applyDeleteProgressUpdate,
+  createDeleteProgressState,
+  getDeleteProgressResetDelay,
+} from '../../common/delete_progress'
 
 export default function Storages() {
   const navigate = useNavigate()
@@ -50,30 +55,18 @@ export default function Storages() {
     try {
       const deleteId = createOperationId()
       if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
-      setDeleteState({
-        label: deleteTarget?.name || 'storage',
-        totalChunks: 0,
-        deletedChunks: 0,
-        status: 'deleting',
-        workersStatus: 'active',
-      })
+      setDeleteState(createDeleteProgressState(deleteTarget?.name || 'storage'))
 
       const cancel = API.files.subscribeDeleteProgress(deleteId, (data) => {
-        setDeleteState((prev) => ({
-          ...prev,
-          totalChunks: data.total || prev?.totalChunks || 0,
-          deletedChunks: data.deleted || 0,
-          status: data.status,
-          workersStatus: data.workers_status || prev?.workersStatus || 'active',
-        }))
+        setDeleteState((prev) => applyDeleteProgressUpdate(prev, data))
 
         if (data.status === 'done') {
           cancel()
-          setTimeout(() => setDeleteState(null), 1500)
+          setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay(data.status))
         }
         if (data.status === 'error') {
           cancel()
-          setTimeout(() => setDeleteState(null), 3000)
+          setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay(data.status))
         }
       })
       cancelDeleteProgressRef.current = cancel
@@ -90,7 +83,7 @@ export default function Storages() {
         cancelDeleteProgressRef.current = null
       }
       setDeleteState((prev) => (prev ? { ...prev, status: 'error' } : null))
-      setTimeout(() => setDeleteState(null), 3000)
+      setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay('error'))
       addAlert(err.message, 'error')
     }
   }

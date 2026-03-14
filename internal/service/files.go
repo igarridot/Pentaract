@@ -9,6 +9,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
+	"github.com/Dominux/Pentaract/internal/pathutil"
 	"github.com/Dominux/Pentaract/internal/repository"
 )
 
@@ -74,7 +75,6 @@ func (s *FilesService) CreateFolder(ctx context.Context, userID, storageID uuid.
 		return err
 	}
 
-	basePath := strings.Trim(path, "/")
 	name := strings.Trim(folderName, "/")
 	if name == "" {
 		return domain.ErrBadRequest("folder_name is required")
@@ -83,12 +83,7 @@ func (s *FilesService) CreateFolder(ctx context.Context, userID, storageID uuid.
 		return domain.ErrBadRequest("folder_name cannot contain /")
 	}
 
-	fullPath := name
-	if basePath != "" {
-		fullPath = basePath + "/" + name
-	}
-
-	return s.filesRepo.CreateFolder(ctx, storageID, fullPath)
+	return s.filesRepo.CreateFolder(ctx, storageID, pathutil.Join(path, name))
 }
 
 func (s *FilesService) Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *UploadProgress, onConflict string) (*domain.File, bool, error) {
@@ -219,15 +214,7 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 		return "", domain.ErrNotFound("files in directory")
 	}
 
-	// Determine zip filename from directory name
-	trimmed := strings.TrimSuffix(dirPath, "/")
-	dirName := trimmed
-	if idx := strings.LastIndex(trimmed, "/"); idx >= 0 {
-		dirName = trimmed[idx+1:]
-	}
-	if dirName == "" {
-		dirName = "files"
-	}
+	dirName := pathutil.ArchiveName(dirPath)
 
 	zipWriter := zip.NewWriter(w)
 	defer zipWriter.Close()

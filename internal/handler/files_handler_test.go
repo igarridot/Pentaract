@@ -642,6 +642,24 @@ func TestFilesHandlerDownloadDir(t *testing.T) {
 	if w.Code != http.StatusOK || w.Body.String() != "zipdata" {
 		t.Fatalf("download dir expected 200/zipdata, got %d/%q", w.Code, w.Body.String())
 	}
+	if got := w.Header().Get("Content-Disposition"); !strings.Contains(got, `filename="docs.zip"`) {
+		t.Fatalf("unexpected download dir content disposition: %q", got)
+	}
+}
+
+func TestFilesHandlerDownloadDirUsesFilesZipForRoot(t *testing.T) {
+	h := NewFilesHandlerWithService(&mockFilesService{
+		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
+			_, _ = io.Copy(w, bytes.NewBufferString("zipdata"))
+			return "files", nil
+		},
+	})
+
+	w := httptest.NewRecorder()
+	h.DownloadDir(w, makeFilesReq(http.MethodGet, "/", "", uuid.New().String(), ""))
+	if got := w.Header().Get("Content-Disposition"); !strings.Contains(got, `filename="files.zip"`) {
+		t.Fatalf("unexpected root download dir content disposition: %q", got)
+	}
 }
 
 func TestFilesHandlerDownloadInlineNonVideo(t *testing.T) {

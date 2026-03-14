@@ -99,3 +99,29 @@ func TestNewBuildsRouterAndHandlesRequest(t *testing.T) {
 		t.Fatalf("expected bad request from empty login body, got %d", rr.Code)
 	}
 }
+
+func TestNewProtectedRoutesRequireValidBearerToken(t *testing.T) {
+	cfg := &config.Config{
+		SecretKey:              "secret",
+		AccessTokenExpireInSec: 3600,
+		SuperuserEmail:         "admin@example.com",
+		TelegramAPIBaseURL:     "http://localhost",
+		TelegramRateLimit:      10,
+	}
+	h := New(cfg, nil)
+
+	req := httptest.NewRequest(http.MethodGet, "/api/storages", nil)
+	rr := httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized without token, got %d", rr.Code)
+	}
+
+	req = httptest.NewRequest(http.MethodGet, "/api/storages", nil)
+	req.Header.Set("Authorization", "Bearer invalid.token")
+	rr = httptest.NewRecorder()
+	h.ServeHTTP(rr, req)
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected unauthorized with invalid token, got %d", rr.Code)
+	}
+}
