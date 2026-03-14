@@ -517,11 +517,14 @@ type downloadedChunkResult struct {
 	data  []byte
 }
 
-func (m *StorageManager) downloadChunksInOrder(
+type chunkDataLoader func(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error)
+
+func (m *StorageManager) downloadChunksInOrderWithLoader(
 	ctx context.Context,
 	file *domain.File,
 	storage *domain.Storage,
 	chunks []domain.FileChunk,
+	loadChunk chunkDataLoader,
 	writeChunk func(chunk domain.FileChunk, data []byte) error,
 ) error {
 	parallelism := m.downloadParallelism(ctx, storage.ID, len(chunks))
@@ -533,7 +536,7 @@ func (m *StorageManager) downloadChunksInOrder(
 			default:
 			}
 
-			data, err := m.downloadAndDecryptChunkCached(ctx, file.ID, *storage, chunk)
+			data, err := loadChunk(ctx, file.ID, *storage, chunk)
 			if err != nil {
 				return err
 			}
@@ -559,7 +562,7 @@ func (m *StorageManager) downloadChunksInOrder(
 	for range parallelism {
 		g.Go(func() error {
 			for job := range jobs {
-				data, err := m.downloadAndDecryptChunkCached(gctx, file.ID, *storage, job.chunk)
+				data, err := loadChunk(gctx, file.ID, *storage, job.chunk)
 				if err != nil {
 					return err
 				}
@@ -630,6 +633,16 @@ func (m *StorageManager) downloadChunksInOrder(
 	return nil
 }
 
+func (m *StorageManager) downloadChunksInOrder(
+	ctx context.Context,
+	file *domain.File,
+	storage *domain.Storage,
+	chunks []domain.FileChunk,
+	writeChunk func(chunk domain.FileChunk, data []byte) error,
+) error {
+	return m.downloadChunksInOrderWithLoader(ctx, file, storage, chunks, m.downloadAndDecryptChunkCached, writeChunk)
+}
+
 // DownloadToWriter streams a file's chunks sequentially to the given writer.
 // This path is intentionally conservative and avoids stream-specific caching so
 // regular file downloads do not keep extra decrypted chunks resident in memory.
@@ -655,18 +668,7 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 
 	log.Printf("[download] starting file=%s chunks=%d storage=%s chat=%s", file.Path, len(chunks), storage.Name, storage.Name)
 
-	for _, chunk := range chunks {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
-		if err != nil {
-			return err
-		}
-
+	if err := m.downloadChunksInOrderWithLoader(ctx, file, storage, chunks, m.downloadAndDecryptChunk, func(chunk domain.FileChunk, data []byte) error {
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
 		}
@@ -675,6 +677,9 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 			progress.DownloadedChunks.Add(1)
 			progress.DownloadedBytes.Add(int64(len(data)))
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	log.Printf("[download] completed file=%s storage=%s chat=%s", file.Path, storage.Name, storage.Name)
