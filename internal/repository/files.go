@@ -12,6 +12,7 @@ import (
 	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/domain"
+	"github.com/Dominux/Pentaract/internal/pathutil"
 )
 
 type FilesRepo struct {
@@ -35,26 +36,8 @@ func NewFilesRepoWithDB(pool filesDB) *FilesRepo {
 
 // CreateFileAnyway creates a file record, auto-resolving duplicate names with (1), (2), etc.
 func (r *FilesRepo) CreateFileAnyway(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error) {
-	// Split path into directory and filename parts
-	lastSlash := strings.LastIndex(path, "/")
-	var dir, filename, ext, nameWithoutExt string
-	if lastSlash >= 0 {
-		dir = path[:lastSlash+1]
-		filename = path[lastSlash+1:]
-	} else {
-		dir = ""
-		filename = path
-	}
-
-	// Split filename into name and extension
-	dotIdx := strings.LastIndex(filename, ".")
-	if dotIdx > 0 {
-		nameWithoutExt = filename[:dotIdx]
-		ext = filename[dotIdx:]
-	} else {
-		nameWithoutExt = filename
-		ext = ""
-	}
+	dir, filename := pathutil.SplitDirAndFile(path)
+	nameWithoutExt, ext := pathutil.SplitNameAndExtension(filename)
 
 	f := &domain.File{}
 	err := r.pool.QueryRow(ctx,

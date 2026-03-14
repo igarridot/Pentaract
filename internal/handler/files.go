@@ -20,6 +20,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
+	"github.com/Dominux/Pentaract/internal/pathutil"
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
@@ -340,14 +341,11 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path = strings.TrimSuffix(path, "/")
+	path = pathutil.TrimTrailingSlash(path)
 	if onConflict == "" {
 		onConflict = service.UploadConflictKeepBoth
 	}
-	fullPath := filename
-	if path != "" {
-		fullPath = path + "/" + filename
-	}
+	fullPath := pathutil.Join(path, filename)
 
 	pr, pw := io.Pipe()
 	copyDone := make(chan struct{})
@@ -690,15 +688,7 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 
 	path := extractWildcardPath(r)
 
-	// Derive zip filename from path
-	trimmed := strings.TrimSuffix(path, "/")
-	dirName := trimmed
-	if idx := strings.LastIndex(trimmed, "/"); idx >= 0 {
-		dirName = trimmed[idx+1:]
-	}
-	if dirName == "" {
-		dirName = "files"
-	}
+	dirName := pathutil.ArchiveName(path)
 
 	downloadCtx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
 	defer cleanup()
@@ -928,7 +918,7 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path := extractWildcardPath(r)
-	path = strings.TrimSuffix(path, "/")
+	path = pathutil.TrimTrailingSlash(path)
 	if path == "" {
 		writeError(w, domain.ErrBadRequest("file path is required"))
 		return

@@ -444,3 +444,88 @@ func TestFilesServiceUploadInvalidConflictPolicy(t *testing.T) {
 		t.Fatalf("expected invalid on_conflict error")
 	}
 }
+
+func TestFilesServiceDeleteSkipsTelegramCleanupWhenNotNeeded(t *testing.T) {
+	access := &fakeFilesAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return true, nil
+		},
+	}
+	storageRepo := &fakeStorageRepo{
+		getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
+			return &domain.Storage{ID: id, Name: "Docs"}, nil
+		},
+	}
+
+	tests := []struct {
+		name        string
+		forceDelete bool
+		chunks      []domain.FileChunk
+	}{
+		{name: "force delete bypasses telegram cleanup", forceDelete: true, chunks: []domain.FileChunk{{TelegramMessageID: 1}}},
+		{name: "empty chunk list bypasses telegram cleanup", forceDelete: false, chunks: nil},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			deleteCalled := false
+			managerCalled := false
+			repo := &fakeFilesRepo{
+				listChunksByPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FileChunk, error) {
+					return tt.chunks, nil
+				},
+				deleteFn: func(ctx context.Context, storageID uuid.UUID, path string) error {
+					deleteCalled = true
+					return nil
+				},
+			}
+			manager := &fakeFilesManager{
+				deleteFromTelegramFn: func(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error {
+					managerCalled = true
+					return nil
+				},
+			}
+
+			svc := NewFilesServiceWithDeps(repo, access, manager, storageRepo, nil)
+			if err := svc.Delete(context.Background(), uuid.New(), uuid.New(), "docs/report.pdf", nil, tt.forceDelete); err != nil {
+				t.Fatalf("Delete returned error: %v", err)
+			}
+			if managerCalled {
+				t.Fatalf("DeleteFromTelegram should not be called")
+			}
+			if !deleteCalled {
+				t.Fatalf("expected repository delete to run")
+			}
+		})
+	}
+}
+
+func TestFilesServiceDownloadDirReturnsArchiveName(t *testing.T) {
+	access := &fakeFilesAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return true, nil
+		},
+	}
+	repo := &fakeFilesRepo{
+		listFilesUnderPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) {
+			if path == "" {
+				return []domain.File{{ID: uuid.New(), Path: "root.txt", StorageID: storageID}}, nil
+			}
+			return []domain.File{{ID: uuid.New(), Path: "docs/report.txt", StorageID: storageID}}, nil
+		},
+	}
+	manager := &fakeFilesManager{
+		downloadFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+			_, _ = io.WriteString(w, "payload")
+			return nil
+		},
+	}
+	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{}, nil)
+
+	if name, err := svc.DownloadDir(context.Background(), uuid.New(), uuid.New(), "", io.Discard, nil); err != nil || name != "files" {
+		t.Fatalf("root archive name = %q err=%v, want files", name, err)
+	}
+	if name, err := svc.DownloadDir(context.Background(), uuid.New(), uuid.New(), "root/docs/", io.Discard, nil); err != nil || name != "docs" {
+		t.Fatalf("nested archive name = %q err=%v, want docs", name, err)
+	}
+}
