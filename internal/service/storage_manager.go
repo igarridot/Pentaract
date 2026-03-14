@@ -118,6 +118,25 @@ func (m *StorageManager) downloadChunkWithWorker(ctx context.Context, storage do
 	return data, nil
 }
 
+func (m *StorageManager) preferredDownloadWorkers(ctx context.Context, storageID uuid.UUID, chunksCount int) []repository.WorkerToken {
+	if chunksCount <= 1 || m.workersRepo == nil {
+		return nil
+	}
+
+	workers, err := m.workersRepo.ListTokensByStorage(ctx, storageID)
+	if err != nil {
+		log.Printf("[download] warning: failed listing workers for storage %s, falling back to scheduler-only selection: %v", storageID, err)
+		return nil
+	}
+	if len(workers) <= 1 {
+		return nil
+	}
+	if len(workers) > chunksCount {
+		workers = workers[:chunksCount]
+	}
+	return workers
+}
+
 func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
 	wt, err := m.scheduler.GetToken(ctx, storage.ID)
 	if err != nil {
@@ -153,8 +172,20 @@ func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Stora
 	return nil, lastErr
 }
 
-func (m *StorageManager) downloadAndDecryptChunk(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
-	data, err := m.downloadChunk(ctx, storage, chunk)
+func (m *StorageManager) downloadChunkWithPreferredWorker(ctx context.Context, storage domain.Storage, chunk domain.FileChunk, preferredWorker *repository.WorkerToken) ([]byte, error) {
+	if preferredWorker != nil {
+		data, err := m.downloadChunkWithWorker(ctx, storage, chunk, *preferredWorker)
+		if err == nil {
+			return data, nil
+		}
+		log.Printf("[download] warning: preferred worker=%s failed for chunk %d, falling back: %v", preferredWorker.Name, chunk.Position, err)
+	}
+
+	return m.downloadChunk(ctx, storage, chunk)
+}
+
+func (m *StorageManager) downloadAndDecryptChunk(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk, preferredWorker *repository.WorkerToken) ([]byte, error) {
+	data, err := m.downloadChunkWithPreferredWorker(ctx, storage, chunk, preferredWorker)
 	if err != nil {
 		if isTelegramFileTooBig(err) {
 			return nil, fmt.Errorf("downloading chunk %d: telegram chunk exceeds Bot API download limit (20MB). re-upload file with smaller chunk size", chunk.Position)
@@ -179,7 +210,7 @@ func (m *StorageManager) getStreamChunkCache() *streamChunkCache {
 	return m.streamChunkCache
 }
 
-func (m *StorageManager) downloadAndDecryptChunkCached(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
+func (m *StorageManager) downloadAndDecryptChunkCached(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk, preferredWorker *repository.WorkerToken) ([]byte, error) {
 	cacheKey := streamChunkCacheKey{fileID: fileID, position: chunk.Position}
 	cache := m.getStreamChunkCache()
 	if data, ok := cache.get(cacheKey); ok {
@@ -192,7 +223,7 @@ func (m *StorageManager) downloadAndDecryptChunkCached(ctx context.Context, file
 			return data, nil
 		}
 
-		data, err := m.downloadAndDecryptChunk(ctx, fileID, storage, chunk)
+		data, err := m.downloadAndDecryptChunk(ctx, fileID, storage, chunk, preferredWorker)
 		if err != nil {
 			return nil, err
 		}
@@ -447,7 +478,7 @@ func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.
 				Position:          result.Position,
 			}
 
-			data, err := m.downloadAndDecryptChunkCached(gctx, file.ID, storage, chunk)
+			data, err := m.downloadAndDecryptChunkCached(gctx, file.ID, storage, chunk, nil)
 			if err != nil {
 				return fmt.Errorf("verifying chunk %d: %w", result.Position, err)
 			}
@@ -517,7 +548,7 @@ type downloadedChunkResult struct {
 	data  []byte
 }
 
-type chunkDataLoader func(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error)
+type chunkDataLoader func(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk, preferredWorker *repository.WorkerToken) ([]byte, error)
 
 func (m *StorageManager) downloadChunksInOrderWithLoader(
 	ctx context.Context,
@@ -527,7 +558,11 @@ func (m *StorageManager) downloadChunksInOrderWithLoader(
 	loadChunk chunkDataLoader,
 	writeChunk func(chunk domain.FileChunk, data []byte) error,
 ) error {
-	parallelism := m.downloadParallelism(ctx, storage.ID, len(chunks))
+	preferredWorkers := m.preferredDownloadWorkers(ctx, storage.ID, len(chunks))
+	parallelism := len(preferredWorkers)
+	if parallelism <= 1 {
+		parallelism = 1
+	}
 	if parallelism <= 1 {
 		for _, chunk := range chunks {
 			select {
@@ -536,7 +571,7 @@ func (m *StorageManager) downloadChunksInOrderWithLoader(
 			default:
 			}
 
-			data, err := loadChunk(ctx, file.ID, *storage, chunk)
+			data, err := loadChunk(ctx, file.ID, *storage, chunk, nil)
 			if err != nil {
 				return err
 			}
@@ -559,10 +594,15 @@ func (m *StorageManager) downloadChunksInOrderWithLoader(
 	jobs := make(chan chunkJob)
 	results := make(chan downloadedChunkResult, parallelism)
 
-	for range parallelism {
+	for workerIndex := range parallelism {
+		var preferredWorker *repository.WorkerToken
+		if workerIndex < len(preferredWorkers) {
+			preferredWorker = &preferredWorkers[workerIndex]
+		}
+
 		g.Go(func() error {
 			for job := range jobs {
-				data, err := loadChunk(gctx, file.ID, *storage, job.chunk)
+				data, err := loadChunk(gctx, file.ID, *storage, job.chunk, preferredWorker)
 				if err != nil {
 					return err
 				}
@@ -748,7 +788,7 @@ func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (
 	}
 
 	lastChunk := chunks[len(chunks)-1]
-	lastChunkData, err := m.downloadAndDecryptChunkCached(ctx, file.ID, *storage, lastChunk)
+	lastChunkData, err := m.downloadAndDecryptChunkCached(ctx, file.ID, *storage, lastChunk, nil)
 	if err != nil {
 		return 0, err
 	}

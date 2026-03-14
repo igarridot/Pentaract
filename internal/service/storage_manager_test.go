@@ -147,6 +147,8 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 	chunk1Started := make(chan struct{})
 	var chunk0Once sync.Once
 	var chunk1Once sync.Once
+	workerTokens := make(map[string]int)
+	var workerTokensMu sync.Mutex
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -156,7 +158,14 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE1"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk1.bin"}}`))
-		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"):
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"), strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk0.bin"):
+			workerTokensMu.Lock()
+			if strings.Contains(r.URL.Path, "/file/botTOKEN2/") {
+				workerTokens["TOKEN2"]++
+			} else {
+				workerTokens["TOKEN"]++
+			}
+			workerTokensMu.Unlock()
 			chunk0Once.Do(func() { close(chunk0Started) })
 			select {
 			case <-chunk1Started:
@@ -165,7 +174,14 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(enc0)
-		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk1.bin"):
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk1.bin"), strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk1.bin"):
+			workerTokensMu.Lock()
+			if strings.Contains(r.URL.Path, "/file/botTOKEN2/") {
+				workerTokens["TOKEN2"]++
+			} else {
+				workerTokens["TOKEN"]++
+			}
+			workerTokensMu.Unlock()
 			chunk1Once.Do(func() { close(chunk1Started) })
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(enc1)
@@ -207,6 +223,9 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 	}
 	if progress.DownloadedChunks.Load() != 2 || progress.DownloadedBytes.Load() != int64(len(plain0)+len(plain1)) {
 		t.Fatalf("unexpected progress after parallel stream: chunks=%d bytes=%d", progress.DownloadedChunks.Load(), progress.DownloadedBytes.Load())
+	}
+	if len(workerTokens) != 2 {
+		t.Fatalf("expected stream to use both workers, got %v", workerTokens)
 	}
 }
 
@@ -258,6 +277,8 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 	chunk1Started := make(chan struct{})
 	var chunk0Once sync.Once
 	var chunk1Once sync.Once
+	workerTokens := make(map[string]int)
+	var workerTokensMu sync.Mutex
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -267,7 +288,14 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE1"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk1.bin"}}`))
-		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"):
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"), strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk0.bin"):
+			workerTokensMu.Lock()
+			if strings.Contains(r.URL.Path, "/file/botTOKEN2/") {
+				workerTokens["TOKEN2"]++
+			} else {
+				workerTokens["TOKEN"]++
+			}
+			workerTokensMu.Unlock()
 			chunk0Once.Do(func() { close(chunk0Started) })
 			select {
 			case <-chunk1Started:
@@ -276,7 +304,14 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(enc0)
-		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk1.bin"):
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk1.bin"), strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk1.bin"):
+			workerTokensMu.Lock()
+			if strings.Contains(r.URL.Path, "/file/botTOKEN2/") {
+				workerTokens["TOKEN2"]++
+			} else {
+				workerTokens["TOKEN"]++
+			}
+			workerTokensMu.Unlock()
 			chunk1Once.Do(func() { close(chunk1Started) })
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write(enc1)
@@ -318,6 +353,137 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 	}
 	if progress.DownloadedChunks.Load() != 2 || progress.DownloadedBytes.Load() != int64(len(plain0)+len(plain1)) {
 		t.Fatalf("unexpected progress after parallel download: chunks=%d bytes=%d", progress.DownloadedChunks.Load(), progress.DownloadedBytes.Load())
+	}
+	if len(workerTokens) != 2 {
+		t.Fatalf("expected download to use both workers, got %v", workerTokens)
+	}
+}
+
+func TestStorageManagerDownloadRangeToWriterUsesAllWorkersForMultiChunkStream(t *testing.T) {
+	filesMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new files pgxmock pool: %v", err)
+	}
+	defer filesMock.Close()
+
+	workersMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new workers pgxmock pool: %v", err)
+	}
+	defer workersMock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	chunkID0 := uuid.New()
+	chunkID1 := uuid.New()
+	plain0 := []byte("hello ")
+	plain1 := []byte("world")
+	cipher := NewChunkCipher("secret")
+	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	if err != nil {
+		t.Fatalf("encrypt chunk 0: %v", err)
+	}
+	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	if err != nil {
+		t.Fatalf("encrypt chunk 1: %v", err)
+	}
+
+	filesMock.ExpectQuery("SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = \\$1 ORDER BY position").
+		WithArgs(fileID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "file_id", "telegram_file_id", "telegram_message_id", "position"}).
+			AddRow(chunkID0, fileID, "FILE0", int64(0), int16(0)).
+			AddRow(chunkID1, fileID, "FILE1", int64(0), int16(1)))
+	filesMock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+
+	workersMock.ExpectQuery("SELECT token, name FROM storage_workers").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"token", "name"}).
+			AddRow("TOKEN", "w1").
+			AddRow("TOKEN2", "w2"))
+
+	chunk0Started := make(chan struct{})
+	chunk1Started := make(chan struct{})
+	var chunk0Once sync.Once
+	var chunk1Once sync.Once
+	workerTokens := make(map[string]int)
+	var workerTokensMu sync.Mutex
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE0"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk0.bin"}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE1"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk1.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"), strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk0.bin"):
+			workerTokensMu.Lock()
+			if strings.Contains(r.URL.Path, "/file/botTOKEN2/") {
+				workerTokens["TOKEN2"]++
+			} else {
+				workerTokens["TOKEN"]++
+			}
+			workerTokensMu.Unlock()
+			chunk0Once.Do(func() { close(chunk0Started) })
+			select {
+			case <-chunk1Started:
+			case <-r.Context().Done():
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc0)
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk1.bin"), strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk1.bin"):
+			workerTokensMu.Lock()
+			if strings.Contains(r.URL.Path, "/file/botTOKEN2/") {
+				workerTokens["TOKEN2"]++
+			} else {
+				workerTokens["TOKEN"]++
+			}
+			workerTokensMu.Unlock()
+			chunk1Once.Do(func() { close(chunk1Started) })
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc1)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(filesMock),
+		storagesRepo: repository.NewStoragesRepoWithDB(filesMock),
+		workersRepo:  repository.NewStorageWorkersRepoWithDB(workersMock),
+		scheduler: NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
+			},
+		}, 10),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: cipher,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	totalSize := int64(len(plain0) + len(plain1))
+	var out bytes.Buffer
+	progress := &DownloadProgress{}
+	err = m.DownloadRangeToWriter(ctx, &domain.File{
+		ID:        fileID,
+		Path:      "stream-range.txt",
+		Size:      totalSize,
+		StorageID: storageID,
+	}, &out, 0, totalSize-1, totalSize, progress)
+	if err != nil {
+		t.Fatalf("parallel range stream failed: %v", err)
+	}
+	if out.String() != "hello world" {
+		t.Fatalf("unexpected ranged content: %q", out.String())
+	}
+	if len(workerTokens) != 2 {
+		t.Fatalf("expected ranged stream to use both workers, got %v", workerTokens)
 	}
 }
 
@@ -1065,7 +1231,7 @@ func TestStorageManagerDownloadAndDecryptChunkTooBig(t *testing.T) {
 	_, err = m.downloadAndDecryptChunk(context.Background(), fileID, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
 		Position:       0,
-	})
+	}, nil)
 	if err == nil || !strings.Contains(err.Error(), "exceeds Bot API download limit") {
 		t.Fatalf("expected file-too-big error, got: %v", err)
 	}
