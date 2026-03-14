@@ -283,6 +283,70 @@ func TestStorageManagerExactFileSizeAndRange(t *testing.T) {
 	}
 }
 
+func TestStorageManagerExactFileSizeUsesOnlyLastChunk(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	firstChunkID := uuid.New()
+	lastChunkID := uuid.New()
+	lastPlain := []byte("tail")
+	cipher := NewChunkCipher("secret")
+	lastEnc, err := cipher.EncryptChunk(fileID, 1, lastPlain)
+	if err != nil {
+		t.Fatalf("encrypt chunk: %v", err)
+	}
+
+	mock.ExpectQuery("SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = \\$1 ORDER BY position").
+		WithArgs(fileID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "file_id", "telegram_file_id", "telegram_message_id", "position"}).
+			AddRow(firstChunkID, fileID, "IGNORED", int64(0), int16(0)).
+			AddRow(lastChunkID, fileID, "LAST", int64(0), int16(1)))
+	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+
+	var downloads []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=LAST"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/last.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/last.bin"):
+			downloads = append(downloads, r.URL.Path)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(lastEnc)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(mock),
+		storagesRepo: repository.NewStoragesRepoWithDB(mock),
+		scheduler:    NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{}, 1),
+		tgClient:     telegram.NewClient(srv.URL),
+		chunkCipher:  cipher,
+	}
+
+	size, err := m.ExactFileSize(context.Background(), &domain.File{ID: fileID, StorageID: storageID})
+	if err != nil {
+		t.Fatalf("exact file size failed: %v", err)
+	}
+	want := uploadChunkSize + int64(len(lastPlain))
+	if size != want {
+		t.Fatalf("unexpected exact size: got=%d want=%d", size, want)
+	}
+	if len(downloads) != 1 {
+		t.Fatalf("expected only one chunk download, got %d", len(downloads))
+	}
+}
+
 func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {

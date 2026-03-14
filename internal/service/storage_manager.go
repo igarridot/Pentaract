@@ -625,8 +625,10 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 	return nil
 }
 
-// ExactFileSize derives the exact file size using chunk count and actual last-chunk bytes.
-// This avoids relying on persisted file.Size when legacy rows contain multipart envelope overhead.
+// ExactFileSize derives the exact file size from chunk count plus the actual
+// plaintext bytes in the last chunk. Current uploads always use uploadChunkSize
+// for every non-final chunk, so this avoids downloading the full file before a
+// stream can even start.
 func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (int64, error) {
 	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
 	if err != nil {
@@ -641,14 +643,17 @@ func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (
 		return 0, fmt.Errorf("getting storage: %w", err)
 	}
 
-	var total int64
-	for _, chunk := range chunks {
-		data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
-		if err != nil {
-			return 0, err
-		}
-		total += int64(len(data))
+	lastChunk := chunks[len(chunks)-1]
+	lastChunkData, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, lastChunk)
+	if err != nil {
+		return 0, err
 	}
+
+	total := int64(len(lastChunkData))
+	if len(chunks) > 1 {
+		total += int64(len(chunks)-1) * uploadChunkSize
+	}
+
 	return total, nil
 }
 
