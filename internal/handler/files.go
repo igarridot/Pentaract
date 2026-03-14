@@ -67,6 +67,23 @@ type downloadTracker struct {
 	done      bool
 }
 
+var inlineVideoContentTypesByExtension = map[string]string{
+	".avi":  "video/x-msvideo",
+	".flv":  "video/x-flv",
+	".m2ts": "video/mp2t",
+	".m4v":  "video/x-m4v",
+	".mkv":  "video/x-matroska",
+	".mov":  "video/quicktime",
+	".mp4":  "video/mp4",
+	".mpeg": "video/mpeg",
+	".mpg":  "video/mpeg",
+	".mts":  "video/mp2t",
+	".ogg":  "video/ogg",
+	".ts":   "video/mp2t",
+	".webm": "video/webm",
+	".wmv":  "video/x-ms-wmv",
+}
+
 type FilesHandler struct {
 	svc filesService
 
@@ -514,10 +531,7 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	defer cleanup()
 
 	filename := filepath.Base(file.Path)
-	contentType := mime.TypeByExtension(filepath.Ext(filename))
-	if contentType == "" {
-		contentType = "application/octet-stream"
-	}
+	contentType := contentTypeForFilename(filename)
 	disposition := "attachment"
 	if r.URL.Query().Get("inline") == "1" {
 		disposition = "inline"
@@ -670,12 +684,19 @@ func isInlineVideo(contentType, filename string) bool {
 	if strings.HasPrefix(strings.ToLower(contentType), "video/") {
 		return true
 	}
-	switch strings.ToLower(filepath.Ext(filename)) {
-	case ".mp4", ".webm", ".ogg", ".mov", ".m4v":
-		return true
-	default:
-		return false
+	_, ok := inlineVideoContentTypesByExtension[strings.ToLower(filepath.Ext(filename))]
+	return ok
+}
+
+func contentTypeForFilename(filename string) string {
+	ext := strings.ToLower(filepath.Ext(filename))
+	if contentType := mime.TypeByExtension(ext); contentType != "" {
+		return contentType
 	}
+	if contentType, ok := inlineVideoContentTypesByExtension[ext]; ok {
+		return contentType
+	}
+	return "application/octet-stream"
 }
 
 func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {

@@ -72,8 +72,20 @@ func TestIsInlineVideo(t *testing.T) {
 	if !isInlineVideo("application/octet-stream", "movie.m4v") {
 		t.Fatalf("expected video by extension")
 	}
+	if !isInlineVideo("application/octet-stream", "movie.mkv") {
+		t.Fatalf("expected mkv video by extension")
+	}
 	if isInlineVideo("application/octet-stream", "doc.txt") {
 		t.Fatalf("unexpected video detection")
+	}
+}
+
+func TestContentTypeForFilename(t *testing.T) {
+	if got := contentTypeForFilename("movie.mkv"); got != "video/x-matroska" {
+		t.Fatalf("unexpected mkv content type: %q", got)
+	}
+	if got := contentTypeForFilename("doc.txt"); got == "" {
+		t.Fatalf("expected non-empty content type for text file")
 	}
 }
 
