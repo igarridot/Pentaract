@@ -1,10 +1,11 @@
 import { Box, LinearProgress, Typography, IconButton } from '@mui/material'
 import { Close as CloseIcon } from '@mui/icons-material'
 import { convertSize } from '../common/size_converter'
+import { calculatePercent } from '../common/progress'
 import { useTransferSpeed } from '../common/use_transfer_speed'
 
 export default function UploadProgress({ filename, totalBytes, uploadedBytes, totalChunks, uploadedChunks, status, workersStatus, onCancel }) {
-  const percent = totalBytes > 0 ? Math.round((uploadedBytes / totalBytes) * 100) : 0
+  const percent = calculatePercent(uploadedBytes, totalBytes)
   const isActive = status === 'uploading'
   const isError = status === 'error'
   const speed = useTransferSpeed(uploadedBytes)

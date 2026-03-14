@@ -180,6 +180,7 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 
 	fileID := uuid.New()
 	storageID := uuid.New()
+	var uploadedChunk []byte
 
 	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
 		WithArgs(storageID).
@@ -194,6 +195,26 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/sendDocument"):
+			mr, err := r.MultipartReader()
+			if err != nil {
+				t.Fatalf("multipart reader: %v", err)
+			}
+			for {
+				part, err := mr.NextPart()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("next multipart part: %v", err)
+				}
+				if part.FormName() == "document" {
+					uploadedChunk, err = io.ReadAll(part)
+					if err != nil {
+						t.Fatalf("read uploaded chunk: %v", err)
+					}
+				}
+				part.Close()
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":77,"document":{"file_id":"TG_FILE"}}}`))
 		case strings.Contains(r.URL.Path, "/deleteMessage"):
@@ -221,6 +242,22 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	if progress.UploadedChunks.Load() != 1 {
 		t.Fatalf("unexpected uploaded chunks: %d", progress.UploadedChunks.Load())
 	}
+	if bytes.Equal(uploadedChunk, []byte("abc")) {
+		t.Fatalf("uploaded chunk should be encrypted")
+	}
+	if !bytes.HasPrefix(uploadedChunk, chunkCipherMagic) {
+		t.Fatalf("uploaded chunk should include encrypted payload magic")
+	}
+	if len(uploadedChunk) > maxTelegramGetFileBytes {
+		t.Fatalf("uploaded encrypted chunk exceeds getFile limit: %d", len(uploadedChunk))
+	}
+	decrypted, err := m.chunkCipher.DecryptChunk(fileID, 0, uploadedChunk)
+	if err != nil {
+		t.Fatalf("decrypt uploaded chunk failed: %v", err)
+	}
+	if string(decrypted) != "abc" {
+		t.Fatalf("unexpected decrypted upload payload: %q", decrypted)
+	}
 
 	delProgress := &DeleteProgress{}
 	err = m.DeleteFromTelegram(context.Background(), domain.Storage{ID: storageID, Name: "Main", ChatID: 123}, []domain.FileChunk{
@@ -240,6 +277,28 @@ func TestStorageManagerRangeValidation(t *testing.T) {
 	err := m.DownloadRangeToWriter(context.Background(), &domain.File{}, io.Discard, 10, 5, 20, nil)
 	if err == nil {
 		t.Fatalf("expected invalid range error")
+	}
+}
+
+func TestValidateEncryptedChunkSize(t *testing.T) {
+	cipher := NewChunkCipher("secret")
+	fileID := uuid.New()
+	plain := bytes.Repeat([]byte("a"), uploadChunkSize)
+
+	enc, err := cipher.EncryptChunk(fileID, 0, plain)
+	if err != nil {
+		t.Fatalf("encrypt chunk: %v", err)
+	}
+	if len(enc) > maxTelegramGetFileBytes {
+		t.Fatalf("encrypted chunk exceeds getFile limit: %d", len(enc))
+	}
+	if err := validateEncryptedChunkSize(enc); err != nil {
+		t.Fatalf("expected encrypted chunk to be accepted, got: %v", err)
+	}
+
+	tooLarge := make([]byte, maxTelegramGetFileBytes+1)
+	if err := validateEncryptedChunkSize(tooLarge); err == nil {
+		t.Fatalf("expected oversized encrypted chunk to be rejected")
 	}
 }
 

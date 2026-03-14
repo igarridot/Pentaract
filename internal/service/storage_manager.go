@@ -58,6 +58,13 @@ func isTelegramFileTooBig(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "file is too big")
 }
 
+func validateEncryptedChunkSize(chunk []byte) error {
+	if len(chunk) > maxTelegramGetFileBytes {
+		return fmt.Errorf("encrypted chunk size %d exceeds Telegram Bot API getFile limit %d", len(chunk), maxTelegramGetFileBytes)
+	}
+	return nil
+}
+
 func (m *StorageManager) downloadChunkWithWorker(ctx context.Context, storage domain.Storage, chunk domain.FileChunk, wt repository.WorkerToken) ([]byte, error) {
 	data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
 	if err == nil {
@@ -262,6 +269,9 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			encryptedChunkData, err := m.chunkCipher.EncryptChunk(file.ID, pos, chunkData)
 			if err != nil {
 				return fmt.Errorf("encrypting chunk %d: %w", pos, err)
+			}
+			if err := validateEncryptedChunkSize(encryptedChunkData); err != nil {
+				return fmt.Errorf("validating encrypted chunk %d size: %w", pos, err)
 			}
 
 			filename := telegram.GenerateChunkFilename(file.ID, int(pos))

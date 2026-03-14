@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -352,6 +353,44 @@ func TestFilesHandlerUploadSkipOnConflict(t *testing.T) {
 	}
 }
 
+func TestDownloadErrorMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "legacy 20mb chunk",
+			err:  errors.New("downloading chunk 0: telegram chunk exceeds Bot API download limit (20MB). re-upload file with smaller chunk size"),
+			want: "older 20 MB chunk size",
+		},
+		{
+			name: "secret key mismatch",
+			err:  errors.New("decrypting chunk 2: decrypting payload: cipher: message authentication failed"),
+			want: "current SECRET_KEY",
+		},
+		{
+			name: "worker resolution failure",
+			err:  errors.New("downloading chunk 1: telegram getFile failed (status 400): wrong file identifier/HTTP URL specified"),
+			want: "currently available workers",
+		},
+		{
+			name: "fallback generic",
+			err:  errors.New("writing chunk 0: broken pipe"),
+			want: "Download failed unexpectedly",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := downloadErrorMessage(tt.err)
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("expected %q to contain %q", got, tt.want)
+			}
+		})
+	}
+}
+
 func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
 	h := NewFilesHandlerWithService(&mockFilesService{})
 	storageID := uuid.New()
@@ -453,6 +492,18 @@ func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
 	h.DownloadProgress(w, makeFilesReq(http.MethodGet, "/?download_id=d2", "", "", ""))
 	if !strings.Contains(w.Body.String(), `"status":"cancelled"`) {
 		t.Fatalf("expected cancelled download SSE, got %q", w.Body.String())
+	}
+
+	h.downloads["d3"] = &downloadTracker{
+		progress:  &service.DownloadProgress{TotalBytes: 10, TotalChunks: 1},
+		storageID: storageID,
+		done:      true,
+		err:       errors.New("downloading chunk 0: telegram chunk exceeds Bot API download limit (20MB). re-upload file with smaller chunk size"),
+	}
+	w = httptest.NewRecorder()
+	h.DownloadProgress(w, makeFilesReq(http.MethodGet, "/?download_id=d3", "", "", ""))
+	if !strings.Contains(w.Body.String(), `"status":"error"`) || !strings.Contains(w.Body.String(), `"error_message":"This file was uploaded with an older 20 MB chunk size`) {
+		t.Fatalf("expected friendly download error SSE, got %q", w.Body.String())
 	}
 
 	tracker := startDeleteTracker("del-progress", storageID)

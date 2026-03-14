@@ -1,5 +1,6 @@
 import { Box, LinearProgress, Typography, Button } from '@mui/material'
 import { convertSize } from '../common/size_converter'
+import { calculatePercent } from '../common/progress'
 import { useTransferSpeed } from '../common/use_transfer_speed'
 
 export default function BulkOperationProgress({
@@ -18,7 +19,7 @@ export default function BulkOperationProgress({
   const isError = status === 'error'
   const isDone = status === 'done'
   const isCancelled = status === 'cancelled'
-  const percent = total > 0 ? Math.round((completed / total) * 100) : 0
+  const percent = calculatePercent(completed, total)
   const speed = useTransferSpeed(processedBytes)
   const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
   const chunkText = totalChunks > 0 ? `${processedChunks}/${totalChunks} chunks` : ''

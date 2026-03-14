@@ -164,6 +164,31 @@ func (h *FilesHandler) finishTracker(tracker *downloadTracker, err error) {
 	h.mu.Unlock()
 }
 
+func downloadErrorMessage(err error) string {
+	if err == nil {
+		return ""
+	}
+
+	msg := strings.ToLower(err.Error())
+
+	switch {
+	case strings.Contains(msg, "exceeds bot api download limit"):
+		return "This file was uploaded with an older 20 MB chunk size and Telegram now refuses to download one of its chunks. Re-upload the file to repair it."
+	case strings.Contains(msg, "decrypting payload"),
+		strings.Contains(msg, "message authentication failed"),
+		strings.Contains(msg, "invalid encrypted payload size"):
+		return "This file could not be decrypted with the current SECRET_KEY. If the key changed after upload, restore the original key or re-upload the file."
+	case strings.Contains(msg, "telegram getfile failed"),
+		strings.Contains(msg, "wrong file identifier"),
+		strings.Contains(msg, "resolving file_id from message failed"),
+		strings.Contains(msg, "forwardmessage failed"),
+		strings.Contains(msg, "forwardmessage missing document file_id"):
+		return "Telegram could not resolve at least one chunk with the currently available workers. Check that the original bot still exists and still has access to the channel, or re-upload the file."
+	default:
+		return "Download failed unexpectedly. Please try again."
+	}
+}
+
 // setupSSE configures response headers for Server-Sent Events and returns the flusher.
 func setupSSE(w http.ResponseWriter) (http.Flusher, bool) {
 	flusher, ok := w.(http.Flusher)
@@ -739,7 +764,10 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 				})
 				continue
 			}
-			writeSSE(w, flusher, map[string]any{"status": "error"})
+			writeSSE(w, flusher, map[string]any{
+				"status":        "error",
+				"error_message": "Download did not start on the server. Please try again.",
+			})
 			return
 		}
 
@@ -767,6 +795,7 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 			"downloaded_bytes": p.DownloadedBytes.Load(),
 			"status":           status,
 			"workers_status":   h.svc.WorkersStatus(tracker.storageID),
+			"error_message":    downloadErrorMessage(downloadErr),
 		})
 
 		if isDone {
