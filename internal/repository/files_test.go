@@ -200,6 +200,30 @@ func TestFilesRepoChunksFlow(t *testing.T) {
 	}
 }
 
+func TestFilesRepoCreateChunksAndMarkUploaded(t *testing.T) {
+	mock, repo := newFilesRepoMock(t)
+	defer mock.Close()
+	ctx := context.Background()
+
+	fileID := uuid.New()
+
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO file_chunks").
+		WithArgs(fileID, "tg-1", int64(111), int16(0)).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
+		WithArgs(fileID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	err := repo.CreateChunksAndMarkUploaded(ctx, fileID, []domain.FileChunk{
+		{FileID: fileID, TelegramFileID: "tg-1", TelegramMessageID: 111, Position: 0},
+	})
+	if err != nil {
+		t.Fatalf("create chunks and mark uploaded failed: %v", err)
+	}
+}
+
 func TestFilesRepoListUnderDirStatsMoveAndFolder(t *testing.T) {
 	mock, repo := newFilesRepoMock(t)
 	defer mock.Close()

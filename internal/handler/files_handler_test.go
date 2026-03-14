@@ -3,6 +3,7 @@ package handler
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -352,6 +353,72 @@ func TestFilesHandlerUploadSkipOnConflict(t *testing.T) {
 	}
 }
 
+func TestDownloadErrorMessage(t *testing.T) {
+	tests := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{
+			name: "legacy 20mb chunk",
+			err:  errors.New("downloading chunk 0: telegram chunk exceeds Bot API download limit (20MB). re-upload file with smaller chunk size"),
+			want: "older 20 MB chunk size",
+		},
+		{
+			name: "secret key mismatch",
+			err:  errors.New("decrypting chunk 2: decrypting payload: cipher: message authentication failed"),
+			want: "current SECRET_KEY",
+		},
+		{
+			name: "worker resolution failure",
+			err:  errors.New("downloading chunk 1: telegram getFile failed (status 400): wrong file identifier/HTTP URL specified"),
+			want: "currently available workers",
+		},
+		{
+			name: "transient telegram stream failure",
+			err:  errors.New("downloading chunk 409: reading file data: unexpected EOF"),
+			want: "interrupted the download stream",
+		},
+		{
+			name: "fallback generic",
+			err:  errors.New("writing chunk 0: broken pipe"),
+			want: "Download failed unexpectedly",
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			got := downloadErrorMessage(tt.err)
+			if !strings.Contains(got, tt.want) {
+				t.Fatalf("expected %q to contain %q", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestUploadProgressStatus(t *testing.T) {
+	progress := &service.UploadProgress{}
+
+	if got := uploadProgressStatus(progress, false, nil, false); got != "uploading" {
+		t.Fatalf("expected uploading, got %q", got)
+	}
+
+	progress.VerificationTotalChunks = 2
+	if got := uploadProgressStatus(progress, false, nil, false); got != "verifying" {
+		t.Fatalf("expected verifying, got %q", got)
+	}
+
+	if got := uploadProgressStatus(progress, true, nil, false); got != "done" {
+		t.Fatalf("expected done, got %q", got)
+	}
+	if got := uploadProgressStatus(progress, true, errors.New("boom"), false); got != "error" {
+		t.Fatalf("expected error, got %q", got)
+	}
+	if got := uploadProgressStatus(progress, true, nil, true); got != "skipped" {
+		t.Fatalf("expected skipped, got %q", got)
+	}
+}
+
 func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
 	h := NewFilesHandlerWithService(&mockFilesService{})
 	storageID := uuid.New()
@@ -455,6 +522,18 @@ func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
 		t.Fatalf("expected cancelled download SSE, got %q", w.Body.String())
 	}
 
+	h.downloads["d3"] = &downloadTracker{
+		progress:  &service.DownloadProgress{TotalBytes: 10, TotalChunks: 1},
+		storageID: storageID,
+		done:      true,
+		err:       errors.New("downloading chunk 0: telegram chunk exceeds Bot API download limit (20MB). re-upload file with smaller chunk size"),
+	}
+	w = httptest.NewRecorder()
+	h.DownloadProgress(w, makeFilesReq(http.MethodGet, "/?download_id=d3", "", "", ""))
+	if !strings.Contains(w.Body.String(), `"status":"error"`) || !strings.Contains(w.Body.String(), `"error_message":"This file was uploaded with an older 20 MB chunk size`) {
+		t.Fatalf("expected friendly download error SSE, got %q", w.Body.String())
+	}
+
 	tracker := startDeleteTracker("del-progress", storageID)
 	tracker.progress.TotalChunks = 3
 	tracker.progress.DeletedChunks.Store(3)
@@ -469,6 +548,43 @@ func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
 	h.DeleteProgress(w, makeFilesReq(http.MethodGet, "/?delete_id=del-progress", "", "", ""))
 	if !strings.Contains(w.Body.String(), `"status":"done"`) {
 		t.Fatalf("expected done delete SSE, got %q", w.Body.String())
+	}
+}
+
+func TestFilesHandlerUploadProgressVerifying(t *testing.T) {
+	h := NewFilesHandlerWithService(&mockFilesService{})
+	storageID := uuid.New()
+	progress := &service.UploadProgress{
+		TotalBytes:              10,
+		TotalChunks:             2,
+		VerificationTotalChunks: 2,
+	}
+	progress.UploadedBytes.Store(10)
+	progress.UploadedChunks.Store(2)
+	progress.VerifiedChunks.Store(1)
+
+	h.uploads["u-verifying"] = &uploadTracker{
+		progress:  progress,
+		storageID: storageID,
+	}
+
+	req := makeFilesReq(http.MethodGet, "/?upload_id=u-verifying", "", "", "")
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		cancel()
+	}()
+
+	w := httptest.NewRecorder()
+	h.UploadProgress(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"status":"verifying"`) {
+		t.Fatalf("expected verifying upload SSE, got %q", body)
+	}
+	if !strings.Contains(body, `"verification_total":2`) || !strings.Contains(body, `"verified":1`) {
+		t.Fatalf("expected verification counters in upload SSE, got %q", body)
 	}
 }
 

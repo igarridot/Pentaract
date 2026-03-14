@@ -1,9 +1,10 @@
 import { Box, LinearProgress, Typography } from '@mui/material'
+import { calculatePercent } from '../common/progress'
 
 export default function DeleteProgress({ label, totalChunks, deletedChunks, status, workersStatus }) {
   const isActive = status === 'deleting'
   const isError = status === 'error'
-  const percent = totalChunks > 0 ? Math.round((deletedChunks / totalChunks) * 100) : 0
+  const percent = calculatePercent(deletedChunks, totalChunks)
   const pending = totalChunks > 0 ? Math.max(totalChunks - deletedChunks, 0) : 0
   const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
 

@@ -1,9 +1,10 @@
 import { Box, LinearProgress, Typography, Button } from '@mui/material'
 import { convertSize } from '../common/size_converter'
+import { calculatePercent } from '../common/progress'
 import { useTransferSpeed } from '../common/use_transfer_speed'
 
-export default function DownloadProgress({ filename, totalBytes, downloadedBytes, totalChunks, downloadedChunks, status, workersStatus, onCancel }) {
-  const percent = totalBytes > 0 ? Math.round((downloadedBytes / totalBytes) * 100) : 0
+export default function DownloadProgress({ filename, totalBytes, downloadedBytes, totalChunks, downloadedChunks, status, workersStatus, errorMessage, onCancel }) {
+  const percent = calculatePercent(downloadedBytes, totalBytes)
   const isActive = status === 'downloading'
   const isError = status === 'error'
   const isCancelled = status === 'cancelled'
@@ -61,6 +62,11 @@ export default function DownloadProgress({ filename, totalBytes, downloadedBytes
           {[workersText, chunkText, speedText].filter(Boolean).join(' \u00b7 ')}
         </Typography>
       </Box>
+      {isError && errorMessage && (
+        <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 1 }}>
+          {errorMessage}
+        </Typography>
+      )}
       {isActive && onCancel && (
         <Button size="small" color="warning" onClick={onCancel} sx={{ mt: 1 }}>
           Cancel download

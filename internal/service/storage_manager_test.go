@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -98,6 +99,117 @@ func TestStorageManagerDownloadToWriter(t *testing.T) {
 	}
 }
 
+func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *testing.T) {
+	filesMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new files pgxmock pool: %v", err)
+	}
+	defer filesMock.Close()
+
+	workersMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new workers pgxmock pool: %v", err)
+	}
+	defer workersMock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	chunkID0 := uuid.New()
+	chunkID1 := uuid.New()
+	plain0 := []byte("hello ")
+	plain1 := []byte("world")
+	cipher := NewChunkCipher("secret")
+	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	if err != nil {
+		t.Fatalf("encrypt chunk 0: %v", err)
+	}
+	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	if err != nil {
+		t.Fatalf("encrypt chunk 1: %v", err)
+	}
+
+	filesMock.ExpectQuery("SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = \\$1 ORDER BY position").
+		WithArgs(fileID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "file_id", "telegram_file_id", "telegram_message_id", "position"}).
+			AddRow(chunkID0, fileID, "FILE0", int64(0), int16(0)).
+			AddRow(chunkID1, fileID, "FILE1", int64(0), int16(1)))
+	filesMock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+
+	workersMock.ExpectQuery("SELECT token, name FROM storage_workers").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"token", "name"}).
+			AddRow("TOKEN", "w1").
+			AddRow("TOKEN2", "w2"))
+
+	chunk0Started := make(chan struct{})
+	chunk1Started := make(chan struct{})
+	var chunk0Once sync.Once
+	var chunk1Once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE0"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk0.bin"}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE1"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk1.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"):
+			chunk0Once.Do(func() { close(chunk0Started) })
+			select {
+			case <-chunk1Started:
+			case <-r.Context().Done():
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc0)
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk1.bin"):
+			chunk1Once.Do(func() { close(chunk1Started) })
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc1)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(filesMock),
+		storagesRepo: repository.NewStoragesRepoWithDB(filesMock),
+		workersRepo:  repository.NewStorageWorkersRepoWithDB(workersMock),
+		scheduler: NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
+			},
+		}, 10),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: cipher,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var out bytes.Buffer
+	progress := &DownloadProgress{}
+	err = m.DownloadToWriter(ctx, &domain.File{
+		ID:        fileID,
+		Path:      "parallel.txt",
+		Size:      int64(len(plain0) + len(plain1)),
+		StorageID: storageID,
+	}, &out, progress)
+	if err != nil {
+		t.Fatalf("parallel download failed: %v", err)
+	}
+	if out.String() != "hello world" {
+		t.Fatalf("unexpected download content: %q", out.String())
+	}
+	if progress.DownloadedChunks.Load() != 2 || progress.DownloadedBytes.Load() != int64(len(plain0)+len(plain1)) {
+		t.Fatalf("unexpected progress after parallel download: chunks=%d bytes=%d", progress.DownloadedChunks.Load(), progress.DownloadedBytes.Load())
+	}
+}
+
 func TestStorageManagerExactFileSizeAndRange(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
@@ -180,22 +292,51 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 
 	fileID := uuid.New()
 	storageID := uuid.New()
+	var uploadedChunk []byte
 
 	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
 		WithArgs(storageID).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO file_chunks").
 		WithArgs(fileID, "TG_FILE", int64(77), int16(0)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
 		WithArgs(fileID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/sendDocument"):
+			mr, err := r.MultipartReader()
+			if err != nil {
+				t.Fatalf("multipart reader: %v", err)
+			}
+			for {
+				part, err := mr.NextPart()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("next multipart part: %v", err)
+				}
+				if part.FormName() == "document" {
+					uploadedChunk, err = io.ReadAll(part)
+					if err != nil {
+						t.Fatalf("read uploaded chunk: %v", err)
+					}
+				}
+				part.Close()
+			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":77,"document":{"file_id":"TG_FILE"}}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=TG_FILE"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/uploaded.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/uploaded.bin"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(uploadedChunk)
 		case strings.Contains(r.URL.Path, "/deleteMessage"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
@@ -221,6 +362,25 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	if progress.UploadedChunks.Load() != 1 {
 		t.Fatalf("unexpected uploaded chunks: %d", progress.UploadedChunks.Load())
 	}
+	if progress.VerificationTotalChunks != 1 || progress.VerifiedChunks.Load() != 1 {
+		t.Fatalf("unexpected verification progress: total=%d verified=%d", progress.VerificationTotalChunks, progress.VerifiedChunks.Load())
+	}
+	if bytes.Equal(uploadedChunk, []byte("abc")) {
+		t.Fatalf("uploaded chunk should be encrypted")
+	}
+	if !bytes.HasPrefix(uploadedChunk, chunkCipherMagic) {
+		t.Fatalf("uploaded chunk should include encrypted payload magic")
+	}
+	if len(uploadedChunk) > maxTelegramGetFileBytes {
+		t.Fatalf("uploaded encrypted chunk exceeds getFile limit: %d", len(uploadedChunk))
+	}
+	decrypted, err := m.chunkCipher.DecryptChunk(fileID, 0, uploadedChunk)
+	if err != nil {
+		t.Fatalf("decrypt uploaded chunk failed: %v", err)
+	}
+	if string(decrypted) != "abc" {
+		t.Fatalf("unexpected decrypted upload payload: %q", decrypted)
+	}
 
 	delProgress := &DeleteProgress{}
 	err = m.DeleteFromTelegram(context.Background(), domain.Storage{ID: storageID, Name: "Main", ChatID: 123}, []domain.FileChunk{
@@ -235,11 +395,96 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	}
 }
 
+func TestStorageManagerUploadVerifiesRoundTripAndCleansUpOnMismatch(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	cipher := NewChunkCipher("secret")
+	badCiphertext, err := cipher.EncryptChunk(fileID, 0, []byte("xyz"))
+	if err != nil {
+		t.Fatalf("encrypt bad chunk: %v", err)
+	}
+
+	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+
+	deleteCalled := make(chan struct{})
+	var deleteOnce sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/sendDocument"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":77,"document":{"file_id":"TG_FILE"}}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=TG_FILE"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/corrupted.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/corrupted.bin"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(badCiphertext)
+		case strings.Contains(r.URL.Path, "/deleteMessage"):
+			deleteOnce.Do(func() { close(deleteCalled) })
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(mock),
+		storagesRepo: repository.NewStoragesRepoWithDB(mock),
+		scheduler:    NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{}, 1),
+		tgClient:     telegram.NewClient(srv.URL),
+		chunkCipher:  cipher,
+	}
+
+	err = m.Upload(context.Background(), &domain.File{ID: fileID, Path: "broken.txt", Size: 3, StorageID: storageID}, strings.NewReader("abc"), &UploadProgress{TotalBytes: 3})
+	if err == nil || !strings.Contains(err.Error(), "content mismatch") {
+		t.Fatalf("expected verification mismatch error, got: %v", err)
+	}
+
+	select {
+	case <-deleteCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected cleanup delete to be triggered after verification failure")
+	}
+}
+
 func TestStorageManagerRangeValidation(t *testing.T) {
 	m := &StorageManager{}
 	err := m.DownloadRangeToWriter(context.Background(), &domain.File{}, io.Discard, 10, 5, 20, nil)
 	if err == nil {
 		t.Fatalf("expected invalid range error")
+	}
+}
+
+func TestValidateEncryptedChunkSize(t *testing.T) {
+	cipher := NewChunkCipher("secret")
+	fileID := uuid.New()
+	plain := bytes.Repeat([]byte("a"), uploadChunkSize)
+
+	enc, err := cipher.EncryptChunk(fileID, 0, plain)
+	if err != nil {
+		t.Fatalf("encrypt chunk: %v", err)
+	}
+	if len(enc) > maxTelegramGetFileBytes {
+		t.Fatalf("encrypted chunk exceeds getFile limit: %d", len(enc))
+	}
+	if err := validateEncryptedChunkSize(enc); err != nil {
+		t.Fatalf("expected encrypted chunk to be accepted, got: %v", err)
+	}
+
+	tooLarge := make([]byte, maxTelegramGetFileBytes+1)
+	if err := validateEncryptedChunkSize(tooLarge); err == nil {
+		t.Fatalf("expected oversized encrypted chunk to be rejected")
 	}
 }
 
