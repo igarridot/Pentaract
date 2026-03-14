@@ -50,7 +50,7 @@ func TestParseSingleByteRange(t *testing.T) {
 		t.Fatalf("unexpected fixed range: %d-%d err=%v", start, end, err)
 	}
 	start, end, err = parseSingleByteRange("bytes=10-", 100)
-	if err != nil || start != 10 || end < start {
+	if err != nil || start != 10 || end != 99 {
 		t.Fatalf("unexpected open range: %d-%d err=%v", start, end, err)
 	}
 	start, end, err = parseSingleByteRange("bytes=-5", 100)

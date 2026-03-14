@@ -132,8 +132,6 @@ type moveFileRequest struct {
 	NewPath string `json:"new_path"`
 }
 
-const streamRangeWindowBytes int64 = 20 * 1024 * 1024 // 20MB
-
 // setupDownloadTracker creates a download tracker from the request's download_id param.
 // Returns the context to use, the tracker (may be nil), and a cleanup function to defer.
 func (h *FilesHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID) (context.Context, *downloadTracker, func()) {
@@ -663,11 +661,7 @@ func parseSingleByteRange(header string, size int64) (int64, int64, error) {
 
 	// Open range: bytes=N-
 	if parts[1] == "" {
-		end := start + streamRangeWindowBytes - 1
-		if end >= size {
-			end = size - 1
-		}
-		return start, end, nil
+		return start, size - 1, nil
 	}
 
 	end, err := strconv.ParseInt(parts[1], 10, 64)

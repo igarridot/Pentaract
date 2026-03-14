@@ -228,6 +228,47 @@ func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
 	}
 }
 
+func TestFilesHandlerDownloadInlineVideoOpenRangeExtendsToEOF(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	rangeCalled := false
+	var gotStart, gotEnd, gotTotal int64
+	h := NewFilesHandlerWithService(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
+		},
+		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			return 11, nil
+		},
+		downloadFileRangeToWriter: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error {
+			rangeCalled = true
+			gotStart = start
+			gotEnd = end
+			gotTotal = totalSize
+			_, _ = io.WriteString(w, "bcdefghijk")
+			return nil
+		},
+	})
+
+	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
+	req.Header.Set("Range", "bytes=1-")
+	w := httptest.NewRecorder()
+	h.Download(w, req)
+
+	if w.Code != http.StatusPartialContent || !rangeCalled {
+		t.Fatalf("inline open range download failed: code=%d called=%v", w.Code, rangeCalled)
+	}
+	if gotStart != 1 || gotEnd != 10 || gotTotal != 11 {
+		t.Fatalf("unexpected open range forwarded to service: %d-%d/%d", gotStart, gotEnd, gotTotal)
+	}
+	if got := w.Header().Get("Content-Range"); got != "bytes 1-10/11" {
+		t.Fatalf("unexpected content-range: %q", got)
+	}
+	if got := w.Header().Get("Content-Length"); got != "10" {
+		t.Fatalf("unexpected content-length: %q", got)
+	}
+}
+
 func TestFilesHandlerDownloadInlineMKVRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
