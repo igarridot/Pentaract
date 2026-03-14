@@ -228,6 +228,36 @@ func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
 	}
 }
 
+func TestFilesHandlerDownloadInlineMKVRange(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	rangeCalled := false
+	h := NewFilesHandlerWithService(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "movie.mkv", Size: 11}, nil
+		},
+		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			return 11, nil
+		},
+		downloadFileRangeToWriter: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error {
+			rangeCalled = true
+			_, _ = io.WriteString(w, "abc")
+			return nil
+		},
+	})
+
+	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mkv")
+	req.Header.Set("Range", "bytes=0-2")
+	w := httptest.NewRecorder()
+	h.Download(w, req)
+	if w.Code != http.StatusPartialContent || !rangeCalled || w.Body.String() != "abc" {
+		t.Fatalf("inline mkv range download failed: code=%d called=%v body=%q", w.Code, rangeCalled, w.Body.String())
+	}
+	if got := w.Header().Get("Content-Type"); got != "video/x-matroska" {
+		t.Fatalf("unexpected mkv content type: %q", got)
+	}
+}
+
 func TestFilesHandlerDownloadInlineInvalidRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
