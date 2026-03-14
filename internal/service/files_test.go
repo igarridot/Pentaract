@@ -71,6 +71,7 @@ func (f *fakeFilesAccessRepo) HasAccess(ctx context.Context, userID, storageID u
 type fakeFilesManager struct {
 	uploadFn             func(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error
 	downloadFn           func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
+	streamFn             func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
 	exactFn              func(ctx context.Context, file *domain.File) (int64, error)
 	rangeFn              func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error
 	deleteFromTelegramFn func(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error
@@ -81,6 +82,12 @@ func (f *fakeFilesManager) Upload(ctx context.Context, file *domain.File, reader
 }
 func (f *fakeFilesManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 	return f.downloadFn(ctx, file, w, progress)
+}
+func (f *fakeFilesManager) StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+	if f.streamFn == nil {
+		return f.downloadFn(ctx, file, w, progress)
+	}
+	return f.streamFn(ctx, file, w, progress)
 }
 func (f *fakeFilesManager) ExactFileSize(ctx context.Context, file *domain.File) (int64, error) {
 	return f.exactFn(ctx, file)
@@ -144,6 +151,10 @@ func TestFilesServiceMainFlows(t *testing.T) {
 			_, _ = w.Write([]byte("ok"))
 			return nil
 		},
+		streamFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+			_, _ = w.Write([]byte("stream"))
+			return nil
+		},
 		exactFn: func(ctx context.Context, file *domain.File) (int64, error) { return 2, nil },
 		rangeFn: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error {
 			_, _ = w.Write([]byte("ok"))
@@ -170,6 +181,9 @@ func TestFilesServiceMainFlows(t *testing.T) {
 	}
 	if err := svc.DownloadFileToWriter(context.Background(), &domain.File{ID: fileID}, io.Discard, nil); err != nil {
 		t.Fatalf("download writer failed: %v", err)
+	}
+	if err := svc.StreamFileToWriter(context.Background(), &domain.File{ID: fileID}, io.Discard, nil); err != nil {
+		t.Fatalf("stream writer failed: %v", err)
 	}
 	if _, err := svc.ExactFileSize(context.Background(), &domain.File{ID: fileID}); err != nil {
 		t.Fatalf("exact size failed: %v", err)

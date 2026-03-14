@@ -47,6 +47,7 @@ type filesAccessRepository interface {
 type filesManager interface {
 	Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error
 	DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
+	StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
 	ExactFileSize(ctx context.Context, file *domain.File) (int64, error)
 	DownloadRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error
 	DeleteFromTelegram(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error
@@ -132,6 +133,10 @@ func (s *FilesService) GetFileForDownload(ctx context.Context, userID, storageID
 
 func (s *FilesService) DownloadFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 	return s.manager.DownloadToWriter(ctx, file, w, progress)
+}
+
+func (s *FilesService) StreamFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+	return s.manager.StreamToWriter(ctx, file, w, progress)
 }
 
 func (s *FilesService) ExactFileSize(ctx context.Context, file *domain.File) (int64, error) {
