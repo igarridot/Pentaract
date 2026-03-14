@@ -631,8 +631,8 @@ func (m *StorageManager) downloadChunksInOrder(
 }
 
 // DownloadToWriter streams a file's chunks sequentially to the given writer.
-// Chunks are downloaded in parallel and written in order.
-// Peak memory is bounded by roughly one downloaded chunk per available worker.
+// This path is intentionally conservative and avoids stream-specific caching so
+// regular file downloads do not keep extra decrypted chunks resident in memory.
 func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
 	if err != nil {
@@ -655,6 +655,57 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 
 	log.Printf("[download] starting file=%s chunks=%d storage=%s chat=%s", file.Path, len(chunks), storage.Name, storage.Name)
 
+	for _, chunk := range chunks {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
+
+		data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
+		if err != nil {
+			return err
+		}
+
+		if _, err := w.Write(data); err != nil {
+			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
+		}
+
+		if progress != nil {
+			progress.DownloadedChunks.Add(1)
+			progress.DownloadedBytes.Add(int64(len(data)))
+		}
+	}
+
+	log.Printf("[download] completed file=%s storage=%s chat=%s", file.Path, storage.Name, storage.Name)
+	return nil
+}
+
+// StreamToWriter keeps the optimized streaming path used by inline previews and
+// media playback. It can reuse cached decrypted chunks and download ahead in
+// parallel, which helps with buffering and seek-heavy clients such as Kodi.
+func (m *StorageManager) StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
+	if err != nil {
+		return fmt.Errorf("listing chunks: %w", err)
+	}
+
+	if len(chunks) == 0 {
+		return domain.ErrNotFound("file chunks")
+	}
+
+	if progress != nil && progress.TotalChunks == 0 && progress.TotalBytes == 0 {
+		progress.TotalChunks = int64(len(chunks))
+		progress.TotalBytes = file.Size
+	}
+
+	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
+	if err != nil {
+		return fmt.Errorf("getting storage: %w", err)
+	}
+
+	log.Printf("[stream] starting file=%s chunks=%d storage=%s chat=%s", file.Path, len(chunks), storage.Name, storage.Name)
+
 	if err := m.downloadChunksInOrder(ctx, file, storage, chunks, func(chunk domain.FileChunk, data []byte) error {
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
@@ -669,7 +720,7 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 		return err
 	}
 
-	log.Printf("[download] completed file=%s storage=%s chat=%s", file.Path, storage.Name, storage.Name)
+	log.Printf("[stream] completed file=%s storage=%s chat=%s", file.Path, storage.Name, storage.Name)
 	return nil
 }
 

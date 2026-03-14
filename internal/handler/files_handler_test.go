@@ -30,6 +30,7 @@ type mockFilesService struct {
 	exactFileSizeFn           func(ctx context.Context, file *domain.File) (int64, error)
 	downloadFileRangeToWriter func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error
 	downloadFileToWriterFn    func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
+	streamFileToWriterFn      func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
 	downloadDirFn             func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error)
 	listDirFn                 func(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error)
 	searchFn                  func(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
@@ -89,6 +90,13 @@ func (m *mockFilesService) DownloadFileToWriter(ctx context.Context, file *domai
 		return nil
 	}
 	return m.downloadFileToWriterFn(ctx, file, w, progress)
+}
+func (m *mockFilesService) StreamFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+	if m.streamFileToWriterFn == nil {
+		_, _ = io.WriteString(w, "ok")
+		return nil
+	}
+	return m.streamFileToWriterFn(ctx, file, w, progress)
 }
 func (m *mockFilesService) DownloadDir(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
 	if m.downloadDirFn == nil {
@@ -225,6 +233,45 @@ func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
 	h.Download(w, req)
 	if w.Code != http.StatusPartialContent || !rangeCalled || w.Body.String() != "abc" {
 		t.Fatalf("inline range download failed: code=%d called=%v body=%q", w.Code, rangeCalled, w.Body.String())
+	}
+}
+
+func TestFilesHandlerDownloadInlineVideoUsesStreamingPathWithoutRange(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	streamCalled := false
+	downloadCalled := false
+	h := NewFilesHandlerWithService(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
+		},
+		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			return 11, nil
+		},
+		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			downloadCalled = true
+			_, _ = io.WriteString(w, "download")
+			return nil
+		},
+		streamFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			streamCalled = true
+			_, _ = io.WriteString(w, "stream")
+			return nil
+		},
+	})
+
+	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
+	w := httptest.NewRecorder()
+	h.Download(w, req)
+
+	if w.Code != http.StatusOK || w.Body.String() != "stream" {
+		t.Fatalf("inline full download failed: code=%d body=%q", w.Code, w.Body.String())
+	}
+	if !streamCalled {
+		t.Fatalf("expected streaming path to be used for inline video")
+	}
+	if downloadCalled {
+		t.Fatalf("regular download path should not be used for inline video")
 	}
 }
 

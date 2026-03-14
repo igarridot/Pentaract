@@ -104,6 +104,7 @@ type filesService interface {
 	ExactFileSize(ctx context.Context, file *domain.File) (int64, error)
 	DownloadFileRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error
 	DownloadFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
+	StreamFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
 	DownloadDir(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error)
 	ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error)
 	Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
@@ -577,8 +578,8 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		} else {
 			w.Header().Set("Content-Length", fmt.Sprintf("%d", totalSize))
 			w.WriteHeader(http.StatusOK)
-			if err := h.svc.DownloadFileToWriter(downloadCtx, file, w, progress); err != nil {
-				log.Printf("[download-file] error: %v", err)
+			if err := h.svc.StreamFileToWriter(downloadCtx, file, w, progress); err != nil {
+				log.Printf("[stream-file] error: %v", err)
 				h.finishTracker(tracker, err)
 				return
 			}

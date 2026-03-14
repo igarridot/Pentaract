@@ -99,7 +99,7 @@ func TestStorageManagerDownloadToWriter(t *testing.T) {
 	}
 }
 
-func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *testing.T) {
+func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *testing.T) {
 	filesMock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("new files pgxmock pool: %v", err)
@@ -193,20 +193,20 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 
 	var out bytes.Buffer
 	progress := &DownloadProgress{}
-	err = m.DownloadToWriter(ctx, &domain.File{
+	err = m.StreamToWriter(ctx, &domain.File{
 		ID:        fileID,
 		Path:      "parallel.txt",
 		Size:      int64(len(plain0) + len(plain1)),
 		StorageID: storageID,
 	}, &out, progress)
 	if err != nil {
-		t.Fatalf("parallel download failed: %v", err)
+		t.Fatalf("parallel stream failed: %v", err)
 	}
 	if out.String() != "hello world" {
 		t.Fatalf("unexpected download content: %q", out.String())
 	}
 	if progress.DownloadedChunks.Load() != 2 || progress.DownloadedBytes.Load() != int64(len(plain0)+len(plain1)) {
-		t.Fatalf("unexpected progress after parallel download: chunks=%d bytes=%d", progress.DownloadedChunks.Load(), progress.DownloadedBytes.Load())
+		t.Fatalf("unexpected progress after parallel stream: chunks=%d bytes=%d", progress.DownloadedChunks.Load(), progress.DownloadedBytes.Load())
 	}
 }
 
@@ -283,7 +283,94 @@ func TestStorageManagerExactFileSizeAndRange(t *testing.T) {
 	}
 }
 
-func TestStorageManagerDownloadToWriterPrimesChunkCacheForLaterSeek(t *testing.T) {
+func TestStorageManagerStreamToWriterPrimesChunkCacheForLaterSeek(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	chunkID := uuid.New()
+	plain := []byte("hello world")
+	cipher := NewChunkCipher("secret")
+	enc, err := cipher.EncryptChunk(fileID, 0, plain)
+	if err != nil {
+		t.Fatalf("encrypt chunk: %v", err)
+	}
+
+	mock.ExpectQuery("SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = \\$1 ORDER BY position").
+		WithArgs(fileID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "file_id", "telegram_file_id", "telegram_message_id", "position"}).
+			AddRow(chunkID, fileID, "TG_FILE_ID", int64(0), int16(0)))
+	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+	mock.ExpectQuery("SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = \\$1 ORDER BY position").
+		WithArgs(fileID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "file_id", "telegram_file_id", "telegram_message_id", "position"}).
+			AddRow(chunkID, fileID, "TG_FILE_ID", int64(0), int16(0)))
+	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+
+	downloadCount := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk.bin"):
+			downloadCount++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(mock),
+		storagesRepo: repository.NewStoragesRepoWithDB(mock),
+		scheduler:    NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{}, 1),
+		tgClient:     telegram.NewClient(srv.URL),
+		chunkCipher:  cipher,
+	}
+
+	var fullOut bytes.Buffer
+	if err := m.StreamToWriter(context.Background(), &domain.File{
+		ID:        fileID,
+		Path:      "movie.mkv",
+		Size:      int64(len(plain)),
+		StorageID: storageID,
+	}, &fullOut, &DownloadProgress{}); err != nil {
+		t.Fatalf("stream download failed: %v", err)
+	}
+
+	var seekOut bytes.Buffer
+	if err := m.DownloadRangeToWriter(
+		context.Background(),
+		&domain.File{ID: fileID, Path: "movie.mkv", Size: int64(len(plain)), StorageID: storageID},
+		&seekOut,
+		6,
+		10,
+		int64(len(plain)),
+		&DownloadProgress{},
+	); err != nil {
+		t.Fatalf("seek range failed: %v", err)
+	}
+
+	if seekOut.String() != "world" {
+		t.Fatalf("unexpected seek output: %q", seekOut.String())
+	}
+	if downloadCount != 1 {
+		t.Fatalf("expected cached seek to avoid redownloading the chunk, got %d downloads", downloadCount)
+	}
+}
+
+func TestStorageManagerDownloadToWriterDoesNotPrimeChunkCache(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("new pgxmock pool: %v", err)
@@ -365,8 +452,8 @@ func TestStorageManagerDownloadToWriterPrimesChunkCacheForLaterSeek(t *testing.T
 	if seekOut.String() != "world" {
 		t.Fatalf("unexpected seek output: %q", seekOut.String())
 	}
-	if downloadCount != 1 {
-		t.Fatalf("expected cached seek to avoid redownloading the chunk, got %d downloads", downloadCount)
+	if downloadCount != 2 {
+		t.Fatalf("expected regular download not to prime stream cache, got %d downloads", downloadCount)
 	}
 }
 
