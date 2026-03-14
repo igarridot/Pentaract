@@ -13,6 +13,7 @@ import (
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
+	"golang.org/x/sync/singleflight"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/Dominux/Pentaract/internal/repository"
@@ -26,12 +27,15 @@ const (
 )
 
 type StorageManager struct {
-	filesRepo    *repository.FilesRepo
-	storagesRepo *repository.StoragesRepo
-	workersRepo  *repository.StorageWorkersRepo
-	scheduler    *WorkerScheduler
-	tgClient     *telegram.Client
-	chunkCipher  *ChunkCipher
+	filesRepo          *repository.FilesRepo
+	storagesRepo       *repository.StoragesRepo
+	workersRepo        *repository.StorageWorkersRepo
+	scheduler          *WorkerScheduler
+	tgClient           *telegram.Client
+	chunkCipher        *ChunkCipher
+	streamChunkCache   *streamChunkCache
+	streamChunkCacheMu sync.Mutex
+	streamChunkLoads   singleflight.Group
 }
 
 func NewStorageManager(
@@ -161,6 +165,50 @@ func (m *StorageManager) downloadAndDecryptChunk(ctx context.Context, fileID uui
 	if err != nil {
 		return nil, fmt.Errorf("decrypting chunk %d: %w", chunk.Position, err)
 	}
+	return data, nil
+}
+
+func (m *StorageManager) getStreamChunkCache() *streamChunkCache {
+	m.streamChunkCacheMu.Lock()
+	defer m.streamChunkCacheMu.Unlock()
+
+	if m.streamChunkCache == nil {
+		m.streamChunkCache = newStreamChunkCache(defaultStreamChunkCacheMaxEntries, defaultStreamChunkCacheMaxBytes)
+	}
+
+	return m.streamChunkCache
+}
+
+func (m *StorageManager) downloadAndDecryptChunkCached(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
+	cacheKey := streamChunkCacheKey{fileID: fileID, position: chunk.Position}
+	cache := m.getStreamChunkCache()
+	if data, ok := cache.get(cacheKey); ok {
+		return data, nil
+	}
+
+	loadKey := fmt.Sprintf("%s:%d", fileID.String(), chunk.Position)
+	value, err, _ := m.streamChunkLoads.Do(loadKey, func() (interface{}, error) {
+		if data, ok := cache.get(cacheKey); ok {
+			return data, nil
+		}
+
+		data, err := m.downloadAndDecryptChunk(ctx, fileID, storage, chunk)
+		if err != nil {
+			return nil, err
+		}
+
+		cache.set(cacheKey, data)
+		return data, nil
+	})
+	if err != nil {
+		return nil, err
+	}
+
+	data, ok := value.([]byte)
+	if !ok {
+		return nil, fmt.Errorf("unexpected cached chunk type %T", value)
+	}
+
 	return data, nil
 }
 
@@ -399,7 +447,7 @@ func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.
 				Position:          result.Position,
 			}
 
-			data, err := m.downloadAndDecryptChunk(gctx, file.ID, storage, chunk)
+			data, err := m.downloadAndDecryptChunkCached(gctx, file.ID, storage, chunk)
 			if err != nil {
 				return fmt.Errorf("verifying chunk %d: %w", result.Position, err)
 			}
@@ -485,7 +533,7 @@ func (m *StorageManager) downloadChunksInOrder(
 			default:
 			}
 
-			data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
+			data, err := m.downloadAndDecryptChunkCached(ctx, file.ID, *storage, chunk)
 			if err != nil {
 				return err
 			}
@@ -511,7 +559,7 @@ func (m *StorageManager) downloadChunksInOrder(
 	for range parallelism {
 		g.Go(func() error {
 			for job := range jobs {
-				data, err := m.downloadAndDecryptChunk(gctx, file.ID, *storage, job.chunk)
+				data, err := m.downloadAndDecryptChunkCached(gctx, file.ID, *storage, job.chunk)
 				if err != nil {
 					return err
 				}
@@ -644,7 +692,7 @@ func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (
 	}
 
 	lastChunk := chunks[len(chunks)-1]
-	lastChunkData, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, lastChunk)
+	lastChunkData, err := m.downloadAndDecryptChunkCached(ctx, file.ID, *storage, lastChunk)
 	if err != nil {
 		return 0, err
 	}
@@ -719,28 +767,18 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 		offset = inferredOffset
 	}
 
-	for chunkIndex := startChunkIndex; chunkIndex <= endChunkIndex; chunkIndex++ {
-		chunk := chunks[chunkIndex]
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
+	rangeChunks := chunks[startChunkIndex : endChunkIndex+1]
+	if progress != nil && progress.TotalChunks == 0 {
+		progress.TotalChunks = int64(len(rangeChunks))
+	}
 
-		data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
-		if err != nil {
-			return err
-		}
-
+	return m.downloadChunksInOrder(ctx, file, storage, rangeChunks, func(chunk domain.FileChunk, data []byte) error {
 		chunkStart := offset
 		chunkEndExclusive := chunkStart + int64(len(data))
 		offset = chunkEndExclusive
 
-		if chunkEndExclusive <= start {
-			continue
-		}
-		if chunkStart > end {
-			break
+		if chunkEndExclusive <= start || chunkStart > end {
+			return nil
 		}
 
 		left := int64(0)
@@ -758,7 +796,7 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 			right = int64(len(data))
 		}
 		if left >= right {
-			continue
+			return nil
 		}
 
 		if _, err := w.Write(data[left:right]); err != nil {
@@ -770,10 +808,6 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 			progress.DownloadedBytes.Add(right - left)
 		}
 
-		if chunkEndExclusive > end {
-			break
-		}
-	}
-
-	return nil
+		return nil
+	})
 }
