@@ -210,6 +210,117 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 	}
 }
 
+func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *testing.T) {
+	filesMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new files pgxmock pool: %v", err)
+	}
+	defer filesMock.Close()
+
+	workersMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new workers pgxmock pool: %v", err)
+	}
+	defer workersMock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	chunkID0 := uuid.New()
+	chunkID1 := uuid.New()
+	plain0 := []byte("hello ")
+	plain1 := []byte("world")
+	cipher := NewChunkCipher("secret")
+	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	if err != nil {
+		t.Fatalf("encrypt chunk 0: %v", err)
+	}
+	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	if err != nil {
+		t.Fatalf("encrypt chunk 1: %v", err)
+	}
+
+	filesMock.ExpectQuery("SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = \\$1 ORDER BY position").
+		WithArgs(fileID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "file_id", "telegram_file_id", "telegram_message_id", "position"}).
+			AddRow(chunkID0, fileID, "FILE0", int64(0), int16(0)).
+			AddRow(chunkID1, fileID, "FILE1", int64(0), int16(1)))
+	filesMock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+
+	workersMock.ExpectQuery("SELECT token, name FROM storage_workers").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"token", "name"}).
+			AddRow("TOKEN", "w1").
+			AddRow("TOKEN2", "w2"))
+
+	chunk0Started := make(chan struct{})
+	chunk1Started := make(chan struct{})
+	var chunk0Once sync.Once
+	var chunk1Once sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE0"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk0.bin"}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE1"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk1.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"):
+			chunk0Once.Do(func() { close(chunk0Started) })
+			select {
+			case <-chunk1Started:
+			case <-r.Context().Done():
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc0)
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk1.bin"):
+			chunk1Once.Do(func() { close(chunk1Started) })
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc1)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(filesMock),
+		storagesRepo: repository.NewStoragesRepoWithDB(filesMock),
+		workersRepo:  repository.NewStorageWorkersRepoWithDB(workersMock),
+		scheduler: NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
+			},
+		}, 10),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: cipher,
+	}
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var out bytes.Buffer
+	progress := &DownloadProgress{}
+	err = m.DownloadToWriter(ctx, &domain.File{
+		ID:        fileID,
+		Path:      "parallel.txt",
+		Size:      int64(len(plain0) + len(plain1)),
+		StorageID: storageID,
+	}, &out, progress)
+	if err != nil {
+		t.Fatalf("parallel download failed: %v", err)
+	}
+	if out.String() != "hello world" {
+		t.Fatalf("unexpected download content: %q", out.String())
+	}
+	if progress.DownloadedChunks.Load() != 2 || progress.DownloadedBytes.Load() != int64(len(plain0)+len(plain1)) {
+		t.Fatalf("unexpected progress after parallel download: chunks=%d bytes=%d", progress.DownloadedChunks.Load(), progress.DownloadedBytes.Load())
+	}
+}
+
 func TestStorageManagerExactFileSizeAndRange(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
