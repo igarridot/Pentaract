@@ -133,3 +133,44 @@ func TestDownloadRetriesOn429(t *testing.T) {
 		t.Fatalf("expected retry success, err=%v data=%q getFileAttempts=%d downloadAttempts=%d", err, string(data), getFileAttempts, downloadAttempts)
 	}
 }
+
+func TestDownloadRetriesOnUnexpectedEOF(t *testing.T) {
+	getFileAttempts := 0
+	downloadAttempts := 0
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile"):
+			getFileAttempts++
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk.bin"):
+			downloadAttempts++
+			if downloadAttempts == 1 {
+				h, ok := w.(http.Hijacker)
+				if !ok {
+					t.Fatalf("response writer does not support hijacking")
+				}
+				conn, bufrw, err := h.Hijack()
+				if err != nil {
+					t.Fatalf("hijack response: %v", err)
+				}
+				_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort")
+				_ = bufrw.Flush()
+				_ = conn.Close()
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`payload-ok`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	data, err := c.Download(context.Background(), "TOKEN", "FILE")
+	if err != nil || string(data) != "payload-ok" || getFileAttempts < 1 || downloadAttempts < 2 {
+		t.Fatalf("expected retry success after unexpected EOF, err=%v data=%q getFileAttempts=%d downloadAttempts=%d", err, string(data), getFileAttempts, downloadAttempts)
+	}
+}

@@ -184,6 +184,10 @@ func downloadErrorMessage(err error) string {
 		strings.Contains(msg, "forwardmessage failed"),
 		strings.Contains(msg, "forwardmessage missing document file_id"):
 		return "Telegram could not resolve at least one chunk with the currently available workers. Check that the original bot still exists and still has access to the channel, or re-upload the file."
+	case strings.Contains(msg, "reading file data"),
+		strings.Contains(msg, "unexpected eof"),
+		strings.Contains(msg, "downloading file:"):
+		return "Telegram interrupted the download stream for one of the chunks. Please try again."
 	default:
 		return "Download failed unexpectedly. Please try again."
 	}

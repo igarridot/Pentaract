@@ -4,10 +4,12 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
 	"mime/multipart"
+	"net"
 	"net/http"
 	"net/url"
 	"strconv"
@@ -226,6 +228,24 @@ func (c *Client) ResolveFileIDByMessage(ctx context.Context, token string, chatI
 	return "", fmt.Errorf("telegram forwardMessage failed after %d retries", maxRetries)
 }
 
+func isRetryableDownloadError(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	if ctx != nil && ctx.Err() != nil {
+		return false
+	}
+	if errors.Is(err, context.Canceled) {
+		return false
+	}
+	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
+		return true
+	}
+
+	var netErr net.Error
+	return errors.As(err, &netErr)
+}
+
 // Download retrieves a file from Telegram by its file_id honoring request cancellation.
 // Automatically retries on 429 (Too Many Requests).
 func (c *Client) Download(ctx context.Context, token string, telegramFileID string) ([]byte, error) {
@@ -283,6 +303,10 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		}
 		dlResp, err := c.httpClient.Do(req)
 		if err != nil {
+			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
+				log.Printf("[telegram] transient file download error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				continue
+			}
 			return nil, fmt.Errorf("downloading file: %w", err)
 		}
 
@@ -305,6 +329,10 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		data, err := io.ReadAll(dlResp.Body)
 		dlResp.Body.Close()
 		if err != nil {
+			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
+				log.Printf("[telegram] transient file read error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				continue
+			}
 			return nil, fmt.Errorf("reading file data: %w", err)
 		}
 

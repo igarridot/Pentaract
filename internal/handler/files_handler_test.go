@@ -375,6 +375,11 @@ func TestDownloadErrorMessage(t *testing.T) {
 			want: "currently available workers",
 		},
 		{
+			name: "transient telegram stream failure",
+			err:  errors.New("downloading chunk 409: reading file data: unexpected EOF"),
+			want: "interrupted the download stream",
+		},
+		{
 			name: "fallback generic",
 			err:  errors.New("writing chunk 0: broken pipe"),
 			want: "Download failed unexpectedly",
