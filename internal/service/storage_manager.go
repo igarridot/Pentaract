@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -137,6 +138,20 @@ func (m *StorageManager) preferredDownloadWorkers(ctx context.Context, storageID
 	return workers
 }
 
+func contextAborted(ctx context.Context, err error) bool {
+	if ctx != nil && ctx.Err() != nil {
+		return true
+	}
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func contextAbortError(ctx context.Context, err error) error {
+	if ctx != nil && ctx.Err() != nil {
+		return ctx.Err()
+	}
+	return err
+}
+
 func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
 	wt, err := m.scheduler.GetToken(ctx, storage.ID)
 	if err != nil {
@@ -147,8 +162,15 @@ func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Stora
 	if err == nil {
 		return data, nil
 	}
+	if contextAborted(ctx, err) {
+		return nil, contextAbortError(ctx, err)
+	}
 	if !isGetFileFailure(err) {
 		return nil, err
+	}
+
+	if contextAborted(ctx, err) {
+		return nil, contextAbortError(ctx, err)
 	}
 
 	workers, listErr := m.workersRepo.ListTokensByStorage(ctx, storage.ID)
@@ -166,6 +188,9 @@ func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Stora
 			log.Printf("[download] chunk %d recovered via fallback worker=%s", chunk.Position, candidate.Name)
 			return data, nil
 		}
+		if contextAborted(ctx, tryErr) {
+			return nil, contextAbortError(ctx, tryErr)
+		}
 		lastErr = tryErr
 	}
 
@@ -178,7 +203,10 @@ func (m *StorageManager) downloadChunkWithPreferredWorker(ctx context.Context, s
 		if err == nil {
 			return data, nil
 		}
-		log.Printf("[download] warning: preferred worker=%s failed for chunk %d, falling back: %v", preferredWorker.Name, chunk.Position, err)
+		if contextAborted(ctx, err) {
+			return nil, contextAbortError(ctx, err)
+		}
+		log.Printf("[download] info: preferred worker=%s failed for chunk %d, falling back: %v", preferredWorker.Name, chunk.Position, err)
 	}
 
 	return m.downloadChunk(ctx, storage, chunk)

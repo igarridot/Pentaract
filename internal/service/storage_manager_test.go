@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"io"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -1191,6 +1192,102 @@ func TestStorageManagerDownloadChunkFallbackWorker(t *testing.T) {
 	}
 	if string(data) != "ok-from-fallback" {
 		t.Fatalf("unexpected fallback content: %q", string(data))
+	}
+}
+
+func TestStorageManagerDownloadChunkWithPreferredWorkerLogsInfoOnFallback(t *testing.T) {
+	var logOutput bytes.Buffer
+	originalLogWriter := log.Writer()
+	log.SetOutput(&logOutput)
+	defer log.SetOutput(originalLogWriter)
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/botTOKEN/getFile"):
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"ok":false,"description":"Bad Request: wrong file identifier/HTTP URL specified"}`))
+		case strings.Contains(r.URL.Path, "/botTOKEN2/getFile"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk.bin"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok-from-fallback"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		scheduler: NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "TOKEN2", Name: "w2"}, nil
+			},
+		}, 1),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: NewChunkCipher("secret"),
+	}
+
+	data, err := m.downloadChunkWithPreferredWorker(context.Background(), domain.Storage{ID: uuid.New(), ChatID: 123}, domain.FileChunk{
+		TelegramFileID:    "FILE_ID",
+		TelegramMessageID: 0,
+		Position:          0,
+	}, &repository.WorkerToken{Token: "TOKEN", Name: "w1"})
+	if err != nil {
+		t.Fatalf("download chunk with preferred worker fallback failed: %v", err)
+	}
+	if string(data) != "ok-from-fallback" {
+		t.Fatalf("unexpected fallback content: %q", string(data))
+	}
+
+	logText := logOutput.String()
+	if strings.Contains(logText, "warning: preferred worker") {
+		t.Fatalf("expected preferred worker fallback log to stop using warning, got %q", logText)
+	}
+	if !strings.Contains(logText, "info: preferred worker=w1 failed for chunk 0, falling back") {
+		t.Fatalf("expected informational preferred worker fallback log, got %q", logText)
+	}
+}
+
+func TestStorageManagerDownloadChunkWithPreferredWorkerSkipsFallbackWhenContextCanceled(t *testing.T) {
+	var logOutput bytes.Buffer
+	originalLogWriter := log.Writer()
+	log.SetOutput(&logOutput)
+	defer log.SetOutput(originalLogWriter)
+
+	var schedulerCalls int
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatalf("unexpected HTTP request after context cancellation: %s", r.URL.String())
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		scheduler: NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				schedulerCalls++
+				return &repository.WorkerToken{Token: "TOKEN2", Name: "w2"}, nil
+			},
+		}, 1),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: NewChunkCipher("secret"),
+	}
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	_, err := m.downloadChunkWithPreferredWorker(ctx, domain.Storage{ID: uuid.New(), ChatID: 123}, domain.FileChunk{
+		TelegramFileID:    "FILE_ID",
+		TelegramMessageID: 0,
+		Position:          0,
+	}, &repository.WorkerToken{Token: "TOKEN", Name: "w1"})
+	if err != context.Canceled {
+		t.Fatalf("expected context cancellation, got %v", err)
+	}
+	if schedulerCalls != 0 {
+		t.Fatalf("expected no fallback scheduler call after cancellation, got %d", schedulerCalls)
+	}
+	if strings.Contains(logOutput.String(), "falling back") {
+		t.Fatalf("expected no fallback log after cancellation, got %q", logOutput.String())
 	}
 }
 
