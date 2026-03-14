@@ -283,6 +283,86 @@ func TestStorageManagerExactFileSizeAndRange(t *testing.T) {
 	}
 }
 
+func TestStorageManagerDownloadRangeToWriterSeekSkipsEarlierChunks(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	chunkID0 := uuid.New()
+	chunkID1 := uuid.New()
+	plain0 := bytes.Repeat([]byte("a"), uploadChunkSize)
+	plain1 := []byte("tail-data")
+	cipher := NewChunkCipher("secret")
+	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	if err != nil {
+		t.Fatalf("encrypt chunk 0: %v", err)
+	}
+	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	if err != nil {
+		t.Fatalf("encrypt chunk 1: %v", err)
+	}
+
+	mock.ExpectQuery("SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = \\$1 ORDER BY position").
+		WithArgs(fileID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "file_id", "telegram_file_id", "telegram_message_id", "position"}).
+			AddRow(chunkID0, fileID, "CHUNK0", int64(0), int16(0)).
+			AddRow(chunkID1, fileID, "CHUNK1", int64(0), int16(1)))
+	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+
+	var downloads []string
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=CHUNK0"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk0.bin"}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=CHUNK1"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk1.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"):
+			downloads = append(downloads, "chunk0")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc0)
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk1.bin"):
+			downloads = append(downloads, "chunk1")
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc1)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(mock),
+		storagesRepo: repository.NewStoragesRepoWithDB(mock),
+		scheduler:    NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{}, 1),
+		tgClient:     telegram.NewClient(srv.URL),
+		chunkCipher:  cipher,
+	}
+
+	var out bytes.Buffer
+	progress := &DownloadProgress{}
+	start := int64(uploadChunkSize) + 2
+	end := start + 3
+	totalSize := int64(uploadChunkSize) + int64(len(plain1))
+	err = m.DownloadRangeToWriter(context.Background(), &domain.File{ID: fileID, StorageID: storageID}, &out, start, end, totalSize, progress)
+	if err != nil {
+		t.Fatalf("download range failed: %v", err)
+	}
+	if out.String() != "il-d" {
+		t.Fatalf("unexpected seek range output: %q", out.String())
+	}
+	if len(downloads) != 1 || downloads[0] != "chunk1" {
+		t.Fatalf("expected only last chunk download, got %v", downloads)
+	}
+}
+
 func TestStorageManagerExactFileSizeUsesOnlyLastChunk(t *testing.T) {
 	mock, err := pgxmock.NewPool()
 	if err != nil {
