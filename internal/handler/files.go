@@ -193,6 +193,21 @@ func downloadErrorMessage(err error) string {
 	}
 }
 
+func uploadProgressStatus(progress *service.UploadProgress, done bool, err error, skipped bool) string {
+	switch {
+	case done && err != nil:
+		return "error"
+	case done && skipped:
+		return "skipped"
+	case done:
+		return "done"
+	case progress != nil && progress.VerificationTotalChunks > 0:
+		return "verifying"
+	default:
+		return "uploading"
+	}
+}
+
 // setupSSE configures response headers for Server-Sent Events and returns the flusher.
 func setupSSE(w http.ResponseWriter) (http.Flusher, bool) {
 	flusher, ok := w.(http.Flusher)
@@ -453,29 +468,22 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		}
 
 		p := tracker.progress
-		status := "uploading"
-
 		h.mu.RLock()
 		isDone := tracker.done
 		uploadErr := tracker.err
 		isSkipped := tracker.skipped
 		h.mu.RUnlock()
-
-		if isDone && uploadErr != nil {
-			status = "error"
-		} else if isDone && isSkipped {
-			status = "skipped"
-		} else if isDone {
-			status = "done"
-		}
+		status := uploadProgressStatus(p, isDone, uploadErr, isSkipped)
 
 		writeSSE(w, flusher, map[string]any{
-			"total":          p.TotalChunks,
-			"uploaded":       p.UploadedChunks.Load(),
-			"total_bytes":    p.TotalBytes,
-			"uploaded_bytes": p.UploadedBytes.Load(),
-			"status":         status,
-			"workers_status": h.svc.WorkersStatus(tracker.storageID),
+			"total":              p.TotalChunks,
+			"uploaded":           p.UploadedChunks.Load(),
+			"total_bytes":        p.TotalBytes,
+			"uploaded_bytes":     p.UploadedBytes.Load(),
+			"verification_total": p.VerificationTotalChunks,
+			"verified":           p.VerifiedChunks.Load(),
+			"status":             status,
+			"workers_status":     h.svc.WorkersStatus(tracker.storageID),
 		})
 
 		if isDone {

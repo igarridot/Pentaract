@@ -297,12 +297,14 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
 		WithArgs(storageID).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+	mock.ExpectBegin()
 	mock.ExpectExec("INSERT INTO file_chunks").
 		WithArgs(fileID, "TG_FILE", int64(77), int16(0)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
 	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
 		WithArgs(fileID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
@@ -329,6 +331,12 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 			}
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":77,"document":{"file_id":"TG_FILE"}}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=TG_FILE"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/uploaded.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/uploaded.bin"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(uploadedChunk)
 		case strings.Contains(r.URL.Path, "/deleteMessage"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true}`))
@@ -353,6 +361,9 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	}
 	if progress.UploadedChunks.Load() != 1 {
 		t.Fatalf("unexpected uploaded chunks: %d", progress.UploadedChunks.Load())
+	}
+	if progress.VerificationTotalChunks != 1 || progress.VerifiedChunks.Load() != 1 {
+		t.Fatalf("unexpected verification progress: total=%d verified=%d", progress.VerificationTotalChunks, progress.VerifiedChunks.Load())
 	}
 	if bytes.Equal(uploadedChunk, []byte("abc")) {
 		t.Fatalf("uploaded chunk should be encrypted")
@@ -381,6 +392,69 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	}
 	if delProgress.TotalChunks != 1 || delProgress.DeletedChunks.Load() != 1 {
 		t.Fatalf("unexpected delete progress: total=%d deleted=%d", delProgress.TotalChunks, delProgress.DeletedChunks.Load())
+	}
+}
+
+func TestStorageManagerUploadVerifiesRoundTripAndCleansUpOnMismatch(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	cipher := NewChunkCipher("secret")
+	badCiphertext, err := cipher.EncryptChunk(fileID, 0, []byte("xyz"))
+	if err != nil {
+		t.Fatalf("encrypt bad chunk: %v", err)
+	}
+
+	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+
+	deleteCalled := make(chan struct{})
+	var deleteOnce sync.Once
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/sendDocument"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"message_id":77,"document":{"file_id":"TG_FILE"}}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=TG_FILE"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/corrupted.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/corrupted.bin"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(badCiphertext)
+		case strings.Contains(r.URL.Path, "/deleteMessage"):
+			deleteOnce.Do(func() { close(deleteCalled) })
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(mock),
+		storagesRepo: repository.NewStoragesRepoWithDB(mock),
+		scheduler:    NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{}, 1),
+		tgClient:     telegram.NewClient(srv.URL),
+		chunkCipher:  cipher,
+	}
+
+	err = m.Upload(context.Background(), &domain.File{ID: fileID, Path: "broken.txt", Size: 3, StorageID: storageID}, strings.NewReader("abc"), &UploadProgress{TotalBytes: 3})
+	if err == nil || !strings.Contains(err.Error(), "content mismatch") {
+		t.Fatalf("expected verification mismatch error, got: %v", err)
+	}
+
+	select {
+	case <-deleteCalled:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected cleanup delete to be triggered after verification failure")
 	}
 }
 

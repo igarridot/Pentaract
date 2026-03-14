@@ -29,7 +29,7 @@ import MediaPreviewDialog from '../../components/MediaPreviewDialog'
 import RenameFolderDialog from '../../components/RenameFolderDialog'
 import UploadConflictDialog from '../../components/UploadConflictDialog'
 import { buildUploadEntries, normalizeUploadPath, resolveUploadEntries } from './upload_conflicts'
-import { isTerminalTransferStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from '../../common/progress'
+import { isTerminalTransferStatus, isActiveUploadStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from '../../common/progress'
 
 export default function Files() {
   const { id: storageId } = useParams()
@@ -126,7 +126,7 @@ export default function Files() {
     downloadStatesRef.current = downloadStates
   }, [downloadStates])
 
-  const isUploading = uploadStates.some((u) => u.status === 'uploading')
+  const isUploading = uploadStates.some((u) => isActiveUploadStatus(u.status))
   const isDownloading = downloadStates.some((d) => d.status === 'downloading')
   const isDeleting = deleteState?.status === 'deleting'
   const isBulkOperating = bulkOperation?.status === 'running'
@@ -259,6 +259,8 @@ export default function Files() {
       uploadedBytes: 0,
       totalChunks: 0,
       uploadedChunks: 0,
+      verificationTotal: 0,
+      verifiedChunks: 0,
       status: 'uploading',
       workersStatus: 'active',
     }])
@@ -267,12 +269,14 @@ export default function Files() {
       updateUploadState(uploadId, (prev) => ({
         ...prev,
         filename,
-        totalBytes: data.total_bytes || prev?.totalBytes || file.size,
-        uploadedBytes: data.uploaded_bytes || 0,
-        totalChunks: data.total || prev?.totalChunks || 0,
-        uploadedChunks: data.uploaded || 0,
+        totalBytes: data.total_bytes ?? prev?.totalBytes ?? file.size,
+        uploadedBytes: data.uploaded_bytes ?? 0,
+        totalChunks: data.total ?? prev?.totalChunks ?? 0,
+        uploadedChunks: data.uploaded ?? 0,
+        verificationTotal: data.verification_total ?? prev?.verificationTotal ?? 0,
+        verifiedChunks: data.verified ?? 0,
         status: data.status,
-        workersStatus: data.workers_status || prev?.workersStatus || 'active',
+        workersStatus: data.workers_status ?? prev?.workersStatus ?? 'active',
       }))
         if (data.status === 'done') {
           markBulkTransferTerminal('upload', uploadId, 'done')
@@ -401,7 +405,7 @@ export default function Files() {
       bulkCancelRef.current = async () => {
         bulkCancelledRef.current = true
         const currentIds = uploadStatesRef.current
-          .filter((u) => u.status === 'uploading')
+          .filter((u) => isActiveUploadStatus(u.status))
           .map((u) => u.id)
         await Promise.all(currentIds.map(async (uploadId) => {
           uploadProgressCancelsRef.current.get(uploadId)?.()
@@ -906,6 +910,8 @@ export default function Files() {
           uploadedBytes={uploadState.uploadedBytes}
           totalChunks={uploadState.totalChunks}
           uploadedChunks={uploadState.uploadedChunks}
+          verificationTotal={uploadState.verificationTotal}
+          verifiedChunks={uploadState.verifiedChunks}
           status={uploadState.status}
           workersStatus={uploadState.workersStatus}
           onCancel={() => handleCancelUpload(uploadState.id)}

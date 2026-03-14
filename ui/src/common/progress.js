@@ -8,6 +8,10 @@ export function isTerminalTransferStatus(status) {
   return status === 'done' || status === 'skipped' || status === 'error' || status === 'cancelled'
 }
 
+export function isActiveUploadStatus(status) {
+  return status === 'uploading' || status === 'verifying'
+}
+
 export function summarizeTerminalStatuses(terminalStatuses = {}) {
   const summary = {
     completed: 0,

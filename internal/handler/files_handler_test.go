@@ -396,6 +396,29 @@ func TestDownloadErrorMessage(t *testing.T) {
 	}
 }
 
+func TestUploadProgressStatus(t *testing.T) {
+	progress := &service.UploadProgress{}
+
+	if got := uploadProgressStatus(progress, false, nil, false); got != "uploading" {
+		t.Fatalf("expected uploading, got %q", got)
+	}
+
+	progress.VerificationTotalChunks = 2
+	if got := uploadProgressStatus(progress, false, nil, false); got != "verifying" {
+		t.Fatalf("expected verifying, got %q", got)
+	}
+
+	if got := uploadProgressStatus(progress, true, nil, false); got != "done" {
+		t.Fatalf("expected done, got %q", got)
+	}
+	if got := uploadProgressStatus(progress, true, errors.New("boom"), false); got != "error" {
+		t.Fatalf("expected error, got %q", got)
+	}
+	if got := uploadProgressStatus(progress, true, nil, true); got != "skipped" {
+		t.Fatalf("expected skipped, got %q", got)
+	}
+}
+
 func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
 	h := NewFilesHandlerWithService(&mockFilesService{})
 	storageID := uuid.New()
@@ -525,6 +548,43 @@ func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
 	h.DeleteProgress(w, makeFilesReq(http.MethodGet, "/?delete_id=del-progress", "", "", ""))
 	if !strings.Contains(w.Body.String(), `"status":"done"`) {
 		t.Fatalf("expected done delete SSE, got %q", w.Body.String())
+	}
+}
+
+func TestFilesHandlerUploadProgressVerifying(t *testing.T) {
+	h := NewFilesHandlerWithService(&mockFilesService{})
+	storageID := uuid.New()
+	progress := &service.UploadProgress{
+		TotalBytes:              10,
+		TotalChunks:             2,
+		VerificationTotalChunks: 2,
+	}
+	progress.UploadedBytes.Store(10)
+	progress.UploadedChunks.Store(2)
+	progress.VerifiedChunks.Store(1)
+
+	h.uploads["u-verifying"] = &uploadTracker{
+		progress:  progress,
+		storageID: storageID,
+	}
+
+	req := makeFilesReq(http.MethodGet, "/?upload_id=u-verifying", "", "", "")
+	ctx, cancel := context.WithCancel(req.Context())
+	req = req.WithContext(ctx)
+	go func() {
+		time.Sleep(700 * time.Millisecond)
+		cancel()
+	}()
+
+	w := httptest.NewRecorder()
+	h.UploadProgress(w, req)
+
+	body := w.Body.String()
+	if !strings.Contains(body, `"status":"verifying"`) {
+		t.Fatalf("expected verifying upload SSE, got %q", body)
+	}
+	if !strings.Contains(body, `"verification_total":2`) || !strings.Contains(body, `"verified":1`) {
+		t.Fatalf("expected verification counters in upload SSE, got %q", body)
 	}
 }
 

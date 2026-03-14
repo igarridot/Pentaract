@@ -4,19 +4,48 @@ import { convertSize } from '../common/size_converter'
 import { calculatePercent } from '../common/progress'
 import { useTransferSpeed } from '../common/use_transfer_speed'
 
-export default function UploadProgress({ filename, totalBytes, uploadedBytes, totalChunks, uploadedChunks, status, workersStatus, onCancel }) {
-  const percent = calculatePercent(uploadedBytes, totalBytes)
-  const isActive = status === 'uploading'
+export default function UploadProgress({
+  filename,
+  totalBytes,
+  uploadedBytes,
+  totalChunks,
+  uploadedChunks,
+  verificationTotal,
+  verifiedChunks,
+  status,
+  workersStatus,
+  onCancel,
+}) {
+  const isUploading = status === 'uploading'
+  const isVerifying = status === 'verifying'
+  const isActive = isUploading || isVerifying
   const isError = status === 'error'
+  const percent = isVerifying
+    ? calculatePercent(verifiedChunks, verificationTotal)
+    : calculatePercent(uploadedBytes, totalBytes)
   const speed = useTransferSpeed(uploadedBytes)
 
-  const speedText = speed > 0 && isActive ? `${convertSize(speed)}/s` : ''
+  const speedText = speed > 0 && isUploading ? `${convertSize(speed)}/s` : ''
   const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
-  const chunkText = totalChunks > 0 ? `${uploadedChunks}/${totalChunks} chunks` : ''
+  const chunkText = isVerifying
+    ? (verificationTotal > 0 ? `${verifiedChunks}/${verificationTotal} chunks verified` : 'Verifying chunks')
+    : (totalChunks > 0 ? `${uploadedChunks}/${totalChunks} chunks` : '')
 
-  const progressText = totalBytes > 0
-    ? `${convertSize(uploadedBytes)} / ${convertSize(totalBytes)}`
-    : 'Preparing...'
+  const progressText = isVerifying && totalBytes > 0
+    ? `${convertSize(uploadedBytes)} / ${convertSize(totalBytes)} uploaded`
+    : totalBytes > 0
+      ? `${convertSize(uploadedBytes)} / ${convertSize(totalBytes)}`
+      : 'Preparing...'
+
+  const title = isError
+    ? 'Failed'
+    : isVerifying
+      ? 'Verifying'
+      : isUploading
+        ? 'Uploading'
+        : 'Complete'
+
+  const progressVariant = isVerifying || totalBytes > 0 ? 'determinate' : 'indeterminate'
 
   return (
     <Box
@@ -35,7 +64,7 @@ export default function UploadProgress({ filename, totalBytes, uploadedBytes, to
     >
       <Box sx={{ display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, justifyContent: 'space-between', mb: 1, minWidth: 0 }}>
         <Typography variant="body2" sx={{ fontWeight: 500, flexGrow: 1, minWidth: 0, pr: 1, wordBreak: 'break-word' }}>
-          {isError ? `Failed` : isActive ? `Uploading` : `Complete`}
+          {title}
           <Typography
             component="span"
             variant="body2"
@@ -52,7 +81,7 @@ export default function UploadProgress({ filename, totalBytes, uploadedBytes, to
         )}
       </Box>
       <LinearProgress
-        variant={totalBytes > 0 ? 'determinate' : 'indeterminate'}
+        variant={progressVariant}
         value={percent}
         color={isError ? 'error' : isActive ? 'primary' : 'success'}
         sx={{ mb: 0.75, width: '100%' }}

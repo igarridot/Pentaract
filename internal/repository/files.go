@@ -26,6 +26,7 @@ type filesDB interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
 	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
 func NewFilesRepoWithDB(pool filesDB) *FilesRepo {
@@ -293,6 +294,12 @@ func (r *FilesRepo) Delete(ctx context.Context, storageID uuid.UUID, path string
 }
 
 func (r *FilesRepo) CreateChunks(ctx context.Context, chunks []domain.FileChunk) error {
+	return createChunks(ctx, r.pool, chunks)
+}
+
+func createChunks(ctx context.Context, execer interface {
+	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
+}, chunks []domain.FileChunk) error {
 	if len(chunks) == 0 {
 		return nil
 	}
@@ -306,8 +313,29 @@ func (r *FilesRepo) CreateChunks(ctx context.Context, chunks []domain.FileChunk)
 	}
 
 	query := `INSERT INTO file_chunks (file_id, telegram_file_id, telegram_message_id, position) VALUES ` + strings.Join(valueStrings, ", ")
-	_, err := r.pool.Exec(ctx, query, valueArgs...)
+	_, err := execer.Exec(ctx, query, valueArgs...)
 	return err
+}
+
+func (r *FilesRepo) CreateChunksAndMarkUploaded(ctx context.Context, fileID uuid.UUID, chunks []domain.FileChunk) error {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return err
+	}
+	defer tx.Rollback(ctx)
+
+	if err := createChunks(ctx, tx, chunks); err != nil {
+		return err
+	}
+
+	if _, err := tx.Exec(ctx,
+		`UPDATE files SET is_uploaded = true WHERE id = $1`,
+		fileID,
+	); err != nil {
+		return err
+	}
+
+	return tx.Commit(ctx)
 }
 
 func (r *FilesRepo) ListChunks(ctx context.Context, fileID uuid.UUID) ([]domain.FileChunk, error) {

@@ -2,9 +2,11 @@ package service
 
 import (
 	"context"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"log"
+	"sort"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -164,10 +166,12 @@ func (m *StorageManager) downloadAndDecryptChunk(ctx context.Context, fileID uui
 
 // UploadProgress tracks chunk upload progress.
 type UploadProgress struct {
-	TotalChunks    int32
-	UploadedChunks atomic.Int32
-	TotalBytes     int64
-	UploadedBytes  atomic.Int64
+	TotalChunks             int32
+	UploadedChunks          atomic.Int32
+	TotalBytes              int64
+	UploadedBytes           atomic.Int64
+	VerificationTotalChunks int32
+	VerifiedChunks          atomic.Int32
 }
 
 // DownloadProgress tracks chunk download progress.
@@ -182,6 +186,13 @@ type DownloadProgress struct {
 type DeleteProgress struct {
 	TotalChunks   int64
 	DeletedChunks atomic.Int64
+}
+
+type uploadedChunkResult struct {
+	TelegramFileID    string
+	TelegramMessageID int64
+	Position          int16
+	PlainHash         [sha256.Size]byte
 }
 
 // Upload reads from reader chunk by chunk (streaming), uploads to Telegram in parallel,
@@ -203,19 +214,13 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		progress.TotalChunks = total
 	}
 
-	type chunkResult struct {
-		TelegramFileID    string
-		TelegramMessageID int64
-		Position          int16
-	}
-
 	var mu sync.Mutex
-	var results []chunkResult
+	var results []uploadedChunkResult
 
 	// cleanupResults deletes any chunks already uploaded to Telegram.
 	cleanupResults := func() {
 		mu.Lock()
-		uploaded := make([]chunkResult, len(results))
+		uploaded := make([]uploadedChunkResult, len(results))
 		copy(uploaded, results)
 		mu.Unlock()
 
@@ -275,6 +280,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		}
 		chunkData := buf[:n]
 		pos := position
+		plainHash := sha256.Sum256(chunkData)
 		position++
 
 		g.Go(func() error {
@@ -300,10 +306,11 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			}
 
 			mu.Lock()
-			results = append(results, chunkResult{
+			results = append(results, uploadedChunkResult{
 				TelegramFileID:    result.FileID,
 				TelegramMessageID: result.MessageID,
 				Position:          pos,
+				PlainHash:         plainHash,
 			})
 			mu.Unlock()
 
@@ -338,6 +345,20 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		return ctx.Err()
 	}
 
+	sort.Slice(results, func(i, j int) bool {
+		return results[i].Position < results[j].Position
+	})
+
+	if progress != nil {
+		progress.VerificationTotalChunks = int32(len(results))
+		progress.VerifiedChunks.Store(0)
+	}
+
+	if err := m.verifyUploadedChunks(ctx, file, *storage, results, progress); err != nil {
+		cleanupResults()
+		return err
+	}
+
 	// Create chunk records
 	fileChunks := make([]domain.FileChunk, len(results))
 	for i, r := range results {
@@ -349,18 +370,53 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		}
 	}
 
-	if err := m.filesRepo.CreateChunks(ctx, fileChunks); err != nil {
+	if err := m.filesRepo.CreateChunksAndMarkUploaded(ctx, file.ID, fileChunks); err != nil {
 		cleanupResults()
-		return fmt.Errorf("saving chunks: %w", err)
-	}
-
-	if err := m.filesRepo.MarkUploaded(ctx, file.ID); err != nil {
-		return fmt.Errorf("marking file as uploaded: %w", err)
+		return fmt.Errorf("saving verified chunks: %w", err)
 	}
 
 	log.Printf("[upload] completed file=%s chunks=%d storage=%s chat=%s", file.Path, len(results), storage.Name, storage.Name)
 
 	return nil
+}
+
+func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.File, storage domain.Storage, results []uploadedChunkResult, progress *UploadProgress) error {
+	if len(results) == 0 {
+		return nil
+	}
+
+	parallelism := m.downloadParallelism(ctx, storage.ID, len(results))
+	g, gctx := errgroup.WithContext(ctx)
+	g.SetLimit(parallelism)
+
+	for _, result := range results {
+		result := result
+		g.Go(func() error {
+			chunk := domain.FileChunk{
+				FileID:            file.ID,
+				TelegramFileID:    result.TelegramFileID,
+				TelegramMessageID: result.TelegramMessageID,
+				Position:          result.Position,
+			}
+
+			data, err := m.downloadAndDecryptChunk(gctx, file.ID, storage, chunk)
+			if err != nil {
+				return fmt.Errorf("verifying chunk %d: %w", result.Position, err)
+			}
+
+			if sha256.Sum256(data) != result.PlainHash {
+				return fmt.Errorf("verifying chunk %d: uploaded chunk content mismatch after Telegram round-trip", result.Position)
+			}
+
+			if progress != nil {
+				progress.VerifiedChunks.Add(1)
+			}
+
+			return nil
+		})
+	}
+
+	return g.Wait()
 }
 
 // DeleteFromTelegram deletes chunk messages from Telegram for the given chunks.
