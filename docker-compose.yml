@@ -1,16 +1,4 @@
 services:
-  init-perms:
-    image: public.ecr.aws/docker/library/alpine:latest
-    command: >
-      sh -c "
-      mkdir -p /data/db /data/go-mod-cache /data/go-build-cache &&
-      chmod -R 0777 /data
-      "
-    volumes:
-      - type: bind
-        source: ./persistent_data
-        target: /data
-
   pentaract:
     image: norbega/pentaract:latest
     pull_policy: always
@@ -29,9 +17,6 @@ services:
       interval: 10s
       timeout: 5s
       retries: 5
-    depends_on:
-      init-perms:
-        condition: service_completed_successfully
     environment:
       POSTGRES_USER: ${DATABASE_USER:-pentaract}
       POSTGRES_PASSWORD: ${DATABASE_PASSWORD:-pentaract}
