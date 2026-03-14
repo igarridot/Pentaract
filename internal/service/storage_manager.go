@@ -65,6 +65,25 @@ func validateEncryptedChunkSize(chunk []byte) error {
 	return nil
 }
 
+func (m *StorageManager) downloadParallelism(ctx context.Context, storageID uuid.UUID, chunksCount int) int {
+	if chunksCount <= 1 || m.workersRepo == nil {
+		return 1
+	}
+
+	workers, err := m.workersRepo.ListTokensByStorage(ctx, storageID)
+	if err != nil {
+		log.Printf("[download] warning: failed listing workers for storage %s, falling back to sequential download: %v", storageID, err)
+		return 1
+	}
+	if len(workers) <= 1 {
+		return 1
+	}
+	if len(workers) > chunksCount {
+		return chunksCount
+	}
+	return len(workers)
+}
+
 func (m *StorageManager) downloadChunkWithWorker(ctx context.Context, storage domain.Storage, chunk domain.FileChunk, wt repository.WorkerToken) ([]byte, error) {
 	data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
 	if err == nil {
@@ -388,8 +407,128 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 	return nil
 }
 
+type downloadedChunkResult struct {
+	index int
+	chunk domain.FileChunk
+	data  []byte
+}
+
+func (m *StorageManager) downloadChunksInOrder(
+	ctx context.Context,
+	file *domain.File,
+	storage *domain.Storage,
+	chunks []domain.FileChunk,
+	writeChunk func(chunk domain.FileChunk, data []byte) error,
+) error {
+	parallelism := m.downloadParallelism(ctx, storage.ID, len(chunks))
+	if parallelism <= 1 {
+		for _, chunk := range chunks {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			default:
+			}
+
+			data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
+			if err != nil {
+				return err
+			}
+			if err := writeChunk(chunk, data); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	type chunkJob struct {
+		index int
+		chunk domain.FileChunk
+	}
+
+	downloadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	g, gctx := errgroup.WithContext(downloadCtx)
+	jobs := make(chan chunkJob)
+	results := make(chan downloadedChunkResult, parallelism)
+
+	for range parallelism {
+		g.Go(func() error {
+			for job := range jobs {
+				data, err := m.downloadAndDecryptChunk(gctx, file.ID, *storage, job.chunk)
+				if err != nil {
+					return err
+				}
+
+				select {
+				case results <- downloadedChunkResult{index: job.index, chunk: job.chunk, data: data}:
+				case <-gctx.Done():
+					return gctx.Err()
+				}
+			}
+			return nil
+		})
+	}
+
+	g.Go(func() error {
+		defer close(jobs)
+		for i, chunk := range chunks {
+			select {
+			case jobs <- chunkJob{index: i, chunk: chunk}:
+			case <-gctx.Done():
+				return gctx.Err()
+			}
+		}
+		return nil
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		err := g.Wait()
+		close(results)
+		errCh <- err
+	}()
+
+	pending := make(map[int]downloadedChunkResult, parallelism)
+	nextIndex := 0
+	var writeErr error
+
+	for result := range results {
+		pending[result.index] = result
+
+		for {
+			next, ok := pending[nextIndex]
+			if !ok {
+				break
+			}
+			delete(pending, nextIndex)
+
+			if writeErr == nil {
+				if err := writeChunk(next.chunk, next.data); err != nil {
+					writeErr = err
+					cancel()
+				}
+			}
+			nextIndex++
+		}
+	}
+
+	downloadErr := <-errCh
+	if writeErr != nil {
+		return writeErr
+	}
+	if downloadErr != nil && downloadErr != context.Canceled {
+		return downloadErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
 // DownloadToWriter streams a file's chunks sequentially to the given writer.
-// Chunks are downloaded one at a time in order so only one chunk (~20MB) is in memory at once.
+// Chunks are downloaded in parallel and written in order.
+// Peak memory is bounded by roughly one downloaded chunk per available worker.
 func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
 	if err != nil {
@@ -412,20 +551,7 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 
 	log.Printf("[download] starting file=%s chunks=%d storage=%s chat=%s", file.Path, len(chunks), storage.Name, storage.Name)
 
-	// Chunks are already sorted by position from ListChunks.
-	// Download and write sequentially to keep memory usage constant (~20MB).
-	for _, chunk := range chunks {
-		select {
-		case <-ctx.Done():
-			return ctx.Err()
-		default:
-		}
-
-		data, err := m.downloadAndDecryptChunk(ctx, file.ID, *storage, chunk)
-		if err != nil {
-			return err
-		}
-
+	if err := m.downloadChunksInOrder(ctx, file, storage, chunks, func(chunk domain.FileChunk, data []byte) error {
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
 		}
@@ -434,6 +560,9 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 			progress.DownloadedChunks.Add(1)
 			progress.DownloadedBytes.Add(int64(len(data)))
 		}
+		return nil
+	}); err != nil {
+		return err
 	}
 
 	log.Printf("[download] completed file=%s storage=%s chat=%s", file.Path, storage.Name, storage.Name)
