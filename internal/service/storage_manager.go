@@ -657,6 +657,35 @@ func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (
 	return total, nil
 }
 
+func inferRangeChunkWindow(start, end, totalSize int64, chunksCount int) (int, int, int64, bool) {
+	if chunksCount <= 0 {
+		return 0, 0, 0, false
+	}
+	if chunksCount == 1 {
+		return 0, 0, 0, true
+	}
+
+	// Current uploads use a fixed plaintext size for every non-final chunk.
+	// When that invariant holds, we can jump straight to the chunk that contains
+	// the requested byte range instead of replaying the whole file from byte 0.
+	fullPrefixSize := int64(chunksCount-1) * uploadChunkSize
+	if totalSize < fullPrefixSize {
+		return 0, chunksCount - 1, 0, false
+	}
+
+	lastChunkIndex := chunksCount - 1
+	startChunkIndex := int(start / uploadChunkSize)
+	endChunkIndex := int(end / uploadChunkSize)
+	if startChunkIndex > lastChunkIndex {
+		startChunkIndex = lastChunkIndex
+	}
+	if endChunkIndex > lastChunkIndex {
+		endChunkIndex = lastChunkIndex
+	}
+
+	return startChunkIndex, endChunkIndex, int64(startChunkIndex) * uploadChunkSize, true
+}
+
 // DownloadRangeToWriter streams only the requested byte range [start, end] (inclusive).
 // It downloads only the needed Telegram chunks and trims boundaries in memory.
 func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error {
@@ -681,8 +710,17 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 		progress.TotalBytes = end - start + 1
 	}
 
+	startChunkIndex := 0
+	endChunkIndex := len(chunks) - 1
 	offset := int64(0)
-	for _, chunk := range chunks {
+	if inferredStart, inferredEnd, inferredOffset, ok := inferRangeChunkWindow(start, end, totalSize, len(chunks)); ok {
+		startChunkIndex = inferredStart
+		endChunkIndex = inferredEnd
+		offset = inferredOffset
+	}
+
+	for chunkIndex := startChunkIndex; chunkIndex <= endChunkIndex; chunkIndex++ {
+		chunk := chunks[chunkIndex]
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
