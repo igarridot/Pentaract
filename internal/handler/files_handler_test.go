@@ -314,11 +314,13 @@ func TestFilesHandlerDownloadInlineVideoUsesStreamingPathWithoutRange(t *testing
 	storageID := uuid.New().String()
 	streamCalled := false
 	downloadCalled := false
+	exactCalled := false
 	h := NewFilesHandlerWithService(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
 		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			exactCalled = true
 			return 11, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
@@ -345,6 +347,50 @@ func TestFilesHandlerDownloadInlineVideoUsesStreamingPathWithoutRange(t *testing
 	}
 	if downloadCalled {
 		t.Fatalf("regular download path should not be used for inline video")
+	}
+	if exactCalled {
+		t.Fatalf("expected inline full stream to avoid exact size lookup")
+	}
+	if got := w.Header().Get("Content-Length"); got != "11" {
+		t.Fatalf("expected stored file size content length, got %q", got)
+	}
+}
+
+func TestFilesHandlerDownloadInlineVideoWithoutRangeAndUnknownSizeSkipsExactLookup(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	streamCalled := false
+	exactCalled := false
+	h := NewFilesHandlerWithService(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 0}, nil
+		},
+		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			exactCalled = true
+			return 11, nil
+		},
+		streamFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			streamCalled = true
+			_, _ = io.WriteString(w, "stream")
+			return nil
+		},
+	})
+
+	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
+	w := httptest.NewRecorder()
+	h.Download(w, req)
+
+	if w.Code != http.StatusOK || w.Body.String() != "stream" {
+		t.Fatalf("inline full download failed: code=%d body=%q", w.Code, w.Body.String())
+	}
+	if !streamCalled {
+		t.Fatalf("expected streaming path to be used for inline video")
+	}
+	if exactCalled {
+		t.Fatalf("expected unknown-size inline stream without range to avoid exact size lookup")
+	}
+	if got := w.Header().Get("Content-Length"); got != "" {
+		t.Fatalf("expected unknown-size inline stream to omit content length, got %q", got)
 	}
 }
 

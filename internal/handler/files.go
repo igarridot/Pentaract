@@ -578,15 +578,15 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case disposition == "inline" && isInlineVideo(contentType, filename):
 		// Video: handle Range requests for streaming.
-		totalSize, sizeErr := h.resolvedInlineVideoSize(downloadCtx, file)
-		if sizeErr != nil {
-			log.Printf("[video-size] error: %v", sizeErr)
-			writeError(w, domain.ErrInternal("failed to determine exact video size"))
-			return
-		}
 		w.Header().Set("Accept-Ranges", "bytes")
 		rangeHeader := r.Header.Get("Range")
 		if rangeHeader != "" {
+			totalSize, sizeErr := h.resolvedInlineVideoSize(downloadCtx, file)
+			if sizeErr != nil {
+				log.Printf("[video-size] error: %v", sizeErr)
+				writeError(w, domain.ErrInternal("failed to determine exact video size"))
+				return
+			}
 			start, end, err := parseSingleByteRange(rangeHeader, totalSize)
 			if err != nil {
 				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
@@ -602,7 +602,9 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 				return
 			}
 		} else {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", totalSize))
+			if file.Size > 0 {
+				w.Header().Set("Content-Length", fmt.Sprintf("%d", file.Size))
+			}
 			w.WriteHeader(http.StatusOK)
 			if err := h.svc.StreamFileToWriter(downloadCtx, file, w, progress); err != nil {
 				log.Printf("[stream-file] error: %v", err)
