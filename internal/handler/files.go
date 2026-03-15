@@ -67,6 +67,19 @@ type downloadTracker struct {
 	done      bool
 }
 
+type flushWriter struct {
+	w       io.Writer
+	flusher http.Flusher
+}
+
+func (w *flushWriter) Write(p []byte) (int, error) {
+	n, err := w.w.Write(p)
+	if n > 0 && w.flusher != nil {
+		w.flusher.Flush()
+	}
+	return n, err
+}
+
 var inlineVideoContentTypesByExtension = map[string]string{
 	".avi":  "video/x-msvideo",
 	".flv":  "video/x-flv",
@@ -745,7 +758,13 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 		progress = tracker.progress
 	}
 
-	if _, err := h.svc.DownloadDir(downloadCtx, user.ID, storageID, path, w, progress); err != nil {
+	writer := io.Writer(w)
+	if flusher, ok := w.(http.Flusher); ok {
+		writer = &flushWriter{w: w, flusher: flusher}
+		flusher.Flush()
+	}
+
+	if _, err := h.svc.DownloadDir(downloadCtx, user.ID, storageID, path, writer, progress); err != nil {
 		log.Printf("[download-dir] error: %v", err)
 		h.finishTracker(tracker, err)
 		return
