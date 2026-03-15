@@ -12,6 +12,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
+	"github.com/Dominux/Pentaract/internal/repository"
 )
 
 type fakeFilesRepo struct {
@@ -71,12 +72,14 @@ func (f *fakeFilesAccessRepo) HasAccess(ctx context.Context, userID, storageID u
 }
 
 type fakeFilesManager struct {
-	uploadFn             func(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error
-	downloadFn           func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
-	streamFn             func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
-	exactFn              func(ctx context.Context, file *domain.File) (int64, error)
-	rangeFn              func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error
-	deleteFromTelegramFn func(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error
+	uploadFn              func(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error
+	downloadFn            func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
+	downloadWithWorkersFn func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error
+	listWorkersFn         func(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error)
+	streamFn              func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
+	exactFn               func(ctx context.Context, file *domain.File) (int64, error)
+	rangeFn               func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error
+	deleteFromTelegramFn  func(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error
 }
 
 func (f *fakeFilesManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
@@ -84,6 +87,18 @@ func (f *fakeFilesManager) Upload(ctx context.Context, file *domain.File, reader
 }
 func (f *fakeFilesManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 	return f.downloadFn(ctx, file, w, progress)
+}
+func (f *fakeFilesManager) DownloadToWriterWithWorkers(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error {
+	if f.downloadWithWorkersFn != nil {
+		return f.downloadWithWorkersFn(ctx, file, w, progress, workers)
+	}
+	return f.downloadFn(ctx, file, w, progress)
+}
+func (f *fakeFilesManager) ListDownloadWorkers(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error) {
+	if f.listWorkersFn == nil {
+		return nil, nil
+	}
+	return f.listWorkersFn(ctx, storageID)
 }
 func (f *fakeFilesManager) StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 	if f.streamFn == nil {
@@ -623,6 +638,137 @@ func TestFilesServiceDownloadDirWritesValidZipArchive(t *testing.T) {
 	}
 	if entries["sub/image.txt"] != "world" {
 		t.Fatalf("unexpected sub/image.txt contents: %q", entries["sub/image.txt"])
+	}
+}
+
+func TestBuildDirArchiveWorkerPlanBalancesStreamingAndPrefetch(t *testing.T) {
+	workers := []repository.WorkerToken{
+		{Token: "w1", Name: "w1"},
+		{Token: "w2", Name: "w2"},
+		{Token: "w3", Name: "w3"},
+		{Token: "w4", Name: "w4"},
+		{Token: "w5", Name: "w5"},
+	}
+
+	plan := buildDirArchiveWorkerPlan(workers, 6)
+
+	if len(plan.streamWorkers) != 3 {
+		t.Fatalf("stream worker count = %d, want 3", len(plan.streamWorkers))
+	}
+	if len(plan.prefetchGroups) != 2 {
+		t.Fatalf("prefetch group count = %d, want 2", len(plan.prefetchGroups))
+	}
+	if plan.prefetchGroups[0][0].Token != "w4" || plan.prefetchGroups[1][0].Token != "w5" {
+		t.Fatalf("unexpected prefetch worker groups: %#v", plan.prefetchGroups)
+	}
+}
+
+func TestFilesServiceDownloadDirPrefetchesRemainingFilesWithReservedWorkers(t *testing.T) {
+	userID := uuid.New()
+	storageID := uuid.New()
+	fileOneID := uuid.New()
+	fileTwoID := uuid.New()
+	fileThreeID := uuid.New()
+
+	access := &fakeFilesAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return true, nil
+		},
+	}
+	repo := &fakeFilesRepo{
+		listFilesUnderPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) {
+			return []domain.File{
+				{ID: fileOneID, Path: "root/docs/a.txt", StorageID: storageID},
+				{ID: fileTwoID, Path: "root/docs/b.txt", StorageID: storageID},
+				{ID: fileThreeID, Path: "root/docs/c.txt", StorageID: storageID},
+			}, nil
+		},
+	}
+
+	firstFileRelease := make(chan struct{})
+	secondStarted := make(chan []repository.WorkerToken, 1)
+	thirdStarted := make(chan []repository.WorkerToken, 1)
+	manager := &fakeFilesManager{
+		listWorkersFn: func(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error) {
+			return []repository.WorkerToken{
+				{Token: "w1", Name: "w1"},
+				{Token: "w2", Name: "w2"},
+				{Token: "w3", Name: "w3"},
+			}, nil
+		},
+		downloadFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+			t.Fatalf("expected directory zip to use worker-aware downloads")
+			return nil
+		},
+		downloadWithWorkersFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error {
+			switch file.ID {
+			case fileOneID:
+				if len(workers) != 2 {
+					t.Fatalf("first file workers = %d, want 2", len(workers))
+				}
+				select {
+				case <-firstFileRelease:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				_, _ = io.WriteString(w, "alpha")
+			case fileTwoID:
+				secondStarted <- append([]repository.WorkerToken(nil), workers...)
+				_, _ = io.WriteString(w, "beta")
+			case fileThreeID:
+				thirdStarted <- append([]repository.WorkerToken(nil), workers...)
+				_, _ = io.WriteString(w, "gamma")
+			default:
+				t.Fatalf("unexpected file id %s", file.ID)
+			}
+			return nil
+		},
+	}
+	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{}, nil)
+
+	var archive bytes.Buffer
+	errCh := make(chan error, 1)
+	go func() {
+		_, err := svc.DownloadDir(context.Background(), userID, storageID, "root/docs", &archive, nil)
+		errCh <- err
+	}()
+
+	var secondWorkers []repository.WorkerToken
+	select {
+	case secondWorkers = <-secondStarted:
+	case <-time.After(2 * time.Second):
+		t.Fatalf("expected second file prefetch to start before first file finishes")
+	}
+	if len(secondWorkers) != 1 || secondWorkers[0].Token != "w3" {
+		t.Fatalf("unexpected second file workers: %#v", secondWorkers)
+	}
+
+	close(firstFileRelease)
+
+	select {
+	case err := <-errCh:
+		if err != nil {
+			t.Fatalf("download dir failed: %v", err)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatalf("download dir did not complete")
+	}
+
+	select {
+	case workers := <-thirdStarted:
+		if len(workers) != 2 || workers[0].Token != "w1" || workers[1].Token != "w2" {
+			t.Fatalf("unexpected third file workers: %#v", workers)
+		}
+	default:
+		t.Fatalf("expected deferred stream worker group to join remaining prefetch jobs")
+	}
+
+	reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
+	if err != nil {
+		t.Fatalf("zip reader failed: %v", err)
+	}
+	if len(reader.File) != 3 {
+		t.Fatalf("zip entry count = %d, want 3", len(reader.File))
 	}
 }
 

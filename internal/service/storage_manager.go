@@ -138,6 +138,14 @@ func (m *StorageManager) preferredDownloadWorkers(ctx context.Context, storageID
 	return workers
 }
 
+func (m *StorageManager) ListDownloadWorkers(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error) {
+	if m.workersRepo == nil {
+		return nil, nil
+	}
+
+	return m.workersRepo.ListTokensByStorage(ctx, storageID)
+}
+
 func contextAborted(ctx context.Context, err error) bool {
 	if ctx != nil && ctx.Err() != nil {
 		return true
@@ -585,18 +593,34 @@ func (m *StorageManager) downloadChunksInOrderWithLoader(
 	loadChunk chunkDataLoader,
 	writeChunk func(chunk domain.FileChunk, data []byte) error,
 ) error {
-	preferredWorkers := m.preferredDownloadWorkers(ctx, storage.ID, len(chunks))
+	return m.downloadChunksInOrderWithLoaderAndWorkers(ctx, file, storage, chunks, loadChunk, writeChunk, nil)
+}
+
+func (m *StorageManager) downloadChunksInOrderWithLoaderAndWorkers(
+	ctx context.Context,
+	file *domain.File,
+	storage *domain.Storage,
+	chunks []domain.FileChunk,
+	loadChunk chunkDataLoader,
+	writeChunk func(chunk domain.FileChunk, data []byte) error,
+	preferredWorkers []repository.WorkerToken,
+) error {
+	if len(preferredWorkers) == 0 {
+		preferredWorkers = m.preferredDownloadWorkers(ctx, storage.ID, len(chunks))
+	}
 	parallelism := len(preferredWorkers)
 	if parallelism <= 1 {
-		preferredWorkers = nil
+		if len(preferredWorkers) == 0 {
+			preferredWorkers = nil
+		}
 		parallelism = 1
 	}
 
 	jobs := make([]chunkDownloadJob, len(chunks))
 	for index, chunk := range chunks {
 		job := chunkDownloadJob{chunk: chunk}
-		if index < len(preferredWorkers) {
-			worker := preferredWorkers[index]
+		if len(preferredWorkers) > 0 {
+			worker := preferredWorkers[index%len(preferredWorkers)]
 			job.preferredWorker = &worker
 		}
 		jobs[index] = job
@@ -630,6 +654,14 @@ func (m *StorageManager) downloadChunksInOrder(
 // This path is intentionally conservative and avoids stream-specific caching so
 // regular file downloads do not keep extra decrypted chunks resident in memory.
 func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+	return m.downloadToWriterWithWorkers(ctx, file, w, progress, nil)
+}
+
+func (m *StorageManager) DownloadToWriterWithWorkers(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, preferredWorkers []repository.WorkerToken) error {
+	return m.downloadToWriterWithWorkers(ctx, file, w, progress, preferredWorkers)
+}
+
+func (m *StorageManager) downloadToWriterWithWorkers(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, preferredWorkers []repository.WorkerToken) error {
 	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
 	if err != nil {
 		return fmt.Errorf("listing chunks: %w", err)
@@ -651,7 +683,7 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 
 	log.Printf("[download] starting file=%s chunks=%d storage=%s chat=%s", file.Path, len(chunks), storage.Name, storage.Name)
 
-	if err := m.downloadChunksInOrderWithLoader(ctx, file, storage, chunks, m.downloadAndDecryptChunk, func(chunk domain.FileChunk, data []byte) error {
+	if err := m.downloadChunksInOrderWithLoaderAndWorkers(ctx, file, storage, chunks, m.downloadAndDecryptChunk, func(chunk domain.FileChunk, data []byte) error {
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
 		}
@@ -661,7 +693,7 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 			progress.DownloadedBytes.Add(int64(len(data)))
 		}
 		return nil
-	}); err != nil {
+	}, preferredWorkers); err != nil {
 		return err
 	}
 
