@@ -641,7 +641,7 @@ func TestFilesServiceDownloadDirWritesValidZipArchive(t *testing.T) {
 	}
 }
 
-func TestBuildDirArchiveWorkerPlanBalancesStreamingAndPrefetch(t *testing.T) {
+func TestBuildDirArchiveWorkerPlanUsesAllWorkersForStreaming(t *testing.T) {
 	workers := []repository.WorkerToken{
 		{Token: "w1", Name: "w1"},
 		{Token: "w2", Name: "w2"},
@@ -652,18 +652,15 @@ func TestBuildDirArchiveWorkerPlanBalancesStreamingAndPrefetch(t *testing.T) {
 
 	plan := buildDirArchiveWorkerPlan(workers, 6)
 
-	if len(plan.streamWorkers) != 3 {
-		t.Fatalf("stream worker count = %d, want 3", len(plan.streamWorkers))
+	if len(plan.streamWorkers) != len(workers) {
+		t.Fatalf("stream worker count = %d, want %d", len(plan.streamWorkers), len(workers))
 	}
-	if len(plan.prefetchGroups) != 2 {
-		t.Fatalf("prefetch group count = %d, want 2", len(plan.prefetchGroups))
-	}
-	if plan.prefetchGroups[0][0].Token != "w4" || plan.prefetchGroups[1][0].Token != "w5" {
-		t.Fatalf("unexpected prefetch worker groups: %#v", plan.prefetchGroups)
+	if len(plan.prefetchGroups) != 0 {
+		t.Fatalf("prefetch group count = %d, want 0", len(plan.prefetchGroups))
 	}
 }
 
-func TestFilesServiceDownloadDirPrefetchesRemainingFilesWithReservedWorkers(t *testing.T) {
+func TestFilesServiceDownloadDirStreamsSequentiallyUsingAllWorkers(t *testing.T) {
 	userID := uuid.New()
 	storageID := uuid.New()
 	fileOneID := uuid.New()
@@ -685,8 +682,7 @@ func TestFilesServiceDownloadDirPrefetchesRemainingFilesWithReservedWorkers(t *t
 		},
 	}
 
-	firstFileRelease := make(chan struct{})
-	secondStarted := make(chan []repository.WorkerToken, 1)
+	fileOneDone := make(chan struct{})
 	manager := &fakeFilesManager{
 		listWorkersFn: func(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error) {
 			return []repository.WorkerToken{
@@ -700,21 +696,26 @@ func TestFilesServiceDownloadDirPrefetchesRemainingFilesWithReservedWorkers(t *t
 			return nil
 		},
 		downloadWithWorkersFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error {
+			if len(workers) != 3 {
+				t.Fatalf("workers = %d, want 3", len(workers))
+			}
 			switch file.ID {
 			case fileOneID:
-				if len(workers) != 2 {
-					t.Fatalf("first file workers = %d, want 2", len(workers))
-				}
-				select {
-				case <-firstFileRelease:
-				case <-ctx.Done():
-					return ctx.Err()
-				}
 				_, _ = io.WriteString(w, "alpha")
+				close(fileOneDone)
 			case fileTwoID:
-				secondStarted <- append([]repository.WorkerToken(nil), workers...)
+				select {
+				case <-fileOneDone:
+				default:
+					t.Fatalf("second file started before first file finished streaming")
+				}
 				_, _ = io.WriteString(w, "beta")
 			case fileThreeID:
+				select {
+				case <-fileOneDone:
+				default:
+					t.Fatalf("third file started before first file finished streaming")
+				}
 				_, _ = io.WriteString(w, "gamma")
 			default:
 				t.Fatalf("unexpected file id %s", file.ID)
@@ -730,18 +731,6 @@ func TestFilesServiceDownloadDirPrefetchesRemainingFilesWithReservedWorkers(t *t
 		_, err := svc.DownloadDir(context.Background(), userID, storageID, "root/docs", &archive, nil)
 		errCh <- err
 	}()
-
-	var secondWorkers []repository.WorkerToken
-	select {
-	case secondWorkers = <-secondStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("expected second file prefetch to start before first file finishes")
-	}
-	if len(secondWorkers) != 1 || secondWorkers[0].Token != "w3" {
-		t.Fatalf("unexpected second file workers: %#v", secondWorkers)
-	}
-
-	close(firstFileRelease)
 
 	select {
 	case err := <-errCh:

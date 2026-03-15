@@ -42,7 +42,6 @@ type filesRepository interface {
 const (
 	UploadConflictKeepBoth = "keep_both"
 	UploadConflictSkip     = "skip"
-	dirArchiveMaxPrefetch  = 3
 )
 
 type filesManagerDownloadWorkersLister interface {
@@ -269,36 +268,13 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 }
 
 func buildDirArchiveWorkerPlan(workers []repository.WorkerToken, filesCount int) dirArchiveWorkerPlan {
+	_ = filesCount
+
 	plan := dirArchiveWorkerPlan{
+		// Favor direct ZIP streaming over staging to temp files so the browser
+		// can receive data earlier and we avoid extra local I/O per entry.
 		streamWorkers: append([]repository.WorkerToken(nil), workers...),
 	}
-	if len(workers) <= 1 || filesCount <= 1 {
-		return plan
-	}
-
-	prefetchCount := len(workers) / 2
-	if prefetchCount > dirArchiveMaxPrefetch {
-		prefetchCount = dirArchiveMaxPrefetch
-	}
-	if prefetchCount > filesCount-1 {
-		prefetchCount = filesCount - 1
-	}
-	if prefetchCount <= 0 {
-		return plan
-	}
-
-	streamCount := len(workers) - prefetchCount
-	if streamCount <= 0 {
-		streamCount = 1
-		prefetchCount = len(workers) - 1
-	}
-
-	plan.streamWorkers = append([]repository.WorkerToken(nil), workers[:streamCount]...)
-	plan.prefetchGroups = make([][]repository.WorkerToken, 0, prefetchCount)
-	for _, worker := range workers[streamCount : streamCount+prefetchCount] {
-		plan.prefetchGroups = append(plan.prefetchGroups, []repository.WorkerToken{worker})
-	}
-
 	return plan
 }
 
@@ -337,11 +313,7 @@ func (s *FilesService) downloadDirFilesToZip(ctx context.Context, storageID uuid
 	}
 
 	plan := s.resolveDirArchiveWorkerPlan(ctx, storageID, len(files))
-	if len(plan.prefetchGroups) == 0 {
-		return s.downloadDirFilesToZipSequential(ctx, jobs, zipWriter, progress, plan.streamWorkers)
-	}
-
-	return s.downloadDirFilesToZipPrefetch(ctx, jobs, zipWriter, progress, plan)
+	return s.downloadDirFilesToZipSequential(ctx, jobs, zipWriter, progress, plan.streamWorkers)
 }
 
 func (s *FilesService) downloadDirFilesToZipSequential(ctx context.Context, jobs []dirArchiveFileJob, zipWriter *zip.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error {
