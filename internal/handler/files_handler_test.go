@@ -209,6 +209,42 @@ func TestFilesHandlerDownloadAttachment(t *testing.T) {
 	}
 }
 
+func TestFilesHandlerDownloadAttachmentWithTrackingCompletesWithoutCancellation(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	progressWasProvided := false
+	h := NewFilesHandlerWithService(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "folder/a.txt", Size: 3}, nil
+		},
+		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			progressWasProvided = progress != nil
+			_, _ = io.WriteString(w, "abc")
+			return nil
+		},
+	})
+
+	w := httptest.NewRecorder()
+	h.Download(w, makeFilesReq(http.MethodGet, "/?download_id=ui-download-1", "", storageID, "folder/a.txt"))
+
+	if w.Code != http.StatusOK || w.Body.String() != "abc" {
+		t.Fatalf("download expected 200/abc, got %d/%q", w.Code, w.Body.String())
+	}
+	if !progressWasProvided {
+		t.Fatalf("expected tracked UI download to receive progress object")
+	}
+
+	h.mu.RLock()
+	tracker, ok := h.downloads["ui-download-1"]
+	h.mu.RUnlock()
+	if !ok || tracker == nil {
+		t.Fatalf("expected tracked download to remain registered for progress polling")
+	}
+	if !tracker.done || tracker.canceled || tracker.err != nil {
+		t.Fatalf("unexpected tracker state: done=%v canceled=%v err=%v", tracker.done, tracker.canceled, tracker.err)
+	}
+}
+
 func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
@@ -799,6 +835,36 @@ func TestFilesHandlerDownloadDir(t *testing.T) {
 	}
 	if got := w.Header().Get("Content-Disposition"); !strings.Contains(got, `filename="docs.zip"`) {
 		t.Fatalf("unexpected download dir content disposition: %q", got)
+	}
+}
+
+func TestFilesHandlerDownloadDirWithTrackingCompletesWithoutCancellation(t *testing.T) {
+	h := NewFilesHandlerWithService(&mockFilesService{
+		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
+			if progress == nil {
+				t.Fatalf("expected tracked directory download to receive progress object")
+			}
+			_, _ = io.Copy(w, bytes.NewBufferString("zipdata"))
+			return "docs", nil
+		},
+	})
+	storageID := uuid.New().String()
+
+	w := httptest.NewRecorder()
+	h.DownloadDir(w, makeFilesReq(http.MethodGet, "/?download_id=ui-dir-1", "", storageID, "root/docs"))
+
+	if w.Code != http.StatusOK || w.Body.String() != "zipdata" {
+		t.Fatalf("download dir expected 200/zipdata, got %d/%q", w.Code, w.Body.String())
+	}
+
+	h.mu.RLock()
+	tracker, ok := h.downloads["ui-dir-1"]
+	h.mu.RUnlock()
+	if !ok || tracker == nil {
+		t.Fatalf("expected tracked directory download to remain registered for progress polling")
+	}
+	if !tracker.done || tracker.canceled || tracker.err != nil {
+		t.Fatalf("unexpected directory tracker state: done=%v canceled=%v err=%v", tracker.done, tracker.canceled, tracker.err)
 	}
 }
 
