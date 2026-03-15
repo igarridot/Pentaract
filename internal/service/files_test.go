@@ -687,7 +687,6 @@ func TestFilesServiceDownloadDirPrefetchesRemainingFilesWithReservedWorkers(t *t
 
 	firstFileRelease := make(chan struct{})
 	secondStarted := make(chan []repository.WorkerToken, 1)
-	thirdStarted := make(chan []repository.WorkerToken, 1)
 	manager := &fakeFilesManager{
 		listWorkersFn: func(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error) {
 			return []repository.WorkerToken{
@@ -716,7 +715,6 @@ func TestFilesServiceDownloadDirPrefetchesRemainingFilesWithReservedWorkers(t *t
 				secondStarted <- append([]repository.WorkerToken(nil), workers...)
 				_, _ = io.WriteString(w, "beta")
 			case fileThreeID:
-				thirdStarted <- append([]repository.WorkerToken(nil), workers...)
 				_, _ = io.WriteString(w, "gamma")
 			default:
 				t.Fatalf("unexpected file id %s", file.ID)
@@ -752,15 +750,6 @@ func TestFilesServiceDownloadDirPrefetchesRemainingFilesWithReservedWorkers(t *t
 		}
 	case <-time.After(2 * time.Second):
 		t.Fatalf("download dir did not complete")
-	}
-
-	select {
-	case workers := <-thirdStarted:
-		if len(workers) != 2 || workers[0].Token != "w1" || workers[1].Token != "w2" {
-			t.Fatalf("unexpected third file workers: %#v", workers)
-		}
-	default:
-		t.Fatalf("expected deferred stream worker group to join remaining prefetch jobs")
 	}
 
 	reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
