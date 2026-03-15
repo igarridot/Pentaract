@@ -128,3 +128,55 @@ func TestSetupDownloadTrackerAndFinish(t *testing.T) {
 		t.Fatalf("unexpected tracker final state: done=%v err=%v", done, gotErr)
 	}
 }
+
+func TestSetupDownloadTrackerReplacesExistingTracker(t *testing.T) {
+	h := NewFilesHandlerWithService(&mockFilesService{})
+	storageID := uuid.New()
+
+	req1 := httptest.NewRequest(http.MethodGet, "/?download_id=d1", nil)
+	ctx1, tracker1, cleanup1 := h.setupDownloadTracker(req1, storageID)
+	defer cleanup1()
+
+	req2 := httptest.NewRequest(http.MethodGet, "/?download_id=d1", nil)
+	_, tracker2, cleanup2 := h.setupDownloadTracker(req2, storageID)
+	defer cleanup2()
+
+	if tracker1 == nil || tracker2 == nil || tracker1 == tracker2 {
+		t.Fatalf("expected tracker replacement, got first=%p second=%p", tracker1, tracker2)
+	}
+
+	select {
+	case <-ctx1.Done():
+	default:
+		t.Fatalf("expected previous tracker context to be canceled")
+	}
+
+	h.mu.RLock()
+	firstCanceled := tracker1.canceled
+	firstDone := tracker1.done
+	current := h.downloads["d1"]
+	h.mu.RUnlock()
+
+	if !firstCanceled || !firstDone {
+		t.Fatalf("expected previous tracker to be marked canceled/done, got canceled=%v done=%v", firstCanceled, firstDone)
+	}
+	if current != tracker2 {
+		t.Fatalf("expected latest tracker to remain registered")
+	}
+
+	h.cleanupDownloadTracker("d1", tracker1)
+	h.mu.RLock()
+	current = h.downloads["d1"]
+	h.mu.RUnlock()
+	if current != tracker2 {
+		t.Fatalf("expected old tracker cleanup to keep latest tracker registered")
+	}
+
+	h.cleanupDownloadTracker("d1", tracker2)
+	h.mu.RLock()
+	_, ok := h.downloads["d1"]
+	h.mu.RUnlock()
+	if ok {
+		t.Fatalf("expected current tracker cleanup to remove download entry")
+	}
+}
