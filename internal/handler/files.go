@@ -147,10 +147,17 @@ func (h *FilesHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID
 		cancel:    cancel,
 	}
 	h.mu.Lock()
+	if previous, ok := h.downloads[downloadID]; ok {
+		previous.canceled = true
+		previous.done = true
+		if previous.cancel != nil {
+			previous.cancel()
+		}
+	}
 	h.downloads[downloadID] = tracker
 	h.mu.Unlock()
 	return ctx, tracker, func() {
-		h.scheduleDownloadTrackerCleanup(downloadID)
+		h.scheduleDownloadTrackerCleanup(downloadID, tracker)
 	}
 }
 
@@ -162,11 +169,17 @@ func (h *FilesHandler) scheduleUploadTrackerCleanup(uploadID string) {
 	})
 }
 
-func (h *FilesHandler) scheduleDownloadTrackerCleanup(downloadID string) {
-	time.AfterFunc(5*time.Minute, func() {
-		h.mu.Lock()
+func (h *FilesHandler) cleanupDownloadTracker(downloadID string, tracker *downloadTracker) {
+	h.mu.Lock()
+	defer h.mu.Unlock()
+	if current, ok := h.downloads[downloadID]; ok && current == tracker {
 		delete(h.downloads, downloadID)
-		h.mu.Unlock()
+	}
+}
+
+func (h *FilesHandler) scheduleDownloadTrackerCleanup(downloadID string, tracker *downloadTracker) {
+	time.AfterFunc(5*time.Minute, func() {
+		h.cleanupDownloadTracker(downloadID, tracker)
 	})
 }
 
