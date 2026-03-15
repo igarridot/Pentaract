@@ -85,6 +85,7 @@ export default function Files() {
   const uploadConflictResolverRef = useRef(null)
   const dirFileNamesCacheRef = useRef(new Map())
   const downloadProgressCancelsRef = useRef(new Map())
+  const downloadFramesRef = useRef(new Map())
   const bulkCancelRef = useRef(null)
   const cancelDeleteProgressRef = useRef(null)
   const [uploadConflictDialog, setUploadConflictDialog] = useState({
@@ -127,6 +128,8 @@ export default function Files() {
       })
       downloadProgressCancelsRef.current.forEach((cancel) => cancel())
       downloadProgressCancelsRef.current.clear()
+      downloadFramesRef.current.forEach((frame) => frame.remove())
+      downloadFramesRef.current.clear()
       if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
     }
   }, [])
@@ -197,6 +200,21 @@ export default function Files() {
   const releaseDownloadTracking = useCallback((downloadId) => {
     downloadProgressCancelsRef.current.get(downloadId)?.()
     downloadProgressCancelsRef.current.delete(downloadId)
+    downloadFramesRef.current.get(downloadId)?.remove()
+    downloadFramesRef.current.delete(downloadId)
+  }, [])
+
+  const triggerBrowserDownload = useCallback((downloadId, url) => {
+    const existingFrame = downloadFramesRef.current.get(downloadId)
+    existingFrame?.remove()
+
+    const frame = document.createElement('iframe')
+    frame.style.display = 'none'
+    frame.setAttribute('aria-hidden', 'true')
+    frame.src = url
+
+    downloadFramesRef.current.set(downloadId, frame)
+    document.body.appendChild(frame)
   }, [])
 
   const registerBulkTransfer = useCallback((operation, transferId) => {
@@ -548,14 +566,7 @@ export default function Files() {
         ? API.files.downloadFileUrl(storageId, item.path, downloadId)
         : API.files.downloadDirUrl(storageId, item.path, downloadId)
 
-      const a = document.createElement('a')
-      a.href = url
-      a.download = filename
-      a.rel = 'noopener'
-      a.style.display = 'none'
-      document.body.appendChild(a)
-      a.click()
-      a.remove()
+      triggerBrowserDownload(downloadId, url)
       return downloadId
     } catch (err) {
       markBulkTransferTerminal('download', providedDownloadId, 'error')

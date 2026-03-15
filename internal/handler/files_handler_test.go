@@ -236,6 +236,43 @@ func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
 	}
 }
 
+func TestFilesHandlerDownloadInlineVideoRangeUsesStoredFileSize(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	exactCalled := false
+	var gotTotal int64
+
+	h := NewFilesHandlerWithService(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
+		},
+		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			exactCalled = true
+			return 0, errors.New("should not be called")
+		},
+		downloadFileRangeToWriter: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error {
+			gotTotal = totalSize
+			_, _ = io.WriteString(w, "abc")
+			return nil
+		},
+	})
+
+	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
+	req.Header.Set("Range", "bytes=0-2")
+	w := httptest.NewRecorder()
+	h.Download(w, req)
+
+	if w.Code != http.StatusPartialContent {
+		t.Fatalf("inline range download failed: code=%d body=%q", w.Code, w.Body.String())
+	}
+	if exactCalled {
+		t.Fatalf("expected stored file size to avoid exact size lookup")
+	}
+	if gotTotal != 11 {
+		t.Fatalf("unexpected total size forwarded to range download: %d", gotTotal)
+	}
+}
+
 func TestFilesHandlerDownloadInlineVideoUsesStreamingPathWithoutRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
