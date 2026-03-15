@@ -1176,6 +1176,122 @@ func TestStorageManagerUploadVerifiesRoundTripAndCleansUpOnMismatch(t *testing.T
 	}
 }
 
+func TestStorageManagerDeleteFromTelegramFallsBackToOtherWorker(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	storageID := uuid.New()
+	mock.ExpectQuery("SELECT token, name FROM storage_workers").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"token", "name"}).
+			AddRow("BAD", "Bot10").
+			AddRow("GOOD", "Bot11"))
+
+	var (
+		mu       sync.Mutex
+		attempts []string
+	)
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		mu.Lock()
+		attempts = append(attempts, r.URL.Path)
+		mu.Unlock()
+
+		switch {
+		case strings.Contains(r.URL.Path, "/botBAD/deleteMessage"):
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: message can't be deleted"}`))
+		case strings.Contains(r.URL.Path, "/botGOOD/deleteMessage"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true}`))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		workersRepo: repository.NewStorageWorkersRepoWithDB(mock),
+		scheduler: NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "BAD", Name: "Bot10"}, nil
+			},
+		}, 1),
+		tgClient: telegram.NewClient(srv.URL),
+	}
+
+	progress := &DeleteProgress{}
+	err = m.DeleteFromTelegram(context.Background(), domain.Storage{ID: storageID, Name: "Main", ChatID: 123}, []domain.FileChunk{
+		{TelegramMessageID: 77},
+	}, progress)
+	if err != nil {
+		t.Fatalf("delete from telegram failed: %v", err)
+	}
+	if progress.TotalChunks != 1 || progress.DeletedChunks.Load() != 1 {
+		t.Fatalf("unexpected delete progress: total=%d deleted=%d", progress.TotalChunks, progress.DeletedChunks.Load())
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(attempts) != 2 {
+		t.Fatalf("expected 2 delete attempts, got %d (%v)", len(attempts), attempts)
+	}
+	if !strings.Contains(attempts[0], "/botBAD/deleteMessage") {
+		t.Fatalf("expected first delete attempt via BAD worker, got %q", attempts[0])
+	}
+	if !strings.Contains(attempts[1], "/botGOOD/deleteMessage") {
+		t.Fatalf("expected fallback delete attempt via GOOD worker, got %q", attempts[1])
+	}
+}
+
+func TestStorageManagerDeleteFromTelegramFailsWhenAllWorkersFail(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	storageID := uuid.New()
+	mock.ExpectQuery("SELECT token, name FROM storage_workers").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"token", "name"}).
+			AddRow("BAD", "Bot10").
+			AddRow("WORSE", "Bot11"))
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/deleteMessage") {
+			w.WriteHeader(http.StatusBadRequest)
+			_, _ = w.Write([]byte(`{"ok":false,"error_code":400,"description":"Bad Request: message can't be deleted"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		workersRepo: repository.NewStorageWorkersRepoWithDB(mock),
+		scheduler: NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "BAD", Name: "Bot10"}, nil
+			},
+		}, 1),
+		tgClient: telegram.NewClient(srv.URL),
+	}
+
+	progress := &DeleteProgress{}
+	err = m.DeleteFromTelegram(context.Background(), domain.Storage{ID: storageID, Name: "Main", ChatID: 123}, []domain.FileChunk{
+		{TelegramMessageID: 77},
+	}, progress)
+	if err == nil || !strings.Contains(err.Error(), "failed after trying 2 workers") {
+		t.Fatalf("expected delete failure after retries, got: %v", err)
+	}
+	if progress.TotalChunks != 1 || progress.DeletedChunks.Load() != 0 {
+		t.Fatalf("unexpected delete progress: total=%d deleted=%d", progress.TotalChunks, progress.DeletedChunks.Load())
+	}
+}
+
 func TestStorageManagerRangeValidation(t *testing.T) {
 	m := &StorageManager{}
 	err := m.DownloadRangeToWriter(context.Background(), &domain.File{}, io.Discard, 10, 5, 20, nil)
