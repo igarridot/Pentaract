@@ -24,7 +24,7 @@ import (
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
-// fileSizeCache caches exact file sizes to avoid re-downloading the last
+// fileSizeCache caches resolved file sizes to avoid re-downloading the last
 // Telegram chunk on every range request (seeking).
 type fileSizeCache struct {
 	mu    sync.RWMutex
@@ -250,6 +250,24 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, data any) {
 // sanitizeFilename returns a safe Content-Disposition filename value.
 func sanitizeFilename(name string) string {
 	return strings.NewReplacer(`"`, `'`, "\n", "", "\r", "").Replace(name)
+}
+
+func (h *FilesHandler) resolvedInlineVideoSize(ctx context.Context, file *domain.File) (int64, error) {
+	if totalSize, ok := h.fileSizes.get(file.ID); ok {
+		return totalSize, nil
+	}
+	if file.Size > 0 {
+		h.fileSizes.set(file.ID, file.Size)
+		return file.Size, nil
+	}
+
+	totalSize, err := h.svc.ExactFileSize(ctx, file)
+	if err != nil {
+		return 0, err
+	}
+
+	h.fileSizes.set(file.ID, totalSize)
+	return totalSize, nil
 }
 
 func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
@@ -547,16 +565,11 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 	switch {
 	case disposition == "inline" && isInlineVideo(contentType, filename):
 		// Video: handle Range requests for streaming.
-		totalSize, ok := h.fileSizes.get(file.ID)
-		if !ok {
-			var sizeErr error
-			totalSize, sizeErr = h.svc.ExactFileSize(downloadCtx, file)
-			if sizeErr != nil {
-				log.Printf("[video-size] error: %v", sizeErr)
-				writeError(w, domain.ErrInternal("failed to determine exact video size"))
-				return
-			}
-			h.fileSizes.set(file.ID, totalSize)
+		totalSize, sizeErr := h.resolvedInlineVideoSize(downloadCtx, file)
+		if sizeErr != nil {
+			log.Printf("[video-size] error: %v", sizeErr)
+			writeError(w, domain.ErrInternal("failed to determine exact video size"))
+			return
 		}
 		w.Header().Set("Accept-Ranges", "bytes")
 		rangeHeader := r.Header.Get("Range")

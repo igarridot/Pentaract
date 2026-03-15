@@ -626,7 +626,7 @@ func TestFilesServiceDownloadDirWritesValidZipArchive(t *testing.T) {
 	}
 }
 
-func TestFilesServiceDownloadDirPrefetchesFilesConcurrently(t *testing.T) {
+func TestFilesServiceDownloadDirStreamsFilesSequentially(t *testing.T) {
 	userID := uuid.New()
 	storageID := uuid.New()
 	fileOneID := uuid.New()
@@ -646,21 +646,24 @@ func TestFilesServiceDownloadDirPrefetchesFilesConcurrently(t *testing.T) {
 		},
 	}
 
-	fileOneStarted := make(chan struct{})
-	fileTwoStarted := make(chan struct{})
+	fileOneDone := make(chan struct{})
 	manager := &fakeFilesManager{
 		downloadFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 			switch file.ID {
 			case fileOneID:
-				close(fileOneStarted)
 				select {
-				case <-fileTwoStarted:
 				case <-ctx.Done():
 					return ctx.Err()
+				default:
 				}
 				_, _ = io.WriteString(w, "alpha")
+				close(fileOneDone)
 			case fileTwoID:
-				close(fileTwoStarted)
+				select {
+				case <-fileOneDone:
+				default:
+					t.Fatalf("second file started before first file finished streaming")
+				}
 				_, _ = io.WriteString(w, "beta")
 			default:
 				t.Fatalf("unexpected file id %s", file.ID)
@@ -675,7 +678,7 @@ func TestFilesServiceDownloadDirPrefetchesFilesConcurrently(t *testing.T) {
 
 	var archive bytes.Buffer
 	if _, err := svc.DownloadDir(ctx, userID, storageID, "root/docs", &archive, nil); err != nil {
-		t.Fatalf("download dir with concurrent prefetch failed: %v", err)
+		t.Fatalf("download dir failed: %v", err)
 	}
 
 	reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))

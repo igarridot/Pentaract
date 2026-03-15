@@ -5,7 +5,6 @@ import (
 	"context"
 	"fmt"
 	"io"
-	"os"
 	"strings"
 
 	"github.com/google/uuid"
@@ -40,7 +39,6 @@ type filesRepository interface {
 const (
 	UploadConflictKeepBoth = "keep_both"
 	UploadConflictSkip     = "skip"
-	dirArchivePrefetchJobs = 4
 )
 
 type filesAccessRepository interface {
@@ -225,18 +223,12 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 	dirName := pathutil.ArchiveName(dirPath)
 
 	zipWriter := zip.NewWriter(w)
-	tempDir, err := os.MkdirTemp("", "pentaract-dir-download-*")
-	if err != nil {
-		return "", fmt.Errorf("creating temp dir for directory download: %w", err)
-	}
-	defer os.RemoveAll(tempDir)
-
 	prefix := dirPath
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
 
-	if err := s.downloadDirFilesToZip(ctx, files, prefix, tempDir, zipWriter, progress); err != nil {
+	if err := s.downloadDirFilesToZip(ctx, files, prefix, zipWriter, progress); err != nil {
 		return "", err
 	}
 
@@ -247,90 +239,25 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 	return dirName, nil
 }
 
-type dirArchiveFileJob struct {
-	file    domain.File
-	relPath string
-}
+func (s *FilesService) downloadDirFilesToZip(ctx context.Context, files []domain.File, prefix string, zipWriter *zip.Writer, progress *DownloadProgress) error {
+	for _, file := range files {
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		default:
+		}
 
-type dirArchiveFileResult struct {
-	tempPath string
-}
+		relPath := strings.TrimPrefix(file.Path, prefix)
+		entry, err := zipWriter.Create(relPath)
+		if err != nil {
+			return fmt.Errorf("creating zip entry for %s: %w", relPath, err)
+		}
 
-func (s *FilesService) downloadDirFilesToZip(ctx context.Context, files []domain.File, prefix, tempDir string, zipWriter *zip.Writer, progress *DownloadProgress) error {
-	parallelism := dirArchivePrefetchJobs
-	jobs := make([]dirArchiveFileJob, len(files))
-	for index, file := range files {
-		jobs[index] = dirArchiveFileJob{
-			file:    file,
-			relPath: strings.TrimPrefix(file.Path, prefix),
+		if err := s.manager.DownloadToWriter(ctx, &file, entry, progress); err != nil {
+			return fmt.Errorf("downloading %s into zip: %w", relPath, err)
 		}
 	}
 
-	return runOrderedJobs(
-		ctx,
-		parallelism,
-		jobs,
-		func(loadCtx context.Context, job dirArchiveFileJob) (dirArchiveFileResult, error) {
-			tempPath, err := s.downloadDirFileToTemp(loadCtx, tempDir, &job.file, progress)
-			if err != nil {
-				return dirArchiveFileResult{}, err
-			}
-			return dirArchiveFileResult{tempPath: tempPath}, nil
-		},
-		func(job dirArchiveFileJob, result dirArchiveFileResult) error {
-			return s.copyTempFileIntoZip(zipWriter, job.relPath, result.tempPath)
-		},
-		func(_ dirArchiveFileJob, result dirArchiveFileResult) {
-			_ = os.Remove(result.tempPath)
-		},
-	)
-}
-
-func (s *FilesService) downloadDirFileToTemp(ctx context.Context, tempDir string, file *domain.File, progress *DownloadProgress) (string, error) {
-	tempFile, err := os.CreateTemp(tempDir, "dir-entry-*")
-	if err != nil {
-		return "", fmt.Errorf("creating temp file for %s: %w", file.Path, err)
-	}
-
-	tempPath := tempFile.Name()
-	if err := s.manager.DownloadToWriter(ctx, file, tempFile, progress); err != nil {
-		tempFile.Close()
-		_ = os.Remove(tempPath)
-		return "", err
-	}
-	if err := tempFile.Close(); err != nil {
-		_ = os.Remove(tempPath)
-		return "", fmt.Errorf("closing temp file for %s: %w", file.Path, err)
-	}
-	return tempPath, nil
-}
-
-func (s *FilesService) copyTempFileIntoZip(zipWriter *zip.Writer, relPath, tempPath string) error {
-	entry, err := zipWriter.Create(relPath)
-	if err != nil {
-		_ = os.Remove(tempPath)
-		return err
-	}
-
-	tempFile, err := os.Open(tempPath)
-	if err != nil {
-		_ = os.Remove(tempPath)
-		return fmt.Errorf("opening temp file for %s: %w", relPath, err)
-	}
-
-	_, copyErr := io.Copy(entry, tempFile)
-	closeErr := tempFile.Close()
-	removeErr := os.Remove(tempPath)
-
-	if copyErr != nil {
-		return fmt.Errorf("copying %s into zip: %w", relPath, copyErr)
-	}
-	if closeErr != nil {
-		return fmt.Errorf("closing temp file for %s: %w", relPath, closeErr)
-	}
-	if removeErr != nil {
-		return fmt.Errorf("removing temp file for %s: %w", relPath, removeErr)
-	}
 	return nil
 }
 
