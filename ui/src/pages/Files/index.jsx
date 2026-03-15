@@ -34,6 +34,7 @@ import {
   getDeleteProgressResetDelay,
 } from '../../common/delete_progress'
 import { buildUploadEntries, normalizeUploadPath, resolveUploadEntries } from './upload_conflicts'
+import { createUploadCompletionRegistry } from './upload_completion'
 import { isTerminalTransferStatus, isActiveUploadStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from '../../common/progress'
 import {
   buildBulkMoveTargetPath,
@@ -82,6 +83,7 @@ export default function Files() {
   const downloadStatesRef = useRef([])
   const uploadProgressCancelsRef = useRef(new Map())
   const uploadAbortControllersRef = useRef(new Map())
+  const uploadCompletionRegistryRef = useRef(createUploadCompletionRegistry())
   const uploadConflictResolverRef = useRef(null)
   const dirFileNamesCacheRef = useRef(new Map())
   const downloadProgressCancelsRef = useRef(new Map())
@@ -123,6 +125,7 @@ export default function Files() {
       uploadProgressCancelsRef.current.clear()
       uploadAbortControllersRef.current.forEach((controller) => controller.abort())
       uploadAbortControllersRef.current.clear()
+      uploadCompletionRegistryRef.current.clear()
       downloadProgressCancelsRef.current.forEach((_, downloadId) => {
         API.files.cancelDownload(downloadId).catch(() => {})
       })
@@ -308,6 +311,7 @@ export default function Files() {
   const uploadSingleFile = async (file, targetPath, onConflict = 'keep_both', providedUploadId = createOperationId()) => {
     const filename = file.name
     const uploadId = providedUploadId
+    const completionPromise = uploadCompletionRegistryRef.current.waitFor(uploadId)
     setUploadStates((prev) => [...prev, {
       id: uploadId,
       filename,
@@ -337,6 +341,7 @@ export default function Files() {
         if (data.status === 'done') {
           markBulkTransferTerminal('upload', uploadId, 'done')
           releaseUploadTracking(uploadId)
+          uploadCompletionRegistryRef.current.settle(uploadId, 'done')
           addAlert('File uploaded', 'success')
           loadTree()
           scheduleUploadStateRemoval(uploadId, 2000)
@@ -344,6 +349,7 @@ export default function Files() {
         if (data.status === 'error') {
           markBulkTransferTerminal('upload', uploadId, 'error')
           releaseUploadTracking(uploadId)
+          uploadCompletionRegistryRef.current.settle(uploadId, 'error')
           loadTree()
           addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
           scheduleUploadStateRemoval(uploadId, 3000)
@@ -351,6 +357,7 @@ export default function Files() {
         if (data.status === 'skipped') {
           markBulkTransferTerminal('upload', uploadId, 'skipped')
           releaseUploadTracking(uploadId)
+          uploadCompletionRegistryRef.current.settle(uploadId, 'skipped')
           loadTree()
           addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
           scheduleUploadStateRemoval(uploadId, 1500)
@@ -362,13 +369,16 @@ export default function Files() {
 
     try {
       await API.files.upload(storageId, targetPath.replace(/\/+$/, ''), file, uploadId, { signal: controller.signal, onConflict })
+      await completionPromise
     } catch (err) {
       if (err?.name !== 'AbortError') {
         markBulkTransferTerminal('upload', uploadId, 'error')
         updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
+        uploadCompletionRegistryRef.current.settle(uploadId, 'error')
         addAlert(`Upload interrupted: ${err.message}`, 'error', { persistent: true })
       } else {
         markBulkTransferTerminal('upload', uploadId, 'cancelled')
+        uploadCompletionRegistryRef.current.settle(uploadId, 'cancelled')
       }
       releaseUploadTracking(uploadId)
       loadTree()
@@ -441,6 +451,7 @@ export default function Files() {
           .map((u) => u.id)
         await Promise.all(currentIds.map(async (uploadId) => {
           releaseUploadTracking(uploadId, { abort: true })
+          uploadCompletionRegistryRef.current.settle(uploadId, 'cancelled')
           await API.files.cancelUpload(uploadId).catch(() => {})
           markBulkTransferTerminal('upload', uploadId, 'cancelled')
         }))
@@ -499,6 +510,7 @@ export default function Files() {
     if (!uploadId) return
     try {
       releaseUploadTracking(uploadId, { abort: true })
+      uploadCompletionRegistryRef.current.settle(uploadId, 'cancelled')
       await API.files.cancelUpload(uploadId)
       markBulkTransferTerminal('upload', uploadId, 'cancelled')
       addAlert('Upload cancelled', 'info')
