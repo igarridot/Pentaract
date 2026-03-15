@@ -65,6 +65,18 @@ func isTelegramFileTooBig(err error) bool {
 	return err != nil && strings.Contains(strings.ToLower(err.Error()), "file is too big")
 }
 
+func appendUniqueWorker(workers []repository.WorkerToken, worker repository.WorkerToken) []repository.WorkerToken {
+	if worker.Token == "" {
+		return workers
+	}
+	for _, existing := range workers {
+		if existing.Token == worker.Token {
+			return workers
+		}
+	}
+	return append(workers, worker)
+}
+
 func validateEncryptedChunkSize(chunk []byte) error {
 	if len(chunk) > maxTelegramGetFileBytes {
 		return fmt.Errorf("encrypted chunk size %d exceeds Telegram Bot API getFile limit %d", len(chunk), maxTelegramGetFileBytes)
@@ -541,6 +553,16 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(5)
 
+	fallbackWorkers := make([]repository.WorkerToken, 0)
+	if m.workersRepo != nil {
+		workers, err := m.workersRepo.ListTokensByStorage(ctx, storage.ID)
+		if err != nil {
+			log.Printf("[delete] warning: failed listing workers for storage %s, continuing with scheduler-selected workers only: %v", storage.ID, err)
+		} else {
+			fallbackWorkers = workers
+		}
+	}
+
 	if progress != nil {
 		total := int64(0)
 		for _, c := range chunks {
@@ -560,14 +582,38 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 			if err != nil {
 				return fmt.Errorf("getting token for delete message %d: %w", c.TelegramMessageID, err)
 			}
-			log.Printf("[delete] deleting message %d via worker=%s chat=%s", c.TelegramMessageID, wt.Name, storage.Name)
-			if err := m.tgClient.DeleteMessage(wt.Token, storage.ChatID, c.TelegramMessageID); err != nil {
-				return fmt.Errorf("deleting message %d via worker=%s: %w", c.TelegramMessageID, wt.Name, err)
+			workers := make([]repository.WorkerToken, 0, len(fallbackWorkers)+1)
+			if wt != nil {
+				workers = appendUniqueWorker(workers, *wt)
 			}
-			if progress != nil {
-				progress.DeletedChunks.Add(1)
+			for _, candidate := range fallbackWorkers {
+				workers = appendUniqueWorker(workers, candidate)
 			}
-			return nil
+			if len(workers) == 0 {
+				return fmt.Errorf("deleting message %d: no workers available", c.TelegramMessageID)
+			}
+
+			var lastErr error
+			for attempt, candidate := range workers {
+				if attempt == 0 {
+					log.Printf("[delete] deleting message %d via worker=%s chat=%s", c.TelegramMessageID, candidate.Name, storage.Name)
+				} else {
+					log.Printf("[delete] retrying message %d via fallback worker=%s chat=%s", c.TelegramMessageID, candidate.Name, storage.Name)
+				}
+				if err := m.tgClient.DeleteMessage(candidate.Token, storage.ChatID, c.TelegramMessageID); err == nil {
+					if progress != nil {
+						progress.DeletedChunks.Add(1)
+					}
+					return nil
+				} else {
+					lastErr = err
+				}
+				if gctx.Err() != nil {
+					return gctx.Err()
+				}
+			}
+
+			return fmt.Errorf("deleting message %d failed after trying %d workers: %w", c.TelegramMessageID, len(workers), lastErr)
 		})
 	}
 
