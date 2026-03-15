@@ -570,13 +570,12 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 	return nil
 }
 
-type downloadedChunkResult struct {
-	index int
-	chunk domain.FileChunk
-	data  []byte
-}
-
 type chunkDataLoader func(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk, preferredWorker *repository.WorkerToken) ([]byte, error)
+
+type chunkDownloadJob struct {
+	chunk           domain.FileChunk
+	preferredWorker *repository.WorkerToken
+}
 
 func (m *StorageManager) downloadChunksInOrderWithLoader(
 	ctx context.Context,
@@ -589,116 +588,32 @@ func (m *StorageManager) downloadChunksInOrderWithLoader(
 	preferredWorkers := m.preferredDownloadWorkers(ctx, storage.ID, len(chunks))
 	parallelism := len(preferredWorkers)
 	if parallelism <= 1 {
+		preferredWorkers = nil
 		parallelism = 1
 	}
-	if parallelism <= 1 {
-		for _, chunk := range chunks {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
 
-			data, err := loadChunk(ctx, file.ID, *storage, chunk, nil)
-			if err != nil {
-				return err
-			}
-			if err := writeChunk(chunk, data); err != nil {
-				return err
-			}
+	jobs := make([]chunkDownloadJob, len(chunks))
+	for index, chunk := range chunks {
+		job := chunkDownloadJob{chunk: chunk}
+		if index < len(preferredWorkers) {
+			worker := preferredWorkers[index]
+			job.preferredWorker = &worker
 		}
-		return nil
+		jobs[index] = job
 	}
 
-	type chunkJob struct {
-		index int
-		chunk domain.FileChunk
-	}
-
-	downloadCtx, cancel := context.WithCancel(ctx)
-	defer cancel()
-
-	g, gctx := errgroup.WithContext(downloadCtx)
-	jobs := make(chan chunkJob)
-	results := make(chan downloadedChunkResult, parallelism)
-
-	for workerIndex := range parallelism {
-		var preferredWorker *repository.WorkerToken
-		if workerIndex < len(preferredWorkers) {
-			preferredWorker = &preferredWorkers[workerIndex]
-		}
-
-		g.Go(func() error {
-			for job := range jobs {
-				data, err := loadChunk(gctx, file.ID, *storage, job.chunk, preferredWorker)
-				if err != nil {
-					return err
-				}
-
-				select {
-				case results <- downloadedChunkResult{index: job.index, chunk: job.chunk, data: data}:
-				case <-gctx.Done():
-					return gctx.Err()
-				}
-			}
-			return nil
-		})
-	}
-
-	g.Go(func() error {
-		defer close(jobs)
-		for i, chunk := range chunks {
-			select {
-			case jobs <- chunkJob{index: i, chunk: chunk}:
-			case <-gctx.Done():
-				return gctx.Err()
-			}
-		}
-		return nil
-	})
-
-	errCh := make(chan error, 1)
-	go func() {
-		err := g.Wait()
-		close(results)
-		errCh <- err
-	}()
-
-	pending := make(map[int]downloadedChunkResult, parallelism)
-	nextIndex := 0
-	var writeErr error
-
-	for result := range results {
-		pending[result.index] = result
-
-		for {
-			next, ok := pending[nextIndex]
-			if !ok {
-				break
-			}
-			delete(pending, nextIndex)
-
-			if writeErr == nil {
-				if err := writeChunk(next.chunk, next.data); err != nil {
-					writeErr = err
-					cancel()
-				}
-			}
-			nextIndex++
-		}
-	}
-
-	downloadErr := <-errCh
-	if writeErr != nil {
-		return writeErr
-	}
-	if downloadErr != nil && downloadErr != context.Canceled {
-		return downloadErr
-	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return nil
+	return runOrderedJobs(
+		ctx,
+		parallelism,
+		jobs,
+		func(loadCtx context.Context, job chunkDownloadJob) ([]byte, error) {
+			return loadChunk(loadCtx, file.ID, *storage, job.chunk, job.preferredWorker)
+		},
+		func(job chunkDownloadJob, data []byte) error {
+			return writeChunk(job.chunk, data)
+		},
+		nil,
+	)
 }
 
 func (m *StorageManager) downloadChunksInOrder(
