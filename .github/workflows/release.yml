@@ -65,6 +65,8 @@ jobs:
     needs:
       - go-tests
       - ui-tests
+    outputs:
+      tag: ${{ steps.version.outputs.tag }}
     permissions:
       contents: write
 
@@ -118,3 +120,39 @@ jobs:
         with:
           tag_name: ${{ steps.version.outputs.tag }}
           generate_release_notes: true
+
+  docker-publish:
+    name: Build And Push To Docker Hub
+    runs-on: ubuntu-latest
+    needs:
+      - release
+
+    steps:
+      - name: Checkout release commit
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+          ref: ${{ needs.release.outputs.tag }}
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v4
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@v4
+
+      - name: Login to Docker Hub
+        uses: docker/login-action@v4
+        with:
+          username: ${{ secrets.DOCKER_USERNAME }}
+          password: ${{ secrets.DOCKER_PASSWORD }}
+
+      - name: Build and push image
+        uses: docker/build-push-action@v7
+        with:
+          context: .
+          file: ./Dockerfile
+          push: true
+          platforms: linux/amd64,linux/arm64
+          tags: |
+            norbega/pentaract:${{ needs.release.outputs.tag }}
+            norbega/pentaract:latest
