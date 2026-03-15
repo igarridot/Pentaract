@@ -4,24 +4,21 @@ permissions:
   contents: read
 
 on:
-  workflow_run:
-    workflows:
-      - Tests
-    types:
-      - completed
+  push:
+    tags:
+      - 'v*'
 
 jobs:
   docker-publish:
     name: Build And Push To Docker Hub
     runs-on: ubuntu-latest
-    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_branch == 'master'
 
     steps:
       - name: Checkout
         uses: actions/checkout@v6
         with:
           fetch-depth: 0
-          ref: ${{ github.event.workflow_run.head_sha }}
+          ref: ${{ github.ref }}
 
       - name: Resolve release tag
         id: version
@@ -29,10 +26,10 @@ jobs:
           set -euo pipefail
 
           semver_regex='^v[0-9]+\.[0-9]+\.[0-9]+$'
-          release_tag="$(git tag --points-at HEAD | grep -E "${semver_regex}" | sort -V | tail -n1 || true)"
+          release_tag="${GITHUB_REF_NAME}"
 
-          if [ -z "${release_tag}" ]; then
-            echo "No semantic version tag found on commit ${GITHUB_SHA}"
+          if ! printf '%s\n' "${release_tag}" | grep -Eq "${semver_regex}"; then
+            echo "Ref ${release_tag} is not a semantic version tag"
             exit 1
           fi
 
