@@ -1,6 +1,7 @@
 package service
 
 import (
+	"archive/zip"
 	"bytes"
 	"context"
 	"errors"
@@ -541,5 +542,85 @@ func TestFilesServiceDownloadDirReturnsArchiveName(t *testing.T) {
 	}
 	if name, err := svc.DownloadDir(context.Background(), uuid.New(), uuid.New(), "root/docs/", io.Discard, nil); err != nil || name != "docs" {
 		t.Fatalf("nested archive name = %q err=%v, want docs", name, err)
+	}
+}
+
+func TestFilesServiceDownloadDirWritesValidZipArchive(t *testing.T) {
+	userID := uuid.New()
+	storageID := uuid.New()
+	fileOneID := uuid.New()
+	fileTwoID := uuid.New()
+
+	access := &fakeFilesAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return true, nil
+		},
+	}
+	repo := &fakeFilesRepo{
+		dirStatsFn: func(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error) {
+			return int64(len("hello") + len("world")), 2, nil
+		},
+		listFilesUnderPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) {
+			return []domain.File{
+				{ID: fileOneID, Path: "root/docs/report.txt", StorageID: storageID},
+				{ID: fileTwoID, Path: "root/docs/sub/image.txt", StorageID: storageID},
+			}, nil
+		},
+	}
+	manager := &fakeFilesManager{
+		downloadFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+			switch file.ID {
+			case fileOneID:
+				_, _ = io.WriteString(w, "hello")
+			case fileTwoID:
+				_, _ = io.WriteString(w, "world")
+			default:
+				t.Fatalf("unexpected file id %s", file.ID)
+			}
+			return nil
+		},
+	}
+	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{}, nil)
+
+	var archive bytes.Buffer
+	progress := &DownloadProgress{}
+	name, err := svc.DownloadDir(context.Background(), userID, storageID, "root/docs", &archive, progress)
+	if err != nil {
+		t.Fatalf("download dir failed: %v", err)
+	}
+	if name != "docs" {
+		t.Fatalf("archive name = %q, want docs", name)
+	}
+	if progress.TotalChunks != 2 || progress.TotalBytes != int64(len("hello")+len("world")) {
+		t.Fatalf("unexpected totals: chunks=%d bytes=%d", progress.TotalChunks, progress.TotalBytes)
+	}
+
+	reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
+	if err != nil {
+		t.Fatalf("zip reader failed: %v", err)
+	}
+	if len(reader.File) != 2 {
+		t.Fatalf("zip entry count = %d, want 2", len(reader.File))
+	}
+
+	entries := map[string]string{}
+	for _, file := range reader.File {
+		rc, err := file.Open()
+		if err != nil {
+			t.Fatalf("open zip entry %s: %v", file.Name, err)
+		}
+		content, err := io.ReadAll(rc)
+		rc.Close()
+		if err != nil {
+			t.Fatalf("read zip entry %s: %v", file.Name, err)
+		}
+		entries[file.Name] = string(content)
+	}
+
+	if entries["report.txt"] != "hello" {
+		t.Fatalf("unexpected report.txt contents: %q", entries["report.txt"])
+	}
+	if entries["sub/image.txt"] != "world" {
+		t.Fatalf("unexpected sub/image.txt contents: %q", entries["sub/image.txt"])
 	}
 }
