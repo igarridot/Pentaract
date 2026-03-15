@@ -11,6 +11,7 @@ import (
 	"strings"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/errgroup"
@@ -513,37 +514,51 @@ func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.
 	}
 
 	parallelism := m.downloadParallelism(ctx, storage.ID, len(results))
+	startedAt := time.Now()
+	log.Printf("[upload] verifying file=%s chunks=%d parallelism=%d storage=%s", file.Path, len(results), parallelism, storage.Name)
+
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(parallelism)
 
 	for _, result := range results {
 		result := result
 		g.Go(func() error {
+			chunkStartedAt := time.Now()
 			chunk := domain.FileChunk{
 				FileID:            file.ID,
 				TelegramFileID:    result.TelegramFileID,
 				TelegramMessageID: result.TelegramMessageID,
 				Position:          result.Position,
 			}
+			log.Printf("[upload] verifying chunk %d of file=%s message=%d", result.Position, file.Path, result.TelegramMessageID)
 
 			data, err := m.downloadAndDecryptChunkCached(gctx, file.ID, storage, chunk, nil)
 			if err != nil {
+				log.Printf("[upload] verification failed for chunk %d of file=%s after %s: %v", result.Position, file.Path, time.Since(chunkStartedAt).Round(time.Millisecond), err)
 				return fmt.Errorf("verifying chunk %d: %w", result.Position, err)
 			}
 
 			if sha256.Sum256(data) != result.PlainHash {
+				log.Printf("[upload] verification failed for chunk %d of file=%s after %s: content mismatch", result.Position, file.Path, time.Since(chunkStartedAt).Round(time.Millisecond))
 				return fmt.Errorf("verifying chunk %d: uploaded chunk content mismatch after Telegram round-trip", result.Position)
 			}
 
 			if progress != nil {
 				progress.VerifiedChunks.Add(1)
 			}
+			log.Printf("[upload] verified chunk %d of file=%s in %s", result.Position, file.Path, time.Since(chunkStartedAt).Round(time.Millisecond))
 
 			return nil
 		})
 	}
 
-	return g.Wait()
+	if err := g.Wait(); err != nil {
+		log.Printf("[upload] verification aborted for file=%s after %s: %v", file.Path, time.Since(startedAt).Round(time.Millisecond), err)
+		return err
+	}
+
+	log.Printf("[upload] verification completed file=%s chunks=%d in %s", file.Path, len(results), time.Since(startedAt).Round(time.Millisecond))
+	return nil
 }
 
 // DeleteFromTelegram deletes chunk messages from Telegram for the given chunks.
