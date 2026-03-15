@@ -3,11 +3,14 @@ package service
 import (
 	"archive/zip"
 	"context"
+	"errors"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/Dominux/Pentaract/internal/pathutil"
@@ -39,7 +42,33 @@ type filesRepository interface {
 const (
 	UploadConflictKeepBoth = "keep_both"
 	UploadConflictSkip     = "skip"
+	dirArchiveMaxPrefetch  = 3
 )
+
+type filesManagerDownloadWorkersLister interface {
+	ListDownloadWorkers(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error)
+}
+
+type filesManagerDownloadWithWorkers interface {
+	DownloadToWriterWithWorkers(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error
+}
+
+type dirArchiveWorkerPlan struct {
+	streamWorkers  []repository.WorkerToken
+	prefetchGroups [][]repository.WorkerToken
+}
+
+type dirArchiveFileJob struct {
+	index   int
+	file    domain.File
+	relPath string
+}
+
+type dirArchiveFileResult struct {
+	index    int
+	relPath  string
+	tempPath string
+}
 
 type filesAccessRepository interface {
 	HasAccess(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error)
@@ -228,7 +257,7 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 		prefix += "/"
 	}
 
-	if err := s.downloadDirFilesToZip(ctx, files, prefix, zipWriter, progress); err != nil {
+	if err := s.downloadDirFilesToZip(ctx, storageID, files, prefix, zipWriter, progress); err != nil {
 		return "", err
 	}
 
@@ -239,25 +268,286 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 	return dirName, nil
 }
 
-func (s *FilesService) downloadDirFilesToZip(ctx context.Context, files []domain.File, prefix string, zipWriter *zip.Writer, progress *DownloadProgress) error {
-	for _, file := range files {
+func buildDirArchiveWorkerPlan(workers []repository.WorkerToken, filesCount int) dirArchiveWorkerPlan {
+	plan := dirArchiveWorkerPlan{
+		streamWorkers: append([]repository.WorkerToken(nil), workers...),
+	}
+	if len(workers) <= 1 || filesCount <= 1 {
+		return plan
+	}
+
+	prefetchCount := len(workers) / 2
+	if prefetchCount > dirArchiveMaxPrefetch {
+		prefetchCount = dirArchiveMaxPrefetch
+	}
+	if prefetchCount > filesCount-1 {
+		prefetchCount = filesCount - 1
+	}
+	if prefetchCount <= 0 {
+		return plan
+	}
+
+	streamCount := len(workers) - prefetchCount
+	if streamCount <= 0 {
+		streamCount = 1
+		prefetchCount = len(workers) - 1
+	}
+
+	plan.streamWorkers = append([]repository.WorkerToken(nil), workers[:streamCount]...)
+	plan.prefetchGroups = make([][]repository.WorkerToken, 0, prefetchCount)
+	for _, worker := range workers[streamCount : streamCount+prefetchCount] {
+		plan.prefetchGroups = append(plan.prefetchGroups, []repository.WorkerToken{worker})
+	}
+
+	return plan
+}
+
+func (s *FilesService) resolveDirArchiveWorkerPlan(ctx context.Context, storageID uuid.UUID, filesCount int) dirArchiveWorkerPlan {
+	lister, ok := s.manager.(filesManagerDownloadWorkersLister)
+	if !ok {
+		return dirArchiveWorkerPlan{}
+	}
+
+	workers, err := lister.ListDownloadWorkers(ctx, storageID)
+	if err != nil {
+		return dirArchiveWorkerPlan{}
+	}
+
+	return buildDirArchiveWorkerPlan(workers, filesCount)
+}
+
+func (s *FilesService) downloadFileWithWorkers(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error {
+	if len(workers) > 0 {
+		if downloader, ok := s.manager.(filesManagerDownloadWithWorkers); ok {
+			return downloader.DownloadToWriterWithWorkers(ctx, file, w, progress, workers)
+		}
+	}
+
+	return s.manager.DownloadToWriter(ctx, file, w, progress)
+}
+
+func (s *FilesService) downloadDirFilesToZip(ctx context.Context, storageID uuid.UUID, files []domain.File, prefix string, zipWriter *zip.Writer, progress *DownloadProgress) error {
+	jobs := make([]dirArchiveFileJob, len(files))
+	for index, file := range files {
+		jobs[index] = dirArchiveFileJob{
+			index:   index,
+			file:    file,
+			relPath: strings.TrimPrefix(file.Path, prefix),
+		}
+	}
+
+	plan := s.resolveDirArchiveWorkerPlan(ctx, storageID, len(files))
+	if len(plan.prefetchGroups) == 0 {
+		return s.downloadDirFilesToZipSequential(ctx, jobs, zipWriter, progress, plan.streamWorkers)
+	}
+
+	return s.downloadDirFilesToZipPrefetch(ctx, jobs, zipWriter, progress, plan)
+}
+
+func (s *FilesService) downloadDirFilesToZipSequential(ctx context.Context, jobs []dirArchiveFileJob, zipWriter *zip.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error {
+	for _, job := range jobs {
 		select {
 		case <-ctx.Done():
 			return ctx.Err()
 		default:
 		}
 
-		relPath := strings.TrimPrefix(file.Path, prefix)
-		entry, err := zipWriter.Create(relPath)
+		entry, err := zipWriter.Create(job.relPath)
 		if err != nil {
-			return fmt.Errorf("creating zip entry for %s: %w", relPath, err)
+			return fmt.Errorf("creating zip entry for %s: %w", job.relPath, err)
 		}
 
-		if err := s.manager.DownloadToWriter(ctx, &file, entry, progress); err != nil {
-			return fmt.Errorf("downloading %s into zip: %w", relPath, err)
+		if err := s.downloadFileWithWorkers(ctx, &job.file, entry, progress, workers); err != nil {
+			return fmt.Errorf("downloading %s into zip: %w", job.relPath, err)
 		}
 	}
 
+	return nil
+}
+
+func (s *FilesService) downloadDirFilesToZipPrefetch(
+	ctx context.Context,
+	jobs []dirArchiveFileJob,
+	zipWriter *zip.Writer,
+	progress *DownloadProgress,
+	plan dirArchiveWorkerPlan,
+) error {
+	tempDir, err := os.MkdirTemp("", "pentaract-dir-download-*")
+	if err != nil {
+		return fmt.Errorf("creating temp dir for directory download: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
+
+	workCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	g, gctx := errgroup.WithContext(workCtx)
+	jobCh := make(chan dirArchiveFileJob)
+	resultBufferSize := len(jobs) - 1
+	if resultBufferSize < 1 {
+		resultBufferSize = 1
+	}
+	resultCh := make(chan dirArchiveFileResult, resultBufferSize)
+	streamWorkersReady := make(chan struct{})
+
+	startPrefetchWorker := func(workers []repository.WorkerToken, ready <-chan struct{}) {
+		assignedWorkers := append([]repository.WorkerToken(nil), workers...)
+		g.Go(func() error {
+			if ready != nil {
+				select {
+				case <-ready:
+				case <-gctx.Done():
+					return gctx.Err()
+				}
+			}
+
+			for {
+				select {
+				case <-gctx.Done():
+					return gctx.Err()
+				case job, ok := <-jobCh:
+					if !ok {
+						return nil
+					}
+
+					tempPath, err := s.downloadDirFileToTemp(gctx, tempDir, &job.file, progress, assignedWorkers)
+					if err != nil {
+						return fmt.Errorf("prefetching %s for zip: %w", job.relPath, err)
+					}
+
+					select {
+					case resultCh <- dirArchiveFileResult{index: job.index, relPath: job.relPath, tempPath: tempPath}:
+					case <-gctx.Done():
+						_ = os.Remove(tempPath)
+						return gctx.Err()
+					}
+				}
+			}
+		})
+	}
+
+	for _, workers := range plan.prefetchGroups {
+		startPrefetchWorker(workers, nil)
+	}
+	startPrefetchWorker(plan.streamWorkers, streamWorkersReady)
+
+	g.Go(func() error {
+		defer close(jobCh)
+		for _, job := range jobs[1:] {
+			select {
+			case jobCh <- job:
+			case <-gctx.Done():
+				return gctx.Err()
+			}
+		}
+		return nil
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		err := g.Wait()
+		close(resultCh)
+		errCh <- err
+	}()
+
+	firstEntry, err := zipWriter.Create(jobs[0].relPath)
+	if err != nil {
+		cancel()
+		<-errCh
+		return fmt.Errorf("creating zip entry for %s: %w", jobs[0].relPath, err)
+	}
+	if err := s.downloadFileWithWorkers(gctx, &jobs[0].file, firstEntry, progress, plan.streamWorkers); err != nil {
+		cancel()
+		<-errCh
+		return fmt.Errorf("downloading %s into zip: %w", jobs[0].relPath, err)
+	}
+	close(streamWorkersReady)
+
+	pending := make(map[int]dirArchiveFileResult, len(jobs)-1)
+	nextIndex := 1
+	var handleErr error
+
+	for result := range resultCh {
+		pending[result.index] = result
+
+		for {
+			next, ok := pending[nextIndex]
+			if !ok {
+				break
+			}
+			delete(pending, nextIndex)
+
+			if handleErr == nil {
+				if err := s.copyTempFileIntoZip(zipWriter, next.relPath, next.tempPath); err != nil {
+					handleErr = err
+					cancel()
+				}
+			} else {
+				_ = os.Remove(next.tempPath)
+			}
+			nextIndex++
+		}
+	}
+
+	workerErr := <-errCh
+	if handleErr != nil {
+		return handleErr
+	}
+	if workerErr != nil && !errors.Is(workerErr, context.Canceled) {
+		return workerErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+
+	return nil
+}
+
+func (s *FilesService) downloadDirFileToTemp(ctx context.Context, tempDir string, file *domain.File, progress *DownloadProgress, workers []repository.WorkerToken) (string, error) {
+	tempFile, err := os.CreateTemp(tempDir, "dir-entry-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp file for %s: %w", file.Path, err)
+	}
+
+	tempPath := tempFile.Name()
+	if err := s.downloadFileWithWorkers(ctx, file, tempFile, progress, workers); err != nil {
+		tempFile.Close()
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", fmt.Errorf("closing temp file for %s: %w", file.Path, err)
+	}
+	return tempPath, nil
+}
+
+func (s *FilesService) copyTempFileIntoZip(zipWriter *zip.Writer, relPath, tempPath string) error {
+	entry, err := zipWriter.Create(relPath)
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	tempFile, err := os.Open(tempPath)
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("opening temp file for %s: %w", relPath, err)
+	}
+
+	_, copyErr := io.Copy(entry, tempFile)
+	closeErr := tempFile.Close()
+	removeErr := os.Remove(tempPath)
+
+	if copyErr != nil {
+		return fmt.Errorf("copying %s into zip: %w", relPath, copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("closing temp file for %s: %w", relPath, closeErr)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("removing temp file for %s: %w", relPath, removeErr)
+	}
 	return nil
 }
 

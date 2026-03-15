@@ -3,6 +3,7 @@ package service
 import (
 	"bytes"
 	"context"
+	"errors"
 	"io"
 	"log"
 	"net/http"
@@ -357,6 +358,127 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 	}
 	if len(workerTokens) != 2 {
 		t.Fatalf("expected download to use both workers, got %v", workerTokens)
+	}
+}
+
+func TestStorageManagerDownloadToWriterWithWorkersCyclesReservedWorkersAcrossAllChunks(t *testing.T) {
+	filesMock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new files pgxmock pool: %v", err)
+	}
+	defer filesMock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	chunkID0 := uuid.New()
+	chunkID1 := uuid.New()
+	chunkID2 := uuid.New()
+	plain0 := []byte("hello ")
+	plain1 := []byte("world ")
+	plain2 := []byte("again")
+	cipher := NewChunkCipher("secret")
+	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	if err != nil {
+		t.Fatalf("encrypt chunk 0: %v", err)
+	}
+	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	if err != nil {
+		t.Fatalf("encrypt chunk 1: %v", err)
+	}
+	enc2, err := cipher.EncryptChunk(fileID, 2, plain2)
+	if err != nil {
+		t.Fatalf("encrypt chunk 2: %v", err)
+	}
+
+	filesMock.ExpectQuery("SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = \\$1 ORDER BY position").
+		WithArgs(fileID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "file_id", "telegram_file_id", "telegram_message_id", "position"}).
+			AddRow(chunkID0, fileID, "FILE0", int64(0), int16(0)).
+			AddRow(chunkID1, fileID, "FILE1", int64(0), int16(1)).
+			AddRow(chunkID2, fileID, "FILE2", int64(0), int16(2)))
+	filesMock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+
+	var downloadPaths []string
+	var mu sync.Mutex
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE0"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk0.bin"}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE1"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk1.bin"}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE2"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk2.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"),
+			strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk1.bin"),
+			strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk2.bin"):
+			mu.Lock()
+			downloadPaths = append(downloadPaths, r.URL.Path)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			switch {
+			case strings.Contains(r.URL.Path, "chunk0.bin"):
+				_, _ = w.Write(enc0)
+			case strings.Contains(r.URL.Path, "chunk1.bin"):
+				_, _ = w.Write(enc1)
+			default:
+				_, _ = w.Write(enc2)
+			}
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(filesMock),
+		storagesRepo: repository.NewStoragesRepoWithDB(filesMock),
+		scheduler: NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return nil, errors.New("scheduler should not be used when reserved workers are provided")
+			},
+		}, 10),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: cipher,
+	}
+
+	var out bytes.Buffer
+	err = m.DownloadToWriterWithWorkers(
+		context.Background(),
+		&domain.File{ID: fileID, Path: "reserved.txt", Size: int64(len(plain0) + len(plain1) + len(plain2)), StorageID: storageID},
+		&out,
+		&DownloadProgress{},
+		[]repository.WorkerToken{
+			{Token: "TOKEN", Name: "w1"},
+			{Token: "TOKEN2", Name: "w2"},
+		},
+	)
+	if err != nil {
+		t.Fatalf("reserved worker download failed: %v", err)
+	}
+	if out.String() != "hello world again" {
+		t.Fatalf("unexpected download content: %q", out.String())
+	}
+	if len(downloadPaths) != 3 {
+		t.Fatalf("expected three chunk downloads, got %v", downloadPaths)
+	}
+
+	gotPaths := map[string]bool{}
+	for _, path := range downloadPaths {
+		gotPaths[path] = true
+	}
+	for _, wantPath := range []string{
+		"/file/botTOKEN/path/chunk0.bin",
+		"/file/botTOKEN2/path/chunk1.bin",
+		"/file/botTOKEN/path/chunk2.bin",
+	} {
+		if !gotPaths[wantPath] {
+			t.Fatalf("missing expected worker path %s in %v", wantPath, downloadPaths)
+		}
 	}
 }
 
