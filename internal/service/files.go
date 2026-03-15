@@ -5,9 +5,11 @@ import (
 	"context"
 	"fmt"
 	"io"
+	"os"
 	"strings"
 
 	"github.com/google/uuid"
+	"golang.org/x/sync/errgroup"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/Dominux/Pentaract/internal/pathutil"
@@ -39,6 +41,7 @@ type filesRepository interface {
 const (
 	UploadConflictKeepBoth = "keep_both"
 	UploadConflictSkip     = "skip"
+	dirArchivePrefetchJobs = 4
 )
 
 type filesAccessRepository interface {
@@ -223,25 +226,19 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 	dirName := pathutil.ArchiveName(dirPath)
 
 	zipWriter := zip.NewWriter(w)
+	tempDir, err := os.MkdirTemp("", "pentaract-dir-download-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp dir for directory download: %w", err)
+	}
+	defer os.RemoveAll(tempDir)
 
 	prefix := dirPath
 	if prefix != "" && !strings.HasSuffix(prefix, "/") {
 		prefix += "/"
 	}
 
-	for _, file := range files {
-		// Use relative path within the directory
-		relPath := strings.TrimPrefix(file.Path, prefix)
-
-		entry, err := zipWriter.Create(relPath)
-		if err != nil {
-			return "", err
-		}
-
-		// Stream chunks directly into the zip entry — no full file buffering
-		if err := s.manager.DownloadToWriter(ctx, &file, entry, progress); err != nil {
-			return "", err
-		}
+	if err := s.downloadDirFilesToZip(ctx, files, prefix, tempDir, zipWriter, progress); err != nil {
+		return "", err
 	}
 
 	if err := zipWriter.Close(); err != nil {
@@ -249,6 +246,175 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 	}
 
 	return dirName, nil
+}
+
+type dirArchiveFileJob struct {
+	index   int
+	file    domain.File
+	relPath string
+}
+
+type dirArchiveFileResult struct {
+	index    int
+	relPath  string
+	tempPath string
+}
+
+func (s *FilesService) downloadDirFilesToZip(ctx context.Context, files []domain.File, prefix, tempDir string, zipWriter *zip.Writer, progress *DownloadProgress) error {
+	parallelism := dirArchivePrefetchJobs
+	if parallelism > len(files) {
+		parallelism = len(files)
+	}
+	if parallelism <= 1 {
+		for _, file := range files {
+			relPath := strings.TrimPrefix(file.Path, prefix)
+			entry, err := zipWriter.Create(relPath)
+			if err != nil {
+				return err
+			}
+			if err := s.manager.DownloadToWriter(ctx, &file, entry, progress); err != nil {
+				return err
+			}
+		}
+		return nil
+	}
+
+	downloadCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	type archiveResult = dirArchiveFileResult
+	g, gctx := errgroup.WithContext(downloadCtx)
+	jobs := make(chan dirArchiveFileJob)
+	results := make(chan archiveResult, parallelism)
+
+	for range parallelism {
+		g.Go(func() error {
+			for job := range jobs {
+				tempPath, err := s.downloadDirFileToTemp(gctx, tempDir, &job.file, progress)
+				if err != nil {
+					return err
+				}
+
+				select {
+				case results <- archiveResult{index: job.index, relPath: job.relPath, tempPath: tempPath}:
+				case <-gctx.Done():
+					_ = os.Remove(tempPath)
+					return gctx.Err()
+				}
+			}
+			return nil
+		})
+	}
+
+	g.Go(func() error {
+		defer close(jobs)
+		for index, file := range files {
+			job := dirArchiveFileJob{
+				index:   index,
+				file:    file,
+				relPath: strings.TrimPrefix(file.Path, prefix),
+			}
+			select {
+			case jobs <- job:
+			case <-gctx.Done():
+				return gctx.Err()
+			}
+		}
+		return nil
+	})
+
+	errCh := make(chan error, 1)
+	go func() {
+		err := g.Wait()
+		close(results)
+		errCh <- err
+	}()
+
+	pending := make(map[int]archiveResult, parallelism)
+	nextIndex := 0
+	var writeErr error
+
+	for result := range results {
+		pending[result.index] = result
+
+		for {
+			next, ok := pending[nextIndex]
+			if !ok {
+				break
+			}
+			delete(pending, nextIndex)
+
+			if writeErr == nil {
+				if err := s.copyTempFileIntoZip(zipWriter, next.relPath, next.tempPath); err != nil {
+					writeErr = err
+					cancel()
+				}
+			} else {
+				_ = os.Remove(next.tempPath)
+			}
+			nextIndex++
+		}
+	}
+
+	downloadErr := <-errCh
+	if writeErr != nil {
+		return writeErr
+	}
+	if downloadErr != nil && downloadErr != context.Canceled {
+		return downloadErr
+	}
+	if err := ctx.Err(); err != nil {
+		return err
+	}
+	return nil
+}
+
+func (s *FilesService) downloadDirFileToTemp(ctx context.Context, tempDir string, file *domain.File, progress *DownloadProgress) (string, error) {
+	tempFile, err := os.CreateTemp(tempDir, "dir-entry-*")
+	if err != nil {
+		return "", fmt.Errorf("creating temp file for %s: %w", file.Path, err)
+	}
+
+	tempPath := tempFile.Name()
+	if err := s.manager.DownloadToWriter(ctx, file, tempFile, progress); err != nil {
+		tempFile.Close()
+		_ = os.Remove(tempPath)
+		return "", err
+	}
+	if err := tempFile.Close(); err != nil {
+		_ = os.Remove(tempPath)
+		return "", fmt.Errorf("closing temp file for %s: %w", file.Path, err)
+	}
+	return tempPath, nil
+}
+
+func (s *FilesService) copyTempFileIntoZip(zipWriter *zip.Writer, relPath, tempPath string) error {
+	entry, err := zipWriter.Create(relPath)
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return err
+	}
+
+	tempFile, err := os.Open(tempPath)
+	if err != nil {
+		_ = os.Remove(tempPath)
+		return fmt.Errorf("opening temp file for %s: %w", relPath, err)
+	}
+
+	_, copyErr := io.Copy(entry, tempFile)
+	closeErr := tempFile.Close()
+	removeErr := os.Remove(tempPath)
+
+	if copyErr != nil {
+		return fmt.Errorf("copying %s into zip: %w", relPath, copyErr)
+	}
+	if closeErr != nil {
+		return fmt.Errorf("closing temp file for %s: %w", relPath, closeErr)
+	}
+	if removeErr != nil {
+		return fmt.Errorf("removing temp file for %s: %w", relPath, removeErr)
+	}
+	return nil
 }
 
 func (s *FilesService) Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error {

@@ -7,6 +7,7 @@ import (
 	"errors"
 	"io"
 	"testing"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -622,5 +623,66 @@ func TestFilesServiceDownloadDirWritesValidZipArchive(t *testing.T) {
 	}
 	if entries["sub/image.txt"] != "world" {
 		t.Fatalf("unexpected sub/image.txt contents: %q", entries["sub/image.txt"])
+	}
+}
+
+func TestFilesServiceDownloadDirPrefetchesFilesConcurrently(t *testing.T) {
+	userID := uuid.New()
+	storageID := uuid.New()
+	fileOneID := uuid.New()
+	fileTwoID := uuid.New()
+
+	access := &fakeFilesAccessRepo{
+		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
+			return true, nil
+		},
+	}
+	repo := &fakeFilesRepo{
+		listFilesUnderPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) {
+			return []domain.File{
+				{ID: fileOneID, Path: "root/docs/a.txt", StorageID: storageID},
+				{ID: fileTwoID, Path: "root/docs/b.txt", StorageID: storageID},
+			}, nil
+		},
+	}
+
+	fileOneStarted := make(chan struct{})
+	fileTwoStarted := make(chan struct{})
+	manager := &fakeFilesManager{
+		downloadFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+			switch file.ID {
+			case fileOneID:
+				close(fileOneStarted)
+				select {
+				case <-fileTwoStarted:
+				case <-ctx.Done():
+					return ctx.Err()
+				}
+				_, _ = io.WriteString(w, "alpha")
+			case fileTwoID:
+				close(fileTwoStarted)
+				_, _ = io.WriteString(w, "beta")
+			default:
+				t.Fatalf("unexpected file id %s", file.ID)
+			}
+			return nil
+		},
+	}
+	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{}, nil)
+
+	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+	defer cancel()
+
+	var archive bytes.Buffer
+	if _, err := svc.DownloadDir(ctx, userID, storageID, "root/docs", &archive, nil); err != nil {
+		t.Fatalf("download dir with concurrent prefetch failed: %v", err)
+	}
+
+	reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
+	if err != nil {
+		t.Fatalf("zip reader failed: %v", err)
+	}
+	if len(reader.File) != 2 {
+		t.Fatalf("zip entry count = %d, want 2", len(reader.File))
 	}
 }
