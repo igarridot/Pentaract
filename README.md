@@ -18,11 +18,12 @@ The API and UI provide file management, access control, progress tracking, and w
 - Chunked upload/download to Telegram (20 MB-safe encrypted chunks)
 - Chunk encryption with **AES-256-GCM** and per-chunk random nonce
 - Encryption key derived from `SECRET_KEY` using **PBKDF2-HMAC-SHA256** (600000 iterations)
-- Real-time progress via SSE (upload/download/delete)
+- Real-time progress via SSE (upload/download/delete), including upload verification
 - Upload/download cancellation
 - File browser: upload, download, move, create folders, search, preview
-- Directory download as ZIP
+- Directory download as a streamed ZIP archive
 - Multi-worker support (shared or storage-scoped bots)
+- Worker-aware chunk recovery when a different bot needs to download an existing chunk
 - Per-storage access control:
   - `read`: browse/download
   - `write`: browse/download/upload/move/create folder
@@ -81,7 +82,7 @@ make down
 
 Delete behavior:
 
-- Normal delete: removes Telegram chunks + DB metadata
+- Normal delete: removes Telegram chunks + DB metadata, retrying across available workers when needed
 - `force delete`: removes DB metadata only, can leave Telegram orphan chunks
 
 ## Development Workflow
@@ -121,10 +122,15 @@ make test
 
 ### GitHub Actions
 
-Workflow: `.github/workflows/tests.yml`
-
-- Backend job: `go test -count=1 ./...`
-- Frontend job: `pnpm run test:coverage`
+- PR validation lives in `.github/workflows/tests.yml`
+  - Go job: `go test ./...`
+  - UI job: `pnpm test`
+- Merge-to-`master` release automation lives in `.github/workflows/release.yml`
+  - reruns Go and UI tests
+  - creates or reuses the release tag
+  - publishes the GitHub release
+  - builds and pushes Docker images to Docker Hub as `<tag>` and `latest`
+- `.github/workflows/docker-publish-tag.yml` remains available as a manual backfill workflow for publishing Docker images from an existing tag
 
 ## Configuration
 
@@ -209,6 +215,7 @@ ui/
 
 - Telegram Bot API limits and channel permissions directly affect throughput.
 - If workers are misconfigured (missing admin rights/token revoked), uploads/deletes fail.
+- Upload completion includes a Telegram round-trip verification phase, so a file can still be "verifying" after its chunks finished uploading.
 - `force delete` is irreversible and may leave backend remnants by design.
 - Legacy plaintext chunks (from older versions) are still readable for backward compatibility.
 
