@@ -27,12 +27,24 @@ type Client struct {
 	httpClient *http.Client
 }
 
+func newHTTPClient() *http.Client {
+	transport := http.DefaultTransport.(*http.Transport).Clone()
+	transport.MaxIdleConns = 100
+	transport.MaxIdleConnsPerHost = 100
+	transport.IdleConnTimeout = 90 * time.Second
+	transport.ExpectContinueTimeout = time.Second
+	transport.ForceAttemptHTTP2 = true
+
+	return &http.Client{
+		Timeout:   10 * time.Minute, // 20MB chunks can be slow on limited connections
+		Transport: transport,
+	}
+}
+
 func NewClient(baseURL string) *Client {
 	return &Client{
-		baseURL: baseURL,
-		httpClient: &http.Client{
-			Timeout: 10 * time.Minute, // 20MB chunks can be slow on limited connections
-		},
+		baseURL:    baseURL,
+		httpClient: newHTTPClient(),
 	}
 }
 

@@ -128,6 +128,12 @@ func initDBWithPool(ctx context.Context, pool startupPool) error {
 			created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 		)`,
 
+		`CREATE INDEX IF NOT EXISTS storage_workers_usages_worker_created_at_idx
+			ON storage_workers_usages (worker_id, created_at)`,
+
+		`CREATE INDEX IF NOT EXISTS storage_workers_usages_created_at_idx
+			ON storage_workers_usages (created_at)`,
+
 		`CREATE OR REPLACE FUNCTION regexp_quote(text) RETURNS text AS $$
 			SELECT regexp_replace($1, '([.?*+^$[\]\\(){}|\\-])', '\\\1', 'g');
 		$$ LANGUAGE sql IMMUTABLE`,
