@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"log"
 	"net/http"
@@ -1110,6 +1111,153 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	}
 	if delProgress.TotalChunks != 1 || delProgress.DeletedChunks.Load() != 1 {
 		t.Fatalf("unexpected delete progress: total=%d deleted=%d", delProgress.TotalChunks, delProgress.DeletedChunks.Load())
+	}
+}
+
+func TestStorageManagerUploadRetriesOnlyFailedChunk(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	fileID := uuid.New()
+	storageID := uuid.New()
+	plain0 := bytes.Repeat([]byte("a"), uploadChunkSize)
+	plain1 := []byte("tail")
+	totalSize := int64(len(plain0) + len(plain1))
+	cipher := NewChunkCipher("secret")
+
+	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
+		WithArgs(storageID).
+		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+	mock.ExpectBegin()
+	mock.ExpectExec("INSERT INTO file_chunks").
+		WithArgs(fileID, "TG_FILE_0", int64(100), int16(0), fileID, "TG_FILE_1", int64(101), int16(1)).
+		WillReturnResult(pgxmock.NewResult("INSERT", 2))
+	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
+		WithArgs(fileID).
+		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectCommit()
+
+	var (
+		mu               sync.Mutex
+		attemptsByPos    = map[int16]int{}
+		uploadedByFileID = map[string][]byte{}
+	)
+
+	detectPosition := func(payload []byte) int16 {
+		if decrypted, err := cipher.DecryptChunk(fileID, 0, payload); err == nil && bytes.Equal(decrypted, plain0) {
+			return 0
+		}
+		if decrypted, err := cipher.DecryptChunk(fileID, 1, payload); err == nil && bytes.Equal(decrypted, plain1) {
+			return 1
+		}
+		t.Fatalf("uploaded payload does not match any expected chunk")
+		return -1
+	}
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/sendDocument"):
+			mr, err := r.MultipartReader()
+			if err != nil {
+				t.Fatalf("multipart reader: %v", err)
+			}
+
+			var uploadedChunk []byte
+			for {
+				part, err := mr.NextPart()
+				if err == io.EOF {
+					break
+				}
+				if err != nil {
+					t.Fatalf("next multipart part: %v", err)
+				}
+				if part.FormName() == "document" {
+					uploadedChunk, err = io.ReadAll(part)
+					if err != nil {
+						t.Fatalf("read uploaded chunk: %v", err)
+					}
+				}
+				part.Close()
+			}
+
+			pos := detectPosition(uploadedChunk)
+
+			mu.Lock()
+			attemptsByPos[pos]++
+			attempt := attemptsByPos[pos]
+			mu.Unlock()
+
+			if pos == 1 && attempt == 1 {
+				w.WriteHeader(http.StatusBadGateway)
+				_, _ = w.Write([]byte(`temporary failure`))
+				return
+			}
+
+			fileKey := fmt.Sprintf("TG_FILE_%d", pos)
+			mu.Lock()
+			uploadedByFileID[fileKey] = append([]byte(nil), uploadedChunk...)
+			mu.Unlock()
+
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(fmt.Sprintf(`{"ok":true,"result":{"message_id":%d,"document":{"file_id":"%s"}}}`, 100+pos, fileKey)))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=TG_FILE_0"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk0.bin"}}`))
+		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=TG_FILE_1"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk1.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"):
+			mu.Lock()
+			payload := append([]byte(nil), uploadedByFileID["TG_FILE_0"]...)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk1.bin"):
+			mu.Lock()
+			payload := append([]byte(nil), uploadedByFileID["TG_FILE_1"]...)
+			mu.Unlock()
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(payload)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		filesRepo:    repository.NewFilesRepoWithDB(mock),
+		storagesRepo: repository.NewStoragesRepoWithDB(mock),
+		scheduler:    NewWorkerSchedulerWithRepo(&fakeManagerSchedulerRepo{}, 1),
+		tgClient:     telegram.NewClient(srv.URL),
+		chunkCipher:  cipher,
+	}
+
+	progress := &UploadProgress{TotalBytes: totalSize}
+	reader := io.MultiReader(bytes.NewReader(plain0), bytes.NewReader(plain1))
+	err = m.Upload(context.Background(), &domain.File{ID: fileID, Path: "multi.bin", Size: totalSize, StorageID: storageID}, reader, progress)
+	if err != nil {
+		t.Fatalf("upload failed: %v", err)
+	}
+
+	mu.Lock()
+	chunk0Attempts := attemptsByPos[0]
+	chunk1Attempts := attemptsByPos[1]
+	mu.Unlock()
+
+	if chunk0Attempts != 1 {
+		t.Fatalf("expected chunk 0 to upload once, got %d attempts", chunk0Attempts)
+	}
+	if chunk1Attempts != 2 {
+		t.Fatalf("expected chunk 1 to retry once, got %d attempts", chunk1Attempts)
+	}
+	if progress.UploadedChunks.Load() != 2 || progress.UploadedBytes.Load() != totalSize {
+		t.Fatalf("unexpected upload progress: chunks=%d bytes=%d", progress.UploadedChunks.Load(), progress.UploadedBytes.Load())
+	}
+	if progress.VerificationTotalChunks != 2 || progress.VerifiedChunks.Load() != 2 {
+		t.Fatalf("unexpected verification progress: total=%d verified=%d", progress.VerificationTotalChunks, progress.VerifiedChunks.Load())
 	}
 }
 
