@@ -72,31 +72,47 @@ func parseRateLimitError(resp *http.Response) *RateLimitError {
 	}
 }
 
+func buildUploadEnvelope(chatID int64, filename string) (prefix, suffix []byte, contentType string, err error) {
+	var buf bytes.Buffer
+	writer := multipart.NewWriter(&buf)
+
+	if err := writer.WriteField("chat_id", strconv.FormatInt(chatID, 10)); err != nil {
+		return nil, nil, "", fmt.Errorf("writing chat_id field: %w", err)
+	}
+	if _, err := writer.CreateFormFile("document", filename); err != nil {
+		return nil, nil, "", fmt.Errorf("creating form file: %w", err)
+	}
+
+	contentType = writer.FormDataContentType()
+	prefixLen := buf.Len()
+	if err := writer.Close(); err != nil {
+		return nil, nil, "", fmt.Errorf("closing multipart writer: %w", err)
+	}
+
+	all := buf.Bytes()
+	prefix = append([]byte(nil), all[:prefixLen]...)
+	suffix = append([]byte(nil), all[prefixLen:]...)
+	return prefix, suffix, contentType, nil
+}
+
 // Upload sends a file to a Telegram channel via sendDocument.
 // Automatically retries on 429 (Too Many Requests) using the retry_after value.
 func (c *Client) Upload(token string, chatID int64, data []byte, filename string) (*UploadResult, error) {
 	convertedChatID := convertChatID(chatID)
+	prefix, suffix, contentType, err := buildUploadEnvelope(convertedChatID, filename)
+	if err != nil {
+		return nil, err
+	}
 
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		var body bytes.Buffer
-		writer := multipart.NewWriter(&body)
-		_ = writer.WriteField("chat_id", strconv.FormatInt(convertedChatID, 10))
-
-		part, err := writer.CreateFormFile("document", filename)
-		if err != nil {
-			return nil, fmt.Errorf("creating form file: %w", err)
-		}
-		if _, err := part.Write(data); err != nil {
-			return nil, fmt.Errorf("writing file data: %w", err)
-		}
-		writer.Close()
-
 		apiURL := fmt.Sprintf("%s/bot%s/sendDocument", c.baseURL, token)
-		req, err := http.NewRequest("POST", apiURL, &body)
+		body := io.MultiReader(bytes.NewReader(prefix), bytes.NewReader(data), bytes.NewReader(suffix))
+		req, err := http.NewRequest("POST", apiURL, body)
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
 		}
-		req.Header.Set("Content-Type", writer.FormDataContentType())
+		req.Header.Set("Content-Type", contentType)
+		req.ContentLength = int64(len(prefix) + len(data) + len(suffix))
 
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
