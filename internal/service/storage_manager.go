@@ -26,6 +26,7 @@ const (
 	maxTelegramGetFileBytes = 20 * 1024 * 1024
 	uploadChunkSafetyMargin = 64 * 1024 // keep encrypted chunk comfortably below 20MB
 	uploadChunkSize         = maxTelegramGetFileBytes - uploadChunkSafetyMargin
+	uploadChunkMaxAttempts  = 3
 )
 
 type StorageManager struct {
@@ -323,6 +324,51 @@ type uploadedChunkResult struct {
 	PlainHash         [sha256.Size]byte
 }
 
+func shouldRetryChunkUpload(ctx context.Context, err error) bool {
+	if err == nil {
+		return false
+	}
+	return !contextAborted(ctx, err)
+}
+
+func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.File, storage *domain.Storage, position int16, chunkData []byte, plainHash [sha256.Size]byte) (uploadedChunkResult, error) {
+	encryptedChunkData, err := m.chunkCipher.EncryptChunk(file.ID, position, chunkData)
+	if err != nil {
+		return uploadedChunkResult{}, fmt.Errorf("encrypting chunk %d: %w", position, err)
+	}
+	if err := validateEncryptedChunkSize(encryptedChunkData); err != nil {
+		return uploadedChunkResult{}, fmt.Errorf("validating encrypted chunk %d size: %w", position, err)
+	}
+
+	filename := telegram.GenerateChunkFilename(file.ID, int(position))
+	for attempt := 1; attempt <= uploadChunkMaxAttempts; attempt++ {
+		wt, err := m.scheduler.GetToken(ctx, storage.ID)
+		if err != nil {
+			return uploadedChunkResult{}, fmt.Errorf("getting token for chunk %d: %w", position, err)
+		}
+
+		log.Printf("[upload] chunk %d of file=%s via worker=%s chat=%s attempt=%d/%d", position, file.Path, wt.Name, storage.Name, attempt, uploadChunkMaxAttempts)
+
+		result, err := m.tgClient.Upload(wt.Token, storage.ChatID, encryptedChunkData, filename)
+		if err == nil {
+			return uploadedChunkResult{
+				TelegramFileID:    result.FileID,
+				TelegramMessageID: result.MessageID,
+				Position:          position,
+				PlainHash:         plainHash,
+			}, nil
+		}
+
+		if !shouldRetryChunkUpload(ctx, err) || attempt == uploadChunkMaxAttempts {
+			return uploadedChunkResult{}, fmt.Errorf("uploading chunk %d: %w", position, err)
+		}
+
+		log.Printf("[upload] warning: chunk %d of file=%s attempt=%d/%d failed via worker=%s, retrying: %v", position, file.Path, attempt, uploadChunkMaxAttempts, wt.Name, err)
+	}
+
+	return uploadedChunkResult{}, fmt.Errorf("uploading chunk %d: exhausted retries", position)
+}
+
 // Upload reads from reader chunk by chunk (streaming), uploads to Telegram in parallel,
 // and records chunk metadata in the DB. Never holds the full file in memory.
 func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
@@ -412,34 +458,13 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		position++
 
 		g.Go(func() error {
-			wt, err := m.scheduler.GetToken(gctx, storage.ID)
+			result, err := m.uploadChunkWithRetry(gctx, file, storage, pos, chunkData, plainHash)
 			if err != nil {
-				return fmt.Errorf("getting token for chunk %d: %w", pos, err)
-			}
-
-			log.Printf("[upload] chunk %d of file=%s via worker=%s chat=%s", pos, file.Path, wt.Name, storage.Name)
-
-			encryptedChunkData, err := m.chunkCipher.EncryptChunk(file.ID, pos, chunkData)
-			if err != nil {
-				return fmt.Errorf("encrypting chunk %d: %w", pos, err)
-			}
-			if err := validateEncryptedChunkSize(encryptedChunkData); err != nil {
-				return fmt.Errorf("validating encrypted chunk %d size: %w", pos, err)
-			}
-
-			filename := telegram.GenerateChunkFilename(file.ID, int(pos))
-			result, err := m.tgClient.Upload(wt.Token, storage.ChatID, encryptedChunkData, filename)
-			if err != nil {
-				return fmt.Errorf("uploading chunk %d: %w", pos, err)
+				return err
 			}
 
 			mu.Lock()
-			results = append(results, uploadedChunkResult{
-				TelegramFileID:    result.FileID,
-				TelegramMessageID: result.MessageID,
-				Position:          pos,
-				PlainHash:         plainHash,
-			})
+			results = append(results, result)
 			mu.Unlock()
 
 			if progress != nil {
