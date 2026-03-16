@@ -79,7 +79,6 @@ func TestStorageWorkersRepoMutationsAndScheduling(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM storage_workers_usages").WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectQuery("WITH available_workers AS").
 		WithArgs(storageID, 10).
 		WillReturnRows(pgxmock.NewRows([]string{"token", "name"}).AddRow("token", "w1"))
@@ -130,7 +129,6 @@ func TestStorageWorkersRepoErrorBranches(t *testing.T) {
 	}
 
 	mock.ExpectBegin()
-	mock.ExpectExec("DELETE FROM storage_workers_usages").WillReturnResult(pgxmock.NewResult("DELETE", 1))
 	mock.ExpectQuery("WITH available_workers AS").
 		WithArgs(storageID, 10).
 		WillReturnError(pgx.ErrNoRows)

@@ -9,6 +9,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestUploadReturnsAPIErrorWhenNotOK(t *testing.T) {
@@ -147,6 +148,27 @@ func TestBuildUploadEnvelopeProducesMultipartPayload(t *testing.T) {
 	}
 	if string(document) != "payload" {
 		t.Fatalf("document = %q, want payload", string(document))
+	}
+}
+
+func TestNewHTTPClientConfiguresReusableTransport(t *testing.T) {
+	client := newHTTPClient()
+	if client.Timeout != 10*time.Minute {
+		t.Fatalf("timeout = %s, want 10m", client.Timeout)
+	}
+
+	transport, ok := client.Transport.(*http.Transport)
+	if !ok {
+		t.Fatalf("expected *http.Transport, got %T", client.Transport)
+	}
+	if transport.MaxIdleConns != 100 {
+		t.Fatalf("MaxIdleConns = %d, want 100", transport.MaxIdleConns)
+	}
+	if transport.MaxIdleConnsPerHost != 100 {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want 100", transport.MaxIdleConnsPerHost)
+	}
+	if !transport.ForceAttemptHTTP2 {
+		t.Fatalf("expected ForceAttemptHTTP2 to be enabled")
 	}
 }
 

@@ -3,6 +3,8 @@ package repository
 import (
 	"context"
 	"errors"
+	"log"
+	"sync"
 	"time"
 
 	"github.com/google/uuid"
@@ -14,8 +16,16 @@ import (
 )
 
 type StorageWorkersRepo struct {
-	pool storageWorkersDB
+	pool                storageWorkersDB
+	usageCleanupMu      sync.Mutex
+	lastUsageCleanup    time.Time
+	usageCleanupRunning bool
 }
+
+const (
+	storageWorkerUsageWindow          = time.Minute
+	storageWorkerUsageCleanupInterval = 5 * time.Minute
+)
 
 func NewStorageWorkersRepo(pool *pgxpool.Pool) *StorageWorkersRepo {
 	return NewStorageWorkersRepoWithDB(pool)
@@ -29,7 +39,10 @@ type storageWorkersDB interface {
 }
 
 func NewStorageWorkersRepoWithDB(pool storageWorkersDB) *StorageWorkersRepo {
-	return &StorageWorkersRepo{pool: pool}
+	return &StorageWorkersRepo{
+		pool:             pool,
+		lastUsageCleanup: time.Now(),
+	}
 }
 
 func (r *StorageWorkersRepo) Create(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
@@ -140,6 +153,32 @@ type WorkerToken struct {
 	Name  string
 }
 
+func (r *StorageWorkersRepo) scheduleUsageCleanup() {
+	r.usageCleanupMu.Lock()
+	if r.usageCleanupRunning || time.Since(r.lastUsageCleanup) < storageWorkerUsageCleanupInterval {
+		r.usageCleanupMu.Unlock()
+		return
+	}
+	r.usageCleanupRunning = true
+	r.lastUsageCleanup = time.Now()
+	r.usageCleanupMu.Unlock()
+
+	go func() {
+		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer cancel()
+
+		if _, err := r.pool.Exec(ctx,
+			`DELETE FROM storage_workers_usages WHERE created_at < now() - interval '1 minute'`,
+		); err != nil {
+			log.Printf("[workers] warning: cleanup of expired worker usages failed: %v", err)
+		}
+
+		r.usageCleanupMu.Lock()
+		r.usageCleanupRunning = false
+		r.usageCleanupMu.Unlock()
+	}()
+}
+
 // GetToken atomically selects the least-loaded worker under the rate limit
 // and records a usage entry. Returns nil if no worker is available.
 func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, rateLimit int) (*WorkerToken, error) {
@@ -149,25 +188,19 @@ func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, 
 	}
 	defer tx.Rollback(ctx)
 
-	// Clean up old usage records (older than 1 minute)
-	_, err = tx.Exec(ctx,
-		`DELETE FROM storage_workers_usages WHERE created_at < now() - interval '1 minute'`,
-	)
-	if err != nil {
-		return nil, err
-	}
-
 	// Select least-loaded worker under rate limit and insert usage
 	var token, name string
 	err = tx.QueryRow(ctx,
 		`WITH available_workers AS (
 			SELECT sw.id, sw.name, sw.token, COUNT(swu.id) AS usage_count
 			FROM storage_workers sw
-			LEFT JOIN storage_workers_usages swu ON swu.worker_id = sw.id
+			LEFT JOIN storage_workers_usages swu
+				ON swu.worker_id = sw.id
+				AND swu.created_at >= now() - interval '1 minute'
 			WHERE sw.storage_id = $1 OR sw.storage_id IS NULL
 			GROUP BY sw.id, sw.name, sw.token
 			HAVING COUNT(swu.id) < $2
-			ORDER BY COUNT(swu.id) ASC
+			ORDER BY COUNT(swu.id) ASC, sw.id
 			LIMIT 1
 		),
 		inserted AS (
@@ -175,12 +208,15 @@ func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, 
 			SELECT id FROM available_workers
 			RETURNING worker_id
 		)
-		SELECT aw.token, aw.name FROM available_workers aw`,
+		SELECT aw.token, aw.name
+		FROM available_workers aw
+		JOIN inserted i ON i.worker_id = aw.id`,
 		storageID, rateLimit,
 	).Scan(&token, &name)
 
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
+			r.scheduleUsageCleanup()
 			return nil, nil
 		}
 		return nil, err
@@ -189,6 +225,7 @@ func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, 
 	if err := tx.Commit(ctx); err != nil {
 		return nil, err
 	}
+	r.scheduleUsageCleanup()
 	return &WorkerToken{Token: token, Name: name}, nil
 }
 
@@ -210,7 +247,7 @@ func (r *StorageWorkersRepo) NextAvailableIn(ctx context.Context, storageID uuid
 		return 0, err
 	}
 	// The slot opens when this entry is older than 1 minute
-	available := earliest.Add(time.Minute).Sub(time.Now())
+	available := earliest.Add(storageWorkerUsageWindow).Sub(time.Now())
 	if available < 0 {
 		return 0, nil
 	}
