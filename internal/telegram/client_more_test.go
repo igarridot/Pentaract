@@ -2,6 +2,9 @@ package telegram
 
 import (
 	"context"
+	"io"
+	"mime"
+	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -95,6 +98,55 @@ func TestUploadDecodeError(t *testing.T) {
 	_, err := c.Upload("TOKEN", 1, []byte("x"), "a.bin")
 	if err == nil || !strings.Contains(err.Error(), "decoding response") {
 		t.Fatalf("expected decoding response error, got: %v", err)
+	}
+}
+
+func TestBuildUploadEnvelopeProducesMultipartPayload(t *testing.T) {
+	prefix, suffix, contentType, err := buildUploadEnvelope(-100123, "chunk.bin")
+	if err != nil {
+		t.Fatalf("buildUploadEnvelope error: %v", err)
+	}
+
+	mediaType, params, err := mime.ParseMediaType(contentType)
+	if err != nil {
+		t.Fatalf("parse media type: %v", err)
+	}
+	if mediaType != "multipart/form-data" {
+		t.Fatalf("media type = %q, want multipart/form-data", mediaType)
+	}
+
+	payload := append(append([]byte(nil), prefix...), []byte("payload")...)
+	payload = append(payload, suffix...)
+	reader := multipart.NewReader(strings.NewReader(string(payload)), params["boundary"])
+
+	fields := map[string]string{}
+	var document []byte
+	for {
+		part, err := reader.NextPart()
+		if err == io.EOF {
+			break
+		}
+		if err != nil {
+			t.Fatalf("next part: %v", err)
+		}
+
+		data, err := io.ReadAll(part)
+		if err != nil {
+			t.Fatalf("read part: %v", err)
+		}
+
+		if part.FormName() == "document" {
+			document = data
+		} else {
+			fields[part.FormName()] = string(data)
+		}
+	}
+
+	if fields["chat_id"] != "-100123" {
+		t.Fatalf("chat_id = %q, want -100123", fields["chat_id"])
+	}
+	if string(document) != "payload" {
+		t.Fatalf("document = %q, want payload", string(document))
 	}
 }
 

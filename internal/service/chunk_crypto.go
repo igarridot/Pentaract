@@ -63,11 +63,10 @@ func (c *ChunkCipher) EncryptChunk(fileID uuid.UUID, position int16, plain []byt
 		return nil, fmt.Errorf("generating nonce: %w", err)
 	}
 
-	ciphertext := c.aead.Seal(nil, nonce, plain, c.aad(fileID, position))
-	out := make([]byte, 0, len(chunkCipherMagic)+len(nonce)+len(ciphertext))
+	out := make([]byte, 0, len(chunkCipherMagic)+len(nonce)+len(plain)+c.aead.Overhead())
 	out = append(out, chunkCipherMagic...)
 	out = append(out, nonce...)
-	out = append(out, ciphertext...)
+	out = c.aead.Seal(out, nonce, plain, c.aad(fileID, position))
 	return out, nil
 }
 

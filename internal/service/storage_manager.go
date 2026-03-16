@@ -27,7 +27,14 @@ const (
 	uploadChunkSafetyMargin = 64 * 1024 // keep encrypted chunk comfortably below 20MB
 	uploadChunkSize         = maxTelegramGetFileBytes - uploadChunkSafetyMargin
 	uploadChunkMaxAttempts  = 3
+	uploadChunkParallelism  = 10
 )
+
+var uploadChunkBufferPool = sync.Pool{
+	New: func() any {
+		return make([]byte, uploadChunkSize)
+	},
+}
 
 type StorageManager struct {
 	filesRepo          *repository.FilesRepo
@@ -415,7 +422,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 	}
 
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(5)
+	g.SetLimit(uploadChunkParallelism)
 
 	// Close the reader when context is cancelled so io.ReadFull unblocks.
 	cancelled := make(chan struct{})
@@ -443,22 +450,27 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			break
 		}
 
-		buf := make([]byte, uploadChunkSize)
-		n, readErr := io.ReadFull(reader, buf)
+		uploadBuf := uploadChunkBufferPool.Get().([]byte)
+		n, readErr := io.ReadFull(reader, uploadBuf)
 		if n == 0 && readErr != nil {
+			uploadChunkBufferPool.Put(uploadBuf)
 			// Check if the read failed due to cancellation
 			if ctx.Err() != nil {
 				readCancelled = true
 			}
 			break
 		}
-		chunkData := buf[:n]
+		chunkData := uploadBuf[:n]
 		pos := position
 		plainHash := sha256.Sum256(chunkData)
 		position++
+		uploadBufRef := uploadBuf
+		chunkDataRef := chunkData
 
 		g.Go(func() error {
-			result, err := m.uploadChunkWithRetry(gctx, file, storage, pos, chunkData, plainHash)
+			defer uploadChunkBufferPool.Put(uploadBufRef)
+
+			result, err := m.uploadChunkWithRetry(gctx, file, storage, pos, chunkDataRef, plainHash)
 			if err != nil {
 				return err
 			}
