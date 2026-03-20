@@ -43,6 +43,7 @@ import {
   getBulkOperationMetrics,
   getItemPath,
   getMediaType,
+  runUploadPipeline,
 } from './operations'
 
 export default function Files() {
@@ -308,10 +309,42 @@ export default function Files() {
     }
   }
 
-  const uploadSingleFile = async (file, targetPath, onConflict = 'keep_both', providedUploadId = createOperationId()) => {
+  const applyUploadTerminalState = useCallback((uploadId, filename, status) => {
+    if (status === 'done') {
+      markBulkTransferTerminal('upload', uploadId, 'done')
+      releaseUploadTracking(uploadId)
+      uploadCompletionRegistryRef.current.settle(uploadId, 'done')
+      addAlert('File uploaded', 'success')
+      loadTree()
+      scheduleUploadStateRemoval(uploadId, 2000)
+      return
+    }
+
+    if (status === 'error') {
+      markBulkTransferTerminal('upload', uploadId, 'error')
+      releaseUploadTracking(uploadId)
+      uploadCompletionRegistryRef.current.settle(uploadId, 'error')
+      loadTree()
+      addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
+      scheduleUploadStateRemoval(uploadId, 3000)
+      return
+    }
+
+    if (status === 'skipped') {
+      markBulkTransferTerminal('upload', uploadId, 'skipped')
+      releaseUploadTracking(uploadId)
+      uploadCompletionRegistryRef.current.settle(uploadId, 'skipped')
+      loadTree()
+      addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
+      scheduleUploadStateRemoval(uploadId, 1500)
+    }
+  }, [addAlert, loadTree, markBulkTransferTerminal, releaseUploadTracking, scheduleUploadStateRemoval])
+
+  const launchUpload = (file, targetPath, onConflict = 'keep_both', providedUploadId = createOperationId()) => {
     const filename = file.name
     const uploadId = providedUploadId
     const completionPromise = uploadCompletionRegistryRef.current.waitFor(uploadId)
+    const terminalPromise = completionPromise.then((status) => status)
     setUploadStates((prev) => [...prev, {
       id: uploadId,
       filename,
@@ -338,53 +371,42 @@ export default function Files() {
         status: data.status,
         workersStatus: data.workers_status ?? prev?.workersStatus ?? 'active',
       }))
-        if (data.status === 'done') {
-          markBulkTransferTerminal('upload', uploadId, 'done')
-          releaseUploadTracking(uploadId)
-          uploadCompletionRegistryRef.current.settle(uploadId, 'done')
-          addAlert('File uploaded', 'success')
-          loadTree()
-          scheduleUploadStateRemoval(uploadId, 2000)
-        }
-        if (data.status === 'error') {
-          markBulkTransferTerminal('upload', uploadId, 'error')
-          releaseUploadTracking(uploadId)
-          uploadCompletionRegistryRef.current.settle(uploadId, 'error')
-          loadTree()
-          addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
-          scheduleUploadStateRemoval(uploadId, 3000)
-        }
-        if (data.status === 'skipped') {
-          markBulkTransferTerminal('upload', uploadId, 'skipped')
-          releaseUploadTracking(uploadId)
-          uploadCompletionRegistryRef.current.settle(uploadId, 'skipped')
-          loadTree()
-          addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
-          scheduleUploadStateRemoval(uploadId, 1500)
-        }
+      applyUploadTerminalState(uploadId, filename, data.status)
     })
     uploadProgressCancelsRef.current.set(uploadId, cancel)
     const controller = new AbortController()
     uploadAbortControllersRef.current.set(uploadId, controller)
 
-    try {
-      await API.files.upload(storageId, targetPath.replace(/\/+$/, ''), file, uploadId, { signal: controller.signal, onConflict })
-      await completionPromise
-    } catch (err) {
-      if (err?.name !== 'AbortError') {
-        markBulkTransferTerminal('upload', uploadId, 'error')
-        updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
-        uploadCompletionRegistryRef.current.settle(uploadId, 'error')
-        addAlert(`Upload interrupted: ${err.message}`, 'error', { persistent: true })
-      } else {
-        markBulkTransferTerminal('upload', uploadId, 'cancelled')
-        uploadCompletionRegistryRef.current.settle(uploadId, 'cancelled')
-      }
-      releaseUploadTracking(uploadId)
-      loadTree()
-      scheduleUploadStateRemoval(uploadId, 1500)
+    const requestPromise = API.files.upload(
+      storageId,
+      targetPath.replace(/\/+$/, ''),
+      file,
+      uploadId,
+      { signal: controller.signal, onConflict },
+    ).then(
+      () => 'sent',
+      (err) => {
+        if (err?.name !== 'AbortError') {
+          markBulkTransferTerminal('upload', uploadId, 'error')
+          updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
+          uploadCompletionRegistryRef.current.settle(uploadId, 'error')
+          addAlert(`Upload interrupted: ${err.message}`, 'error', { persistent: true })
+        } else {
+          markBulkTransferTerminal('upload', uploadId, 'cancelled')
+          uploadCompletionRegistryRef.current.settle(uploadId, 'cancelled')
+        }
+        releaseUploadTracking(uploadId)
+        loadTree()
+        scheduleUploadStateRemoval(uploadId, 1500)
+        return err?.name === 'AbortError' ? 'cancelled' : 'error'
+      },
+    )
+
+    return {
+      uploadId,
+      requestPromise,
+      completionPromise: terminalPromise,
     }
-    return uploadId
   }
 
   const askUploadConflictDecision = useCallback((filename, targetPath) => (
@@ -467,16 +489,17 @@ export default function Files() {
     })
 
     try {
-      for (const entry of entriesToUpload) {
-        if (bulkCancelledRef.current) break
+      await runUploadPipeline(entriesToUpload, async (entry) => {
+        if (bulkCancelledRef.current) return null
+
         const uploadId = createOperationId()
         if (showBulkProgress) registerBulkTransfer('upload', uploadId)
-        // Upload sequentially to preserve stable progress/cancel behavior.
-        // This also avoids opening too many concurrent requests at once.
-        // eslint-disable-next-line no-await-in-loop
-        await uploadSingleFile(entry.file, entry.targetPath, defaultConflictMode, uploadId)
+
+        const transfer = launchUpload(entry.file, entry.targetPath, defaultConflictMode, uploadId)
         dirFileNamesCacheRef.current.delete(normalizeUploadPath(entry.targetPath))
-      }
+        return transfer
+      })
+
       if (showBulkProgress) {
         finalizeBulkTransferLaunch('upload', bulkCancelledRef.current)
       }
