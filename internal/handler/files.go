@@ -605,31 +605,19 @@ func (h *FilesHandler) LocalUpload(w http.ResponseWriter, r *http.Request) {
 	targetPath := pathutil.TrimTrailingSlash(req.TargetPath)
 	fullPath := pathutil.Join(targetPath, sourceFile.Name)
 
-	pr, pw := io.Pipe()
-	copyDone := make(chan struct{})
-
-	go func() {
-		defer close(copyDone)
-		_, err := io.Copy(pw, sourceFile.Reader)
-		sourceFile.Reader.Close()
-		pw.CloseWithError(err)
-	}()
-
 	uploadID := h.startTrackedUpload(
 		user.ID,
 		storageID,
 		req.UploadID,
 		fullPath,
 		sourceFile.Size,
-		pr,
+		sourceFile.Reader,
 		req.OnConflict,
+		func() { _ = sourceFile.Reader.Close() },
 		nil,
-		func(error) { _ = pr.Close() },
 		fmt.Sprintf("local file=%s source=%s", fullPath, sourceFile.Path),
 	)
 	writeAcceptedUploadResponse(w, uploadID)
-
-	<-copyDone
 }
 
 // CancelUpload cancels an in-flight upload and cleans up.

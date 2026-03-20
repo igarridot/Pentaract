@@ -711,64 +711,6 @@ func TestFilesHandlerLocalUploadSuccess(t *testing.T) {
 	}
 }
 
-func TestFilesHandlerLocalUploadWaitsForMountedFileToDrain(t *testing.T) {
-	releaseRead := make(chan struct{})
-	uploadStarted := make(chan struct{})
-	returned := make(chan struct{})
-
-	storageID := uuid.New().String()
-	h := NewFilesHandlerWithServiceAndSource(&mockFilesService{
-		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
-			close(uploadStarted)
-			<-releaseRead
-			if _, err := io.ReadAll(reader); err != nil {
-				t.Fatalf("reading upload body: %v", err)
-			}
-			return &domain.File{ID: uuid.New(), Path: path}, false, nil
-		},
-	}, &mockLocalSource{
-		openFileFn: func(path string) (localfs.File, error) {
-			return localfs.File{
-				Path:   path,
-				Name:   "report.txt",
-				Size:   5,
-				Reader: io.NopCloser(strings.NewReader("hello")),
-			}, nil
-		},
-	})
-
-	req := makeFilesReq(http.MethodPost, "/", `{"source_path":"source/report.txt","target_path":"archive","upload_id":"local-2"}`, storageID, "")
-	w := httptest.NewRecorder()
-	go func() {
-		h.LocalUpload(w, req)
-		close(returned)
-	}()
-
-	select {
-	case <-uploadStarted:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("local upload service was not called")
-	}
-
-	select {
-	case <-returned:
-		t.Fatalf("local upload returned before mounted file was drained")
-	case <-time.After(100 * time.Millisecond):
-	}
-
-	close(releaseRead)
-
-	select {
-	case <-returned:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("local upload did not return after mounted file drained")
-	}
-
-	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), `"upload_id":"local-2"`) {
-		t.Fatalf("unexpected local upload response: code=%d body=%s", w.Code, w.Body.String())
-	}
-}
-
 func TestFilesHandlerLocalUploadValidation(t *testing.T) {
 	h := NewFilesHandlerWithServiceAndSource(&mockFilesService{}, &mockLocalSource{})
 	storageID := uuid.New().String()
