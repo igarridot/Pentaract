@@ -106,9 +106,45 @@ func TestSourceOpenFileRejectsTraversalAndDirectories(t *testing.T) {
 	}
 }
 
+func TestSourceListDirRejectsSymlinkEscapes(t *testing.T) {
+	source := newSourceWithEscapingSymlink(t)
+	if _, err := source.ListDir("escape"); err == nil {
+		t.Fatalf("expected symlinked directory outside root to fail")
+	}
+}
+
+func TestSourceExpandSelectionRejectsSymlinkEscapes(t *testing.T) {
+	source := newSourceWithEscapingSymlink(t)
+	if _, err := source.ExpandSelection([]string{"escape/secret.txt"}); err == nil {
+		t.Fatalf("expected symlinked path outside root to fail")
+	}
+}
+
+func TestSourceOpenFileRejectsSymlinkEscapes(t *testing.T) {
+	source := newSourceWithEscapingSymlink(t)
+	if _, err := source.OpenFile("escape/secret.txt"); err == nil {
+		t.Fatalf("expected symlinked path outside root to fail")
+	}
+}
+
 func TestSourceRequiresConfiguredRoot(t *testing.T) {
 	source := New("")
 	if _, err := source.ListDir(""); err == nil {
 		t.Fatalf("expected missing root to fail")
 	}
+}
+
+func newSourceWithEscapingSymlink(t *testing.T) *Source {
+	t.Helper()
+
+	root := t.TempDir()
+	outside := t.TempDir()
+	if err := os.WriteFile(filepath.Join(outside, "secret.txt"), []byte("secret"), 0o600); err != nil {
+		t.Fatalf("write secret.txt: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(root, "escape")); err != nil {
+		t.Fatalf("symlink escape: %v", err)
+	}
+
+	return New(root)
 }

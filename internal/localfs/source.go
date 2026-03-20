@@ -1,6 +1,7 @@
 package localfs
 
 import (
+	"errors"
 	"io"
 	"io/fs"
 	"os"
@@ -23,22 +24,42 @@ type Source struct {
 	root string
 }
 
+type rootedReadCloser struct {
+	file *os.File
+	root *os.Root
+}
+
 func New(root string) *Source {
 	return &Source{root: root}
 }
 
+func (r *rootedReadCloser) Read(p []byte) (int, error) {
+	return r.file.Read(p)
+}
+
+func (r *rootedReadCloser) Close() error {
+	return errors.Join(r.file.Close(), r.root.Close())
+}
+
 func (s *Source) ListDir(relPath string) ([]domain.FSElement, error) {
-	root, err := s.configuredRoot()
+	root, err := s.openRoot()
+	if err != nil {
+		return nil, err
+	}
+	defer root.Close()
+
+	cleanPath, rootPath, err := resolvePath(relPath, true)
 	if err != nil {
 		return nil, err
 	}
 
-	cleanPath, absPath, err := resolvePath(root, relPath, true)
+	dir, err := root.Open(rootPath)
 	if err != nil {
-		return nil, err
+		return nil, mapPathError(err)
 	}
+	defer dir.Close()
 
-	info, err := os.Stat(absPath)
+	info, err := dir.Stat()
 	if err != nil {
 		return nil, mapPathError(err)
 	}
@@ -46,7 +67,7 @@ func (s *Source) ListDir(relPath string) ([]domain.FSElement, error) {
 		return nil, domain.ErrBadRequest("local path is not a directory")
 	}
 
-	entries, err := os.ReadDir(absPath)
+	entries, err := dir.ReadDir(-1)
 	if err != nil {
 		return nil, mapPathError(err)
 	}
@@ -96,22 +117,23 @@ func (s *Source) ListDir(relPath string) ([]domain.FSElement, error) {
 }
 
 func (s *Source) ExpandSelection(paths []string) ([]domain.FSElement, error) {
-	root, err := s.configuredRoot()
+	root, err := s.openRoot()
 	if err != nil {
 		return nil, err
 	}
+	defer root.Close()
 	if len(paths) == 0 {
 		return nil, domain.ErrBadRequest("paths are required")
 	}
 
 	seen := make(map[string]domain.FSElement)
 	for _, selected := range paths {
-		cleanPath, absPath, err := resolvePath(root, selected, false)
+		cleanPath, rootPath, err := resolvePath(selected, false)
 		if err != nil {
 			return nil, err
 		}
 
-		info, err := os.Lstat(absPath)
+		info, err := root.Lstat(rootPath)
 		if err != nil {
 			return nil, mapPathError(err)
 		}
@@ -121,23 +143,27 @@ func (s *Source) ExpandSelection(paths []string) ([]domain.FSElement, error) {
 
 		switch {
 		case info.IsDir():
-			err = filepath.WalkDir(absPath, func(walkPath string, entry fs.DirEntry, walkErr error) error {
+			dirRoot, err := root.OpenRoot(rootPath)
+			if err != nil {
+				return nil, mapPathError(err)
+			}
+			err = fs.WalkDir(dirRoot.FS(), ".", func(walkPath string, entry fs.DirEntry, walkErr error) error {
 				if walkErr != nil {
 					return walkErr
 				}
-				if walkPath == absPath {
+				if walkPath == "." {
 					return nil
 				}
 				name := entry.Name()
 				if shouldSkipName(name) {
 					if entry.IsDir() {
-						return filepath.SkipDir
+						return fs.SkipDir
 					}
 					return nil
 				}
 				if entry.Type()&fs.ModeSymlink != 0 {
 					if entry.IsDir() {
-						return filepath.SkipDir
+						return fs.SkipDir
 					}
 					return nil
 				}
@@ -149,11 +175,7 @@ func (s *Source) ExpandSelection(paths []string) ([]domain.FSElement, error) {
 				if err != nil {
 					return err
 				}
-				rel, err := filepath.Rel(root, walkPath)
-				if err != nil {
-					return err
-				}
-				rel = filepath.ToSlash(rel)
+				rel := joinPath(cleanPath, walkPath)
 				seen[rel] = domain.FSElement{
 					Path:   rel,
 					Name:   path.Base(rel),
@@ -162,8 +184,12 @@ func (s *Source) ExpandSelection(paths []string) ([]domain.FSElement, error) {
 				}
 				return nil
 			})
+			closeErr := dirRoot.Close()
+			if err == nil {
+				err = closeErr
+			}
 			if err != nil {
-				return nil, err
+				return nil, mapPathError(err)
 			}
 		case info.Mode().IsRegular():
 			seen[cleanPath] = domain.FSElement{
@@ -190,12 +216,18 @@ func (s *Source) ExpandSelection(paths []string) ([]domain.FSElement, error) {
 }
 
 func (s *Source) OpenFile(relPath string) (File, error) {
-	root, err := s.configuredRoot()
+	root, err := s.openRoot()
 	if err != nil {
 		return File{}, err
 	}
+	closeRoot := true
+	defer func() {
+		if closeRoot {
+			_ = root.Close()
+		}
+	}()
 
-	cleanPath, absPath, err := resolvePath(root, relPath, false)
+	cleanPath, rootPath, err := resolvePath(relPath, false)
 	if err != nil {
 		return File{}, err
 	}
@@ -203,7 +235,7 @@ func (s *Source) OpenFile(relPath string) (File, error) {
 		return File{}, domain.ErrBadRequest("source_path must reference a regular file")
 	}
 
-	info, err := os.Lstat(absPath)
+	info, err := root.Lstat(rootPath)
 	if err != nil {
 		return File{}, mapPathError(err)
 	}
@@ -211,16 +243,17 @@ func (s *Source) OpenFile(relPath string) (File, error) {
 		return File{}, domain.ErrBadRequest("source_path must reference a regular file")
 	}
 
-	file, err := os.Open(absPath)
+	file, err := root.Open(rootPath)
 	if err != nil {
 		return File{}, mapPathError(err)
 	}
+	closeRoot = false
 
 	return File{
 		Path:   cleanPath,
 		Name:   path.Base(cleanPath),
 		Size:   info.Size(),
-		Reader: file,
+		Reader: &rootedReadCloser{file: file, root: root},
 	}, nil
 }
 
@@ -232,23 +265,32 @@ func (s *Source) configuredRoot() (string, error) {
 	return filepath.Clean(root), nil
 }
 
-func resolvePath(root, relPath string, allowEmpty bool) (string, string, error) {
+func (s *Source) openRoot() (*os.Root, error) {
+	root, err := s.configuredRoot()
+	if err != nil {
+		return nil, err
+	}
+
+	openedRoot, err := os.OpenRoot(root)
+	if err != nil {
+		return nil, mapPathError(err)
+	}
+
+	return openedRoot, nil
+}
+
+func resolvePath(relPath string, allowEmpty bool) (string, string, error) {
 	cleanPath, err := cleanRelativePath(relPath, allowEmpty)
 	if err != nil {
 		return "", "", err
 	}
 
-	absPath := root
-	if cleanPath != "" {
-		absPath = filepath.Join(root, filepath.FromSlash(cleanPath))
-	}
-	absPath = filepath.Clean(absPath)
-
-	if absPath != root && !strings.HasPrefix(absPath, root+string(os.PathSeparator)) {
-		return "", "", domain.ErrBadRequest("invalid local path")
+	rootPath := cleanPath
+	if rootPath == "" {
+		rootPath = "."
 	}
 
-	return cleanPath, absPath, nil
+	return cleanPath, rootPath, nil
 }
 
 func cleanRelativePath(raw string, allowEmpty bool) (string, error) {
@@ -285,6 +327,10 @@ func shouldSkipName(name string) bool {
 func mapPathError(err error) error {
 	if os.IsNotExist(err) {
 		return domain.ErrNotFound("local path")
+	}
+	var pathErr *fs.PathError
+	if errors.As(err, &pathErr) && pathErr.Err != nil && pathErr.Err.Error() == "path escapes from parent" {
+		return domain.ErrBadRequest("invalid local path")
 	}
 	return err
 }
