@@ -95,6 +95,45 @@ test('files.upload accepts explicit on_conflict policy', async () => {
   await API.files.upload('s1', 'folder', f, 'up-1', { onConflict: 'skip' })
 })
 
+test('localFiles tree/expand/upload use the storage-scoped endpoints', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  const seen = []
+  globalThis.fetch = async (url, opts) => {
+    seen.push({ url, method: opts.method || 'GET', body: opts.body ? JSON.parse(opts.body) : null })
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      async text() {
+        return '{"ok":true}'
+      },
+    }
+  }
+
+  await API.localFiles.tree('s1', 'source/docs')
+  await API.localFiles.expand('s1', ['source/docs', 'source/a.txt'])
+  await API.localFiles.upload('s1', 'source/docs/a.txt', 'archive/docs', 'up-local-1', { onConflict: 'skip' })
+
+  assert.deepEqual(seen, [
+    { url: '/api/storages/s1/local_files/tree/source/docs', method: 'GET', body: null },
+    {
+      url: '/api/storages/s1/local_files/expand',
+      method: 'POST',
+      body: { paths: ['source/docs', 'source/a.txt'] },
+    },
+    {
+      url: '/api/storages/s1/local_files/upload',
+      method: 'POST',
+      body: {
+        source_path: 'source/docs/a.txt',
+        target_path: 'archive/docs',
+        upload_id: 'up-local-1',
+        on_conflict: 'skip',
+      },
+    },
+  ])
+})
+
 test('files.move sends old/new paths and forwards request options', async () => {
   globalThis.localStorage = makeStorage('tok')
   let gotSignal = false

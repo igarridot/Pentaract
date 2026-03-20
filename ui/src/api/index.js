@@ -172,6 +172,28 @@ const API = {
     subscribeDeleteProgress: (deleteId, onProgress) =>
       subscribeTransferProgress('delete_progress', 'delete_id', deleteId, onProgress),
   },
+
+  localFiles: {
+    tree: (storageId, path) =>
+      apiRequest(`/storages/${storageId}/local_files/tree/${path || ''}`),
+
+    expand: (storageId, paths) =>
+      apiRequest(`/storages/${storageId}/local_files/expand`, 'POST', { paths }),
+
+    upload: (storageId, sourcePath, targetPath, uploadId, options = {}) =>
+      apiRequest(
+        `/storages/${storageId}/local_files/upload`,
+        'POST',
+        {
+          source_path: sourcePath,
+          target_path: targetPath || '',
+          upload_id: uploadId,
+          on_conflict: options.onConflict || 'keep_both',
+        },
+        true,
+        options,
+      ),
+  },
 }
 
 export default API
