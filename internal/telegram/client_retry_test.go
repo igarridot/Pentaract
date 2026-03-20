@@ -265,20 +265,3 @@ func TestDownloadRetriesOnGetFileUnexpectedEOF(t *testing.T) {
 		t.Fatalf("expected retry success after getFile unexpected EOF, err=%v data=%q getFileAttempts=%d downloadAttempts=%d", err, string(data), getFileAttempts, downloadAttempts)
 	}
 }
-
-func TestTransientRetryDelay(t *testing.T) {
-	tests := []struct {
-		attempt int
-		want    time.Duration
-	}{
-		{attempt: 0, want: 250 * time.Millisecond},
-		{attempt: 1, want: 500 * time.Millisecond},
-		{attempt: 2, want: 750 * time.Millisecond},
-	}
-
-	for _, tc := range tests {
-		if got := transientRetryDelay(tc.attempt); got != tc.want {
-			t.Fatalf("transientRetryDelay(%d) = %s, want %s", tc.attempt, got, tc.want)
-		}
-	}
-}

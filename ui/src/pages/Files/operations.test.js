@@ -8,7 +8,6 @@ import {
   getItemPath,
   getMediaType,
   runUploadPipeline,
-  runSequentialUploadPipeline,
 } from './operations.js'
 
 function createDeferred() {
@@ -139,37 +138,6 @@ test('runUploadPipeline stops launching new uploads when startUpload returns nul
   await pipeline
 
   assert.deepEqual(started, ['f1', 'f2'])
-})
-
-test('runSequentialUploadPipeline waits for each upload to complete before starting the next one', async () => {
-  const events = []
-  const request1 = createDeferred()
-  const request2 = createDeferred()
-  const completion1 = createDeferred()
-  const completion2 = createDeferred()
-
-  const pipeline = runSequentialUploadPipeline(['f1', 'f2'], (item) => {
-    events.push(`start:${item}`)
-    if (item === 'f1') {
-      return { requestPromise: request1.promise, completionPromise: completion1.promise }
-    }
-    return { requestPromise: request2.promise, completionPromise: completion2.promise }
-  })
-
-  await flushAsyncWork()
-  assert.deepEqual(events, ['start:f1'])
-
-  request1.resolve('sent')
-  await flushAsyncWork()
-  assert.deepEqual(events, ['start:f1'])
-
-  completion1.resolve('done')
-  await flushAsyncWork()
-  assert.deepEqual(events, ['start:f1', 'start:f2'])
-
-  request2.resolve('sent')
-  completion2.resolve('done')
-  await pipeline
 })
 
 test('file operation helpers derive paths and media type consistently', () => {
