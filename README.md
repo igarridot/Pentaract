@@ -114,7 +114,6 @@ Useful targets:
 - `make dev-shell`
 - `make ui-install`
 - `make ui-build`
-- `make test-uploads`
 - `make mod-tidy`
 
 ## Testing and CI
@@ -126,16 +125,6 @@ Run backend + frontend tests in containers:
 ```bash
 make test
 ```
-
-Focused upload regression suite:
-
-```bash
-make test-uploads
-```
-
-Upload-specific strategy and coverage matrix:
-
-- [docs/upload-testing-strategy.md](/Users/ivan.garrido/learning-workspace/Pentaract/docs/upload-testing-strategy.md)
 
 ### GitHub Actions
 

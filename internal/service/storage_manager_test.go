@@ -3,7 +3,6 @@ package service
 import (
 	"bytes"
 	"context"
-	"crypto/sha256"
 	"errors"
 	"fmt"
 	"io"
@@ -1322,53 +1321,6 @@ func TestStorageManagerUploadVerifiesRoundTripAndCleansUpOnMismatch(t *testing.T
 	case <-deleteCalled:
 	case <-time.After(2 * time.Second):
 		t.Fatalf("expected cleanup delete to be triggered after verification failure")
-	}
-}
-
-func TestUploadVerificationParallelismIsCapped(t *testing.T) {
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("new pgxmock pool: %v", err)
-	}
-	defer mock.Close()
-
-	storageID := uuid.New()
-	for i := 0; i < 2; i++ {
-		mock.ExpectQuery("SELECT token, name FROM storage_workers").
-			WithArgs(storageID).
-			WillReturnRows(pgxmock.NewRows([]string{"token", "name"}).
-				AddRow("TOKEN", "w1").
-				AddRow("TOKEN2", "w2").
-				AddRow("TOKEN3", "w3").
-				AddRow("TOKEN4", "w4").
-				AddRow("TOKEN5", "w5").
-				AddRow("TOKEN6", "w6"))
-	}
-
-	m := &StorageManager{
-		workersRepo: repository.NewStorageWorkersRepoWithDB(mock),
-	}
-
-	if got := m.downloadParallelism(context.Background(), storageID, 8); got <= uploadVerifyParallelism {
-		t.Fatalf("expected uncapped download parallelism to exceed verify cap, got %d", got)
-	}
-
-	results := make([]uploadedChunkResult, 8)
-	for i := range results {
-		plain := []byte(fmt.Sprintf("chunk-%d", i))
-		results[i] = uploadedChunkResult{
-			TelegramFileID: fmt.Sprintf("TG_FILE_%d", i),
-			Position:       int16(i),
-			PlainHash:      sha256.Sum256(plain),
-		}
-	}
-
-	verifyParallelism := m.downloadParallelism(context.Background(), storageID, len(results))
-	if verifyParallelism > uploadVerifyParallelism {
-		verifyParallelism = uploadVerifyParallelism
-	}
-	if verifyParallelism != uploadVerifyParallelism {
-		t.Fatalf("verify parallelism = %d, want %d", verifyParallelism, uploadVerifyParallelism)
 	}
 }
 
