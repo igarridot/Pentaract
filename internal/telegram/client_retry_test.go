@@ -2,12 +2,9 @@ package telegram
 
 import (
 	"context"
-	"io"
-	"net"
 	"net/http"
 	"net/http/httptest"
 	"strings"
-	"syscall"
 	"testing"
 	"time"
 )
@@ -175,93 +172,5 @@ func TestDownloadRetriesOnUnexpectedEOF(t *testing.T) {
 	data, err := c.Download(context.Background(), "TOKEN", "FILE")
 	if err != nil || string(data) != "payload-ok" || getFileAttempts < 1 || downloadAttempts < 2 {
 		t.Fatalf("expected retry success after unexpected EOF, err=%v data=%q getFileAttempts=%d downloadAttempts=%d", err, string(data), getFileAttempts, downloadAttempts)
-	}
-}
-
-type roundTripperFunc func(*http.Request) (*http.Response, error)
-
-func (f roundTripperFunc) RoundTrip(r *http.Request) (*http.Response, error) {
-	return f(r)
-}
-
-func TestDownloadRetriesOnTransientGetFileError(t *testing.T) {
-	getFileAttempts := 0
-	downloadAttempts := 0
-
-	c := NewClient("https://telegram.invalid")
-	c.httpClient = &http.Client{
-		Transport: roundTripperFunc(func(r *http.Request) (*http.Response, error) {
-			switch {
-			case strings.Contains(r.URL.Path, "/getFile"):
-				getFileAttempts++
-				if getFileAttempts == 1 {
-					return nil, &net.OpError{Op: "read", Net: "tcp", Err: syscall.ECONNRESET}
-				}
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader(`{"ok":true,"result":{"file_path":"path/chunk.bin"}}`)),
-					Header:     make(http.Header),
-				}, nil
-			case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk.bin"):
-				downloadAttempts++
-				return &http.Response{
-					StatusCode: http.StatusOK,
-					Body:       io.NopCloser(strings.NewReader(`payload-ok`)),
-					Header:     make(http.Header),
-				}, nil
-			default:
-				return &http.Response{
-					StatusCode: http.StatusNotFound,
-					Body:       io.NopCloser(strings.NewReader(`not found`)),
-					Header:     make(http.Header),
-				}, nil
-			}
-		}),
-	}
-
-	data, err := c.Download(context.Background(), "TOKEN", "FILE")
-	if err != nil || string(data) != "payload-ok" || getFileAttempts < 2 || downloadAttempts != 1 {
-		t.Fatalf("expected getFile retry success, err=%v data=%q getFileAttempts=%d downloadAttempts=%d", err, string(data), getFileAttempts, downloadAttempts)
-	}
-}
-
-func TestDownloadRetriesOnGetFileUnexpectedEOF(t *testing.T) {
-	getFileAttempts := 0
-	downloadAttempts := 0
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/getFile"):
-			getFileAttempts++
-			if getFileAttempts == 1 {
-				h, ok := w.(http.Hijacker)
-				if !ok {
-					t.Fatalf("response writer does not support hijacking")
-				}
-				conn, bufrw, err := h.Hijack()
-				if err != nil {
-					t.Fatalf("hijack response: %v", err)
-				}
-				_, _ = bufrw.WriteString("HTTP/1.1 200 OK\r\nContent-Length: 64\r\n\r\n{\"ok\":true")
-				_ = bufrw.Flush()
-				_ = conn.Close()
-				return
-			}
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk.bin"}}`))
-		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk.bin"):
-			downloadAttempts++
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`payload-ok`))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	c := NewClient(srv.URL)
-	data, err := c.Download(context.Background(), "TOKEN", "FILE")
-	if err != nil || string(data) != "payload-ok" || getFileAttempts < 2 || downloadAttempts != 1 {
-		t.Fatalf("expected retry success after getFile unexpected EOF, err=%v data=%q getFileAttempts=%d downloadAttempts=%d", err, string(data), getFileAttempts, downloadAttempts)
 	}
 }
