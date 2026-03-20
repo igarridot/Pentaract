@@ -20,7 +20,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
-	"github.com/Dominux/Pentaract/internal/localfs"
 	"github.com/Dominux/Pentaract/internal/pathutil"
 	"github.com/Dominux/Pentaract/internal/service"
 )
@@ -100,7 +99,6 @@ var inlineVideoContentTypesByExtension = map[string]string{
 
 type FilesHandler struct {
 	svc filesService
-	src localFilesSource
 
 	mu        sync.RWMutex
 	uploads   map[string]*uploadTracker
@@ -110,7 +108,6 @@ type FilesHandler struct {
 }
 
 type filesService interface {
-	EnsureWriteAccess(ctx context.Context, userID, storageID uuid.UUID) error
 	Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error
 	CreateFolder(ctx context.Context, userID, storageID uuid.UUID, path, folderName string) error
 	Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error)
@@ -126,28 +123,13 @@ type filesService interface {
 	Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
 }
 
-type localFilesSource interface {
-	ListDir(path string) ([]domain.FSElement, error)
-	ExpandSelection(paths []string) ([]domain.FSElement, error)
-	OpenFile(path string) (localfs.File, error)
-}
-
 func NewFilesHandler(svc *service.FilesService) *FilesHandler {
 	return NewFilesHandlerWithService(svc)
 }
 
-func NewFilesHandlerWithLocalRoot(svc *service.FilesService, root string) *FilesHandler {
-	return NewFilesHandlerWithServiceAndSource(svc, localfs.New(root))
-}
-
 func NewFilesHandlerWithService(svc filesService) *FilesHandler {
-	return NewFilesHandlerWithServiceAndSource(svc, localfs.New(""))
-}
-
-func NewFilesHandlerWithServiceAndSource(svc filesService, src localFilesSource) *FilesHandler {
 	return &FilesHandler{
 		svc:       svc,
-		src:       src,
 		uploads:   make(map[string]*uploadTracker),
 		downloads: make(map[string]*downloadTracker),
 		fileSizes: newFileSizeCache(),
@@ -162,17 +144,6 @@ type createFolderRequest struct {
 type moveFileRequest struct {
 	OldPath string `json:"old_path"`
 	NewPath string `json:"new_path"`
-}
-
-type localSelectionRequest struct {
-	Paths []string `json:"paths"`
-}
-
-type localUploadRequest struct {
-	SourcePath string `json:"source_path"`
-	TargetPath string `json:"target_path"`
-	UploadID   string `json:"upload_id"`
-	OnConflict string `json:"on_conflict"`
 }
 
 // setupDownloadTracker creates a download tracker from the request's download_id param.
@@ -209,70 +180,6 @@ func (h *FilesHandler) scheduleUploadTrackerCleanup(uploadID string) {
 		delete(h.uploads, uploadID)
 		h.mu.Unlock()
 	})
-}
-
-func normalizeUploadRequest(uploadID, onConflict string) (string, string) {
-	if uploadID == "" {
-		uploadID = uuid.New().String()
-	}
-	if onConflict == "" {
-		onConflict = service.UploadConflictKeepBoth
-	}
-	return uploadID, onConflict
-}
-
-func (h *FilesHandler) setUploadTracker(uploadID string, tracker *uploadTracker) {
-	h.mu.Lock()
-	h.uploads[uploadID] = tracker
-	h.mu.Unlock()
-}
-
-func (h *FilesHandler) finishUploadTracker(tracker *uploadTracker, skipped bool, err error) {
-	h.mu.Lock()
-	tracker.done = true
-	tracker.err = err
-	tracker.skipped = skipped
-	h.mu.Unlock()
-}
-
-func writeAcceptedUploadResponse(w http.ResponseWriter, uploadID string) {
-	writeJSON(w, http.StatusAccepted, map[string]any{"upload_id": uploadID})
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-}
-
-func (h *FilesHandler) startTrackedUpload(userID, storageID uuid.UUID, uploadID, fullPath string, size int64, reader io.Reader, onConflict string, cleanup func(), onError func(error), logMessage string) string {
-	uploadID, onConflict = normalizeUploadRequest(uploadID, onConflict)
-
-	uploadCtx, cancel := context.WithCancel(context.Background())
-	progress := &service.UploadProgress{TotalBytes: size}
-	tracker := &uploadTracker{
-		progress:  progress,
-		cancel:    cancel,
-		storageID: storageID,
-		filePath:  fullPath,
-	}
-	h.setUploadTracker(uploadID, tracker)
-
-	go func() {
-		defer h.scheduleUploadTrackerCleanup(uploadID)
-		if cleanup != nil {
-			defer cleanup()
-		}
-
-		_, skipped, uploadErr := h.svc.Upload(uploadCtx, userID, storageID, fullPath, size, reader, progress, onConflict)
-		h.finishUploadTracker(tracker, skipped, uploadErr)
-
-		if uploadErr != nil {
-			if onError != nil {
-				onError(uploadErr)
-			}
-			log.Printf("[upload] failed %s: %v", logMessage, uploadErr)
-		}
-	}()
-
-	return uploadID
 }
 
 func (h *FilesHandler) cleanupDownloadTracker(downloadID string, tracker *downloadTracker) {
@@ -495,6 +402,9 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	}
 
 	path = pathutil.TrimTrailingSlash(path)
+	if onConflict == "" {
+		onConflict = service.UploadConflictKeepBoth
+	}
 	fullPath := pathutil.Join(path, filename)
 
 	pr, pw := io.Pipe()
@@ -507,117 +417,49 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		pw.CloseWithError(err)
 	}()
 
-	uploadID = h.startTrackedUpload(
-		user.ID,
-		storageID,
-		uploadID,
-		fullPath,
-		fileSize,
-		pr,
-		onConflict,
-		nil,
-		func(error) { _ = pr.Close() },
-		fmt.Sprintf("file=%s", fullPath),
-	)
-	writeAcceptedUploadResponse(w, uploadID)
+	uploadCtx, cancel := context.WithCancel(context.Background())
+
+	if uploadID == "" {
+		uploadID = uuid.New().String()
+	}
+	progress := &service.UploadProgress{TotalBytes: fileSize}
+	tracker := &uploadTracker{
+		progress:  progress,
+		cancel:    cancel,
+		storageID: storageID,
+		filePath:  fullPath,
+	}
+
+	h.mu.Lock()
+	h.uploads[uploadID] = tracker
+	h.mu.Unlock()
+
+	go func() {
+		defer func() {
+			h.scheduleUploadTrackerCleanup(uploadID)
+		}()
+
+		_, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress, onConflict)
+
+		h.mu.Lock()
+		tracker.done = true
+		tracker.err = uploadErr
+		tracker.skipped = skipped
+		h.mu.Unlock()
+
+		if uploadErr != nil {
+			log.Printf("[upload] failed file=%s: %v", fullPath, uploadErr)
+			pr.Close()
+		}
+	}()
+
+	writeJSON(w, http.StatusAccepted, map[string]any{"upload_id": uploadID})
+	if f, ok := w.(http.Flusher); ok {
+		f.Flush()
+	}
 
 	// Keep the handler alive until the body is fully read into the pipe.
 	<-copyDone
-}
-
-func (h *FilesHandler) LocalTree(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if err := h.svc.EnsureWriteAccess(r.Context(), user.ID, storageID); err != nil {
-		writeError(w, err)
-		return
-	}
-
-	path := extractWildcardPath(r)
-	elements, err := h.src.ListDir(path)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, nonNilSlice(elements))
-}
-
-func (h *FilesHandler) LocalExpandSelection(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-	if err := h.svc.EnsureWriteAccess(r.Context(), user.ID, storageID); err != nil {
-		writeError(w, err)
-		return
-	}
-
-	var req localSelectionRequest
-	if err := parseBody(r, &req); err != nil {
-		writeError(w, err)
-		return
-	}
-	if len(req.Paths) == 0 {
-		writeError(w, domain.ErrBadRequest("paths are required"))
-		return
-	}
-
-	files, err := h.src.ExpandSelection(req.Paths)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
-	writeJSON(w, http.StatusOK, nonNilSlice(files))
-}
-
-func (h *FilesHandler) LocalUpload(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
-	var req localUploadRequest
-	if err := parseBody(r, &req); err != nil {
-		writeError(w, err)
-		return
-	}
-	if req.SourcePath == "" {
-		writeError(w, domain.ErrBadRequest("source_path is required"))
-		return
-	}
-
-	sourceFile, err := h.src.OpenFile(req.SourcePath)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
-	targetPath := pathutil.TrimTrailingSlash(req.TargetPath)
-	fullPath := pathutil.Join(targetPath, sourceFile.Name)
-
-	uploadID := h.startTrackedUpload(
-		user.ID,
-		storageID,
-		req.UploadID,
-		fullPath,
-		sourceFile.Size,
-		sourceFile.Reader,
-		req.OnConflict,
-		func() { _ = sourceFile.Reader.Close() },
-		nil,
-		fmt.Sprintf("local file=%s source=%s", fullPath, sourceFile.Path),
-	)
-	writeAcceptedUploadResponse(w, uploadID)
 }
 
 // CancelUpload cancels an in-flight upload and cleans up.

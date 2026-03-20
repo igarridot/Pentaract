@@ -21,7 +21,6 @@ The API and UI provide file management, access control, progress tracking, and w
 - Real-time progress via SSE (upload/download/delete), including upload verification
 - Upload/download cancellation
 - File browser: upload, download, move, create folders, search, preview
-- Local Files view for uploading bind-mounted files/directories from inside the Pentaract container
 - Directory download as a streamed ZIP archive
 - Multi-worker support (shared or storage-scoped bots)
 - Worker-aware chunk recovery when a different bot needs to download an existing chunk
@@ -57,11 +56,6 @@ make up
 ```
 
 App URL: `http://localhost:8000`
-
-Put any source files you want to expose in the new `Local Files` view under:
-
-- `./persistent_data/local-files` on the host
-- `${LOCAL_FILES_ROOT}` inside the container (default `/local-files`)
 
 ### 3. Configure Telegram backend
 
@@ -152,7 +146,6 @@ From `.env`:
 | `SECRET_KEY` | required | JWT + chunk encryption secret |
 | `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Telegram API |
 | `TELEGRAM_RATE_LIMIT` | `18` | per-worker requests/min guard |
-| `LOCAL_FILES_ROOT` | empty | enables the `Local Files` UI/API when set; compose defaults it to `/local-files` |
 | `DATABASE_USER` | `pentaract` | postgres user |
 | `DATABASE_PASSWORD` | `pentaract` | postgres password |
 | `DATABASE_NAME` | `pentaract` | postgres db |
@@ -164,7 +157,6 @@ From `.env`:
 Persistent data lives in `persistent_data/`:
 
 - `persistent_data/db` - PostgreSQL data
-- `persistent_data/local-files` - bind-mounted source directory exposed in the `Local Files` view
 - `persistent_data/go-mod-cache` - Go module cache (dev)
 - `persistent_data/go-build-cache` - Go build cache (dev)
 
@@ -193,7 +185,6 @@ Main route groups:
 - `/api/storages/{storageID}/access*`
 - `/api/storage_workers/*`
 - `/api/storages/{storageID}/files/*`
-- `/api/storages/{storageID}/local_files/*`
 - `/api/*_progress` and cancel endpoints
 
 See `internal/server/server.go` for exact route list.

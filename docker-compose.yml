@@ -5,13 +5,6 @@ services:
     ports:
       - "${PORT:-8000}:8000"
     env_file: .env
-    environment:
-      LOCAL_FILES_ROOT: ${LOCAL_FILES_ROOT:-/local-files}
-    volumes:
-      - type: bind
-        source: ${LOCAL_FILES_BIND_SOURCE:-./persistent_data/local-files}
-        target: ${LOCAL_FILES_ROOT:-/local-files}
-        read_only: true
     restart: unless-stopped
     depends_on:
       db:
@@ -48,10 +41,6 @@ services:
         source: .
         target: /app
       - type: bind
-        source: ${LOCAL_FILES_BIND_SOURCE:-./persistent_data/local-files}
-        target: ${LOCAL_FILES_ROOT:-/local-files}
-        read_only: true
-      - type: bind
         source: ./persistent_data/go-mod-cache
         target: /go/pkg/mod
       - type: bind
@@ -62,6 +51,5 @@ services:
     environment:
       GOCACHE: /tmp/go-build-cache
       GOMODCACHE: /go/pkg/mod
-      LOCAL_FILES_ROOT: ${LOCAL_FILES_ROOT:-/local-files}
     profiles:
       - dev

@@ -1,11 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Drawer, List, Toolbar, Box } from '@mui/material'
-import {
-  Storage as StorageIcon,
-  SmartToy as WorkerIcon,
-  ManageAccounts as UsersIcon,
-  DriveFolderUpload as LocalFilesIcon,
-} from '@mui/icons-material'
+import { Storage as StorageIcon, SmartToy as WorkerIcon, ManageAccounts as UsersIcon } from '@mui/icons-material'
 import SideBarItem from './SideBarItem'
 import API from '../api'
 
@@ -50,7 +45,6 @@ export default function SideBar({ open }) {
       <Box sx={{ px: 0.5, pt: 1 }}>
         <List disablePadding>
           <SideBarItem to="/storages" icon={<StorageIcon />} label="Storages" showLabel={open} />
-          <SideBarItem to="/local-files" icon={<LocalFilesIcon />} label="Local Files" showLabel={open} />
           <SideBarItem to="/storage_workers" icon={<WorkerIcon />} label="Workers" showLabel={open} />
           {isAdmin && <SideBarItem to="/users" icon={<UsersIcon />} label="Users" showLabel={open} />}
         </List>

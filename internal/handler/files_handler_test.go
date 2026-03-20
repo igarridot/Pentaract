@@ -17,12 +17,10 @@ import (
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	appjwt "github.com/Dominux/Pentaract/internal/jwt"
-	"github.com/Dominux/Pentaract/internal/localfs"
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
 type mockFilesService struct {
-	ensureWriteAccessFn       func(ctx context.Context, userID, storageID uuid.UUID) error
 	moveFn                    func(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error
 	createFolderFn            func(ctx context.Context, userID, storageID uuid.UUID, path, folderName string) error
 	uploadFn                  func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error)
@@ -38,12 +36,6 @@ type mockFilesService struct {
 	searchFn                  func(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
 }
 
-func (m *mockFilesService) EnsureWriteAccess(ctx context.Context, userID, storageID uuid.UUID) error {
-	if m.ensureWriteAccessFn == nil {
-		return nil
-	}
-	return m.ensureWriteAccessFn(ctx, userID, storageID)
-}
 func (m *mockFilesService) Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error {
 	if m.moveFn == nil {
 		return nil
@@ -125,33 +117,6 @@ func (m *mockFilesService) Search(ctx context.Context, userID, storageID uuid.UU
 	return m.searchFn(ctx, userID, storageID, basePath, searchPath)
 }
 
-type mockLocalSource struct {
-	listDirFn         func(path string) ([]domain.FSElement, error)
-	expandSelectionFn func(paths []string) ([]domain.FSElement, error)
-	openFileFn        func(path string) (localfs.File, error)
-}
-
-func (m *mockLocalSource) ListDir(path string) ([]domain.FSElement, error) {
-	if m.listDirFn == nil {
-		return nil, nil
-	}
-	return m.listDirFn(path)
-}
-
-func (m *mockLocalSource) ExpandSelection(paths []string) ([]domain.FSElement, error) {
-	if m.expandSelectionFn == nil {
-		return nil, nil
-	}
-	return m.expandSelectionFn(paths)
-}
-
-func (m *mockLocalSource) OpenFile(path string) (localfs.File, error) {
-	if m.openFileFn == nil {
-		return localfs.File{}, domain.ErrNotFound("local path")
-	}
-	return m.openFileFn(path)
-}
-
 func makeFilesReq(method, target, body, storageID, wildcard string) *http.Request {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	rctx := chi.NewRouteContext()
@@ -168,7 +133,7 @@ func makeFilesReq(method, target, body, storageID, wildcard string) *http.Reques
 
 func TestNewFilesHandlerWithService(t *testing.T) {
 	h := NewFilesHandlerWithService(&mockFilesService{})
-	if h == nil || h.svc == nil || h.uploads == nil || h.downloads == nil || h.src == nil {
+	if h == nil || h.svc == nil || h.uploads == nil || h.downloads == nil {
 		t.Fatalf("expected initialized files handler")
 	}
 }
@@ -622,109 +587,6 @@ func TestFilesHandlerUploadSkipOnConflict(t *testing.T) {
 	h.UploadProgress(progressW, progressReq)
 	if !strings.Contains(progressW.Body.String(), `"status":"skipped"`) {
 		t.Fatalf("expected skipped upload SSE, got %q", progressW.Body.String())
-	}
-}
-
-func TestFilesHandlerLocalTreeAndExpandSelection(t *testing.T) {
-	storageID := uuid.New().String()
-	writeChecks := 0
-	h := NewFilesHandlerWithServiceAndSource(&mockFilesService{
-		ensureWriteAccessFn: func(ctx context.Context, userID, storageID uuid.UUID) error {
-			writeChecks++
-			return nil
-		},
-	}, &mockLocalSource{
-		listDirFn: func(path string) ([]domain.FSElement, error) {
-			if path != "docs" {
-				t.Fatalf("unexpected list path %q", path)
-			}
-			return []domain.FSElement{{Path: "docs/a.txt", Name: "a.txt", Size: 3, IsFile: true}}, nil
-		},
-		expandSelectionFn: func(paths []string) ([]domain.FSElement, error) {
-			if len(paths) != 2 || paths[0] != "docs" || paths[1] != "notes.txt" {
-				t.Fatalf("unexpected selection paths %+v", paths)
-			}
-			return []domain.FSElement{{Path: "docs/a.txt", Name: "a.txt", Size: 3, IsFile: true}}, nil
-		},
-	})
-
-	w := httptest.NewRecorder()
-	h.LocalTree(w, makeFilesReq(http.MethodGet, "/", "", storageID, "docs"))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"path":"docs/a.txt"`) {
-		t.Fatalf("unexpected local tree response: code=%d body=%s", w.Code, w.Body.String())
-	}
-
-	body := `{"paths":["docs","notes.txt"]}`
-	w = httptest.NewRecorder()
-	h.LocalExpandSelection(w, makeFilesReq(http.MethodPost, "/", body, storageID, ""))
-	if w.Code != http.StatusOK || !strings.Contains(w.Body.String(), `"path":"docs/a.txt"`) {
-		t.Fatalf("unexpected local expand response: code=%d body=%s", w.Code, w.Body.String())
-	}
-	if writeChecks != 2 {
-		t.Fatalf("expected two write-access checks, got %d", writeChecks)
-	}
-}
-
-func TestFilesHandlerLocalUploadSuccess(t *testing.T) {
-	uploadDone := make(chan struct{})
-	storageID := uuid.New().String()
-	h := NewFilesHandlerWithServiceAndSource(&mockFilesService{
-		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
-			defer close(uploadDone)
-			body, _ := io.ReadAll(reader)
-			if path != "archive/report.txt" {
-				t.Fatalf("unexpected upload path %q", path)
-			}
-			if string(body) != "hello" || size != 5 || progress.TotalBytes != 5 {
-				t.Fatalf("unexpected upload payload: size=%d progress=%d body=%q", size, progress.TotalBytes, string(body))
-			}
-			if onConflict != service.UploadConflictSkip {
-				t.Fatalf("unexpected on_conflict %q", onConflict)
-			}
-			return &domain.File{ID: uuid.New(), Path: path}, false, nil
-		},
-	}, &mockLocalSource{
-		openFileFn: func(path string) (localfs.File, error) {
-			if path != "source/report.txt" {
-				t.Fatalf("unexpected source path %q", path)
-			}
-			return localfs.File{
-				Path:   path,
-				Name:   "report.txt",
-				Size:   5,
-				Reader: io.NopCloser(strings.NewReader("hello")),
-			}, nil
-		},
-	})
-
-	req := makeFilesReq(http.MethodPost, "/", `{"source_path":"source/report.txt","target_path":"archive","upload_id":"local-1","on_conflict":"skip"}`, storageID, "")
-	w := httptest.NewRecorder()
-	h.LocalUpload(w, req)
-	if w.Code != http.StatusAccepted || !strings.Contains(w.Body.String(), `"upload_id":"local-1"`) {
-		t.Fatalf("unexpected local upload response: code=%d body=%s", w.Code, w.Body.String())
-	}
-
-	select {
-	case <-uploadDone:
-	case <-time.After(2 * time.Second):
-		t.Fatalf("local upload service was not called")
-	}
-}
-
-func TestFilesHandlerLocalUploadValidation(t *testing.T) {
-	h := NewFilesHandlerWithServiceAndSource(&mockFilesService{}, &mockLocalSource{})
-	storageID := uuid.New().String()
-
-	w := httptest.NewRecorder()
-	h.LocalUpload(w, makeFilesReq(http.MethodPost, "/", `{}`, storageID, ""))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 when source_path is missing, got %d", w.Code)
-	}
-
-	w = httptest.NewRecorder()
-	h.LocalExpandSelection(w, makeFilesReq(http.MethodPost, "/", `{}`, storageID, ""))
-	if w.Code != http.StatusBadRequest {
-		t.Fatalf("expected 400 when paths are missing, got %d", w.Code)
 	}
 }
 

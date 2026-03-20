@@ -531,10 +531,6 @@ func (s *FilesService) Move(ctx context.Context, userID, storageID uuid.UUID, ol
 	return s.filesRepo.Move(ctx, storageID, oldPath, newPath)
 }
 
-func (s *FilesService) EnsureWriteAccess(ctx context.Context, userID, storageID uuid.UUID) error {
-	return requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessWrite)
-}
-
 func (s *FilesService) WorkersStatus(storageID uuid.UUID) string {
 	if s.scheduler != nil && s.scheduler.IsWaiting(storageID) {
 		return "waiting_rate_limit"
