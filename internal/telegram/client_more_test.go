@@ -164,11 +164,17 @@ func TestNewHTTPClientConfiguresReusableTransport(t *testing.T) {
 	if transport.MaxIdleConns != 100 {
 		t.Fatalf("MaxIdleConns = %d, want 100", transport.MaxIdleConns)
 	}
+	if transport.MaxConnsPerHost != 100 {
+		t.Fatalf("MaxConnsPerHost = %d, want 100", transport.MaxConnsPerHost)
+	}
 	if transport.MaxIdleConnsPerHost != 100 {
 		t.Fatalf("MaxIdleConnsPerHost = %d, want 100", transport.MaxIdleConnsPerHost)
 	}
-	if !transport.ForceAttemptHTTP2 {
-		t.Fatalf("expected ForceAttemptHTTP2 to be enabled")
+	if transport.ForceAttemptHTTP2 {
+		t.Fatalf("expected ForceAttemptHTTP2 to be disabled")
+	}
+	if transport.TLSNextProto == nil {
+		t.Fatalf("expected TLSNextProto to disable HTTP/2 negotiation")
 	}
 }
 

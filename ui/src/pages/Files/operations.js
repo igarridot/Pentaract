@@ -88,6 +88,16 @@ export async function runUploadPipeline(items, startUpload) {
   }
 }
 
+export async function runSequentialUploadPipeline(items, startUpload) {
+  for (const item of items) {
+    const transfer = await startUpload(item)
+    if (!transfer) break
+
+    await settlePromise(transfer.requestPromise)
+    await settlePromise(transfer.completionPromise)
+  }
+}
+
 export function getMediaType(name) {
   const ext = name?.split('.').pop()?.toLowerCase() || ''
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image'

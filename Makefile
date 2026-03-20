@@ -1,4 +1,4 @@
-.PHONY: up down build check test ui-install ui-build dev-shell dev-up
+.PHONY: up down build check test test-uploads ui-install ui-build dev-shell dev-up
 
 COMPOSE := docker compose --project-name pentaract
 
@@ -18,6 +18,9 @@ check:
 
 test:
 	$(COMPOSE) --profile dev run --rm dev sh -c "go test ./cmd/... ./internal/... && cd ui && npm run test"
+
+test-uploads:
+	$(COMPOSE) --profile dev run --rm dev sh -c "go test ./internal/telegram ./internal/service ./internal/handler ./internal/localfs && cd ui && node --test src/pages/Files/operations.test.js src/common/use_upload_manager.test.js src/api/index.test.js"
 
 # Dev: install and build UI inside container
 ui-install:
