@@ -288,6 +288,10 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		}
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
+				log.Printf("[telegram] transient getFile error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				continue
+			}
 			return nil, fmt.Errorf("getting file info: %w", err)
 		}
 
@@ -304,6 +308,10 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		body, err := io.ReadAll(resp.Body)
 		resp.Body.Close()
 		if err != nil {
+			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
+				log.Printf("[telegram] transient getFile read error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				continue
+			}
 			return nil, fmt.Errorf("reading getFile response: %w", err)
 		}
 
