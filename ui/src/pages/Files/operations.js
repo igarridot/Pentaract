@@ -48,6 +48,44 @@ export function getBulkOperationMetrics(bulkOperation, uploadStates = [], downlo
   }
 }
 
+async function settlePromise(promise) {
+  if (!promise) return undefined
+  try {
+    return await promise
+  } catch (error) {
+    return error
+  }
+}
+
+export async function runPhasedTransferPipeline(items, startTransfer, options = {}) {
+  const maxActive = Math.max(1, options.maxActive ?? 2)
+  const active = []
+  let lastStarted = null
+
+  for (const item of items) {
+    if (lastStarted?.requestPromise) {
+      await settlePromise(lastStarted.requestPromise)
+    }
+
+    while (active.length >= maxActive) {
+      await settlePromise(active[0]?.completionPromise)
+      active.shift()
+    }
+
+    const transfer = await startTransfer(item)
+    if (!transfer) break
+
+    active.push(transfer)
+    lastStarted = transfer
+  }
+
+  if (lastStarted?.requestPromise) {
+    await settlePromise(lastStarted.requestPromise)
+  }
+
+  await Promise.all(active.map((transfer) => settlePromise(transfer.completionPromise)))
+}
+
 export function getMediaType(name) {
   const ext = name?.split('.').pop()?.toLowerCase() || ''
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image'
