@@ -55,6 +55,9 @@ func TestLoadDefaultsAndURLs(t *testing.T) {
 	if cfg.TelegramRateLimit != 18 {
 		t.Fatalf("unexpected TelegramRateLimit: %d", cfg.TelegramRateLimit)
 	}
+	if cfg.LocalFilesRoot != "" {
+		t.Fatalf("unexpected LocalFilesRoot default: %q", cfg.LocalFilesRoot)
+	}
 	if cfg.DatabaseHost != "db" || cfg.DatabasePort != 5432 {
 		t.Fatalf("unexpected db defaults: host=%q port=%d", cfg.DatabaseHost, cfg.DatabasePort)
 	}
@@ -73,6 +76,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("ACCESS_TOKEN_EXPIRE_IN_SECS", "1234")
 	t.Setenv("TELEGRAM_API_BASE_URL", "https://example.test")
 	t.Setenv("TELEGRAM_RATE_LIMIT", "11")
+	t.Setenv("LOCAL_FILES_ROOT", "/local-files")
 	t.Setenv("DATABASE_HOST", "localhost")
 	t.Setenv("DATABASE_PORT", "15432")
 
@@ -83,6 +87,9 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.TelegramAPIBaseURL != "https://example.test" || cfg.TelegramRateLimit != 11 {
 		t.Fatalf("unexpected telegram overrides: %+v", cfg)
+	}
+	if cfg.LocalFilesRoot != "/local-files" {
+		t.Fatalf("unexpected local files root override: %+v", cfg)
 	}
 	if cfg.DatabaseHost != "localhost" || cfg.DatabasePort != 15432 {
 		t.Fatalf("unexpected db overrides: %+v", cfg)

@@ -6,6 +6,7 @@ import NotFound from './pages/404'
 import Storages from './pages/Storages'
 import StorageCreateForm from './pages/Storages/StorageCreateForm'
 import Files from './pages/Files'
+import LocalFiles from './pages/LocalFiles'
 import StorageWorkers from './pages/StorageWorkers'
 import StorageWorkerCreateForm from './pages/StorageWorkers/StorageWorkerCreateForm'
 import Users from './pages/Users'
@@ -21,6 +22,7 @@ const router = createBrowserRouter([
       { path: 'storages', element: <Storages /> },
       { path: 'storages/register', element: <StorageCreateForm /> },
       { path: 'storages/:id/files/*', element: <Files /> },
+      { path: 'local-files', element: <LocalFiles /> },
       { path: 'storage_workers', element: <StorageWorkers /> },
       { path: 'storage_workers/register', element: <StorageWorkerCreateForm /> },
       { path: 'users', element: <Users /> },

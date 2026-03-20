@@ -49,7 +49,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	storagesH := handler.NewStoragesHandler(storagesSvc)
 	accessH := handler.NewAccessHandler(accessSvc)
 	workersH := handler.NewStorageWorkersHandler(workersSvc)
-	filesH := handler.NewFilesHandler(filesSvc)
+	filesH := handler.NewFilesHandlerWithLocalRoot(filesSvc, cfg.LocalFilesRoot)
 
 	// Router
 	r := chi.NewRouter()
@@ -101,6 +101,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Get("/storages/{storageID}/files/download_dir/*", filesH.DownloadDir)
 			r.Get("/storages/{storageID}/files/search/*", filesH.Search)
 			r.Delete("/storages/{storageID}/files/*", filesH.DeleteFile)
+			r.Get("/storages/{storageID}/local_files/tree/*", filesH.LocalTree)
+			r.Post("/storages/{storageID}/local_files/expand", filesH.LocalExpandSelection)
+			r.Post("/storages/{storageID}/local_files/upload", filesH.LocalUpload)
 
 			r.Get("/upload_progress", filesH.UploadProgress)
 			r.Get("/download_progress", filesH.DownloadProgress)

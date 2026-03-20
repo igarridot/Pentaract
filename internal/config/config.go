@@ -15,6 +15,7 @@ type Config struct {
 	SecretKey              string
 	TelegramAPIBaseURL     string
 	TelegramRateLimit      int
+	LocalFilesRoot         string
 	DatabaseUser           string
 	DatabasePassword       string
 	DatabaseName           string
@@ -42,6 +43,7 @@ func Load() *Config {
 		SecretKey:              mustGetEnv("SECRET_KEY"),
 		TelegramAPIBaseURL:     getEnv("TELEGRAM_API_BASE_URL", "https://api.telegram.org"),
 		TelegramRateLimit:      getEnvInt("TELEGRAM_RATE_LIMIT", 18),
+		LocalFilesRoot:         getEnv("LOCAL_FILES_ROOT", ""),
 		DatabaseUser:           mustGetEnv("DATABASE_USER"),
 		DatabasePassword:       mustGetEnv("DATABASE_PASSWORD"),
 		DatabaseName:           mustGetEnv("DATABASE_NAME"),
