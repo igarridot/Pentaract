@@ -3,6 +3,7 @@ package telegram
 import (
 	"bytes"
 	"context"
+	"crypto/tls"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -20,6 +21,8 @@ import (
 
 const maxRetries = 3
 
+const transientRetryBaseDelay = 250 * time.Millisecond
+
 var telegramSleep = time.Sleep
 
 type Client struct {
@@ -30,15 +33,21 @@ type Client struct {
 func newHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 100
+	transport.MaxConnsPerHost = 100
 	transport.MaxIdleConnsPerHost = 100
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.ExpectContinueTimeout = time.Second
-	transport.ForceAttemptHTTP2 = true
+	transport.ForceAttemptHTTP2 = false
+	transport.TLSNextProto = map[string]func(string, *tls.Conn) http.RoundTripper{}
 
 	return &http.Client{
 		Timeout:   10 * time.Minute, // 20MB chunks can be slow on limited connections
 		Transport: transport,
 	}
+}
+
+func transientRetryDelay(attempt int) time.Duration {
+	return time.Duration(attempt+1) * transientRetryBaseDelay
 }
 
 func NewClient(baseURL string) *Client {
@@ -290,6 +299,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
 				log.Printf("[telegram] transient getFile error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				telegramSleep(transientRetryDelay(attempt))
 				continue
 			}
 			return nil, fmt.Errorf("getting file info: %w", err)
@@ -310,6 +320,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
 				log.Printf("[telegram] transient getFile read error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				telegramSleep(transientRetryDelay(attempt))
 				continue
 			}
 			return nil, fmt.Errorf("reading getFile response: %w", err)
@@ -341,6 +352,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
 				log.Printf("[telegram] transient file download error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				telegramSleep(transientRetryDelay(attempt))
 				continue
 			}
 			return nil, fmt.Errorf("downloading file: %w", err)
@@ -367,6 +379,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
 				log.Printf("[telegram] transient file read error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				telegramSleep(transientRetryDelay(attempt))
 				continue
 			}
 			return nil, fmt.Errorf("reading file data: %w", err)

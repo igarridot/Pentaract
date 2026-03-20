@@ -28,6 +28,7 @@ const (
 	uploadChunkSize         = maxTelegramGetFileBytes - uploadChunkSafetyMargin
 	uploadChunkMaxAttempts  = 3
 	uploadChunkParallelism  = 10
+	uploadVerifyParallelism = 4
 )
 
 var uploadChunkBufferPool = sync.Pool{
@@ -551,6 +552,9 @@ func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.
 	}
 
 	parallelism := m.downloadParallelism(ctx, storage.ID, len(results))
+	if parallelism > uploadVerifyParallelism {
+		parallelism = uploadVerifyParallelism
+	}
 	startedAt := time.Now()
 	log.Printf("[upload] verifying file=%s chunks=%d parallelism=%d storage=%s", file.Path, len(results), parallelism, storage.Name)
 

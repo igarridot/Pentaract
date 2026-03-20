@@ -31,6 +31,7 @@ export function useUploadManager({
   interruptedAlertOptions = { persistent: true },
   cancelledAlertOptions,
   allSkippedMessage = 'All selected files were skipped',
+  pipelineRunner = runUploadPipeline,
   onTerminalSettled,
   onRequestSettled,
   onCancelSettled,
@@ -343,7 +344,7 @@ export function useUploadManager({
     })
 
     try {
-      await runUploadPipeline(entriesToUpload, async (entry) => {
+      await pipelineRunner(entriesToUpload, async (entry) => {
         if (bulkCancelledRef.current) return null
 
         const uploadId = createOperationId()
@@ -375,6 +376,7 @@ export function useUploadManager({
     markBulkTransferTerminal,
     notify,
     onBatchSettled,
+    pipelineRunner,
     registerBulkTransfer,
     releaseUploadTracking,
     skippedAlertOptions,

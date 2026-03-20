@@ -20,6 +20,7 @@ import NavigationBlockDialog from '../../components/NavigationBlockDialog'
 import RemoteFolderPickerDialog from '../../components/RemoteFolderPickerDialog'
 import { convertSize } from '../../common/size_converter'
 import { normalizeUploadPath } from '../Files/upload_conflicts'
+import { runSequentialUploadPipeline } from '../Files/operations.js'
 import { buildLocalUploadEntries, normalizeLocalPath } from './entries'
 
 export default function LocalFiles() {
@@ -72,6 +73,7 @@ export default function LocalFiles() {
     skippedMessage: (entry) => `Skipped upload for "${entry.filename}"`,
     errorMessage: (entry) => `Upload failed unexpectedly for "${entry.filename}". Please try again.`,
     interruptedMessage: (_, err) => `Upload interrupted: ${err.message}`,
+    pipelineRunner: runSequentialUploadPipeline,
   })
 
   const loadTree = useCallback(async () => {
