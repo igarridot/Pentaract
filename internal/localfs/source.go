@@ -143,15 +143,11 @@ func (s *Source) ExpandSelection(paths []string) ([]domain.FSElement, error) {
 
 		switch {
 		case info.IsDir():
-			dirRoot, err := root.OpenRoot(rootPath)
-			if err != nil {
-				return nil, mapPathError(err)
-			}
-			err = fs.WalkDir(dirRoot.FS(), ".", func(walkPath string, entry fs.DirEntry, walkErr error) error {
+			err = fs.WalkDir(root.FS(), rootPath, func(walkPath string, entry fs.DirEntry, walkErr error) error {
 				if walkErr != nil {
 					return walkErr
 				}
-				if walkPath == "." {
+				if walkPath == rootPath {
 					return nil
 				}
 				name := entry.Name()
@@ -175,7 +171,7 @@ func (s *Source) ExpandSelection(paths []string) ([]domain.FSElement, error) {
 				if err != nil {
 					return err
 				}
-				rel := joinPath(cleanPath, walkPath)
+				rel := walkPath
 				seen[rel] = domain.FSElement{
 					Path:   rel,
 					Name:   path.Base(rel),
@@ -184,10 +180,6 @@ func (s *Source) ExpandSelection(paths []string) ([]domain.FSElement, error) {
 				}
 				return nil
 			})
-			closeErr := dirRoot.Close()
-			if err == nil {
-				err = closeErr
-			}
 			if err != nil {
 				return nil, mapPathError(err)
 			}
