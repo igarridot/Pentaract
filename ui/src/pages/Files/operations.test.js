@@ -7,7 +7,7 @@ import {
   getBulkOperationMetrics,
   getItemPath,
   getMediaType,
-  runPhasedTransferPipeline,
+  runUploadPipeline,
 } from './operations.js'
 
 function createDeferred() {
@@ -80,7 +80,7 @@ test('getBulkOperationMetrics handles move operations without transfer state arr
   })
 })
 
-test('runPhasedTransferPipeline starts the next transfer after the previous request settles', async () => {
+test('runUploadPipeline starts the next upload once the current request is sent', async () => {
   const events = []
   const request1 = createDeferred()
   const request2 = createDeferred()
@@ -89,7 +89,7 @@ test('runPhasedTransferPipeline starts the next transfer after the previous requ
   const completion2 = createDeferred()
   const completion3 = createDeferred()
 
-  const pipeline = runPhasedTransferPipeline(['f1', 'f2', 'f3'], (item) => {
+  const pipeline = runUploadPipeline(['f1', 'f2', 'f3'], (item) => {
     events.push(`start:${item}`)
     if (item === 'f1') {
       return { requestPromise: request1.promise, completionPromise: completion1.promise }
@@ -121,12 +121,12 @@ test('runPhasedTransferPipeline starts the next transfer after the previous requ
   await pipeline
 })
 
-test('runPhasedTransferPipeline stops launching new transfers when startTransfer returns null', async () => {
+test('runUploadPipeline stops launching new uploads when startUpload returns null', async () => {
   const started = []
   const request1 = createDeferred()
   const completion1 = createDeferred()
 
-  const pipeline = runPhasedTransferPipeline(['f1', 'f2'], (item) => {
+  const pipeline = runUploadPipeline(['f1', 'f2'], (item) => {
     started.push(item)
     if (item === 'f2') return null
     return { requestPromise: request1.promise, completionPromise: completion1.promise }

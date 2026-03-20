@@ -43,7 +43,7 @@ import {
   getBulkOperationMetrics,
   getItemPath,
   getMediaType,
-  runPhasedTransferPipeline,
+  runUploadPipeline,
 } from './operations'
 
 export default function Files() {
@@ -309,7 +309,38 @@ export default function Files() {
     }
   }
 
-  const startUploadSingleFile = (file, targetPath, onConflict = 'keep_both', providedUploadId = createOperationId()) => {
+  const applyUploadTerminalState = useCallback((uploadId, filename, status) => {
+    if (status === 'done') {
+      markBulkTransferTerminal('upload', uploadId, 'done')
+      releaseUploadTracking(uploadId)
+      uploadCompletionRegistryRef.current.settle(uploadId, 'done')
+      addAlert('File uploaded', 'success')
+      loadTree()
+      scheduleUploadStateRemoval(uploadId, 2000)
+      return
+    }
+
+    if (status === 'error') {
+      markBulkTransferTerminal('upload', uploadId, 'error')
+      releaseUploadTracking(uploadId)
+      uploadCompletionRegistryRef.current.settle(uploadId, 'error')
+      loadTree()
+      addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
+      scheduleUploadStateRemoval(uploadId, 3000)
+      return
+    }
+
+    if (status === 'skipped') {
+      markBulkTransferTerminal('upload', uploadId, 'skipped')
+      releaseUploadTracking(uploadId)
+      uploadCompletionRegistryRef.current.settle(uploadId, 'skipped')
+      loadTree()
+      addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
+      scheduleUploadStateRemoval(uploadId, 1500)
+    }
+  }, [addAlert, loadTree, markBulkTransferTerminal, releaseUploadTracking, scheduleUploadStateRemoval])
+
+  const launchUpload = (file, targetPath, onConflict = 'keep_both', providedUploadId = createOperationId()) => {
     const filename = file.name
     const uploadId = providedUploadId
     const completionPromise = uploadCompletionRegistryRef.current.waitFor(uploadId)
@@ -340,30 +371,7 @@ export default function Files() {
         status: data.status,
         workersStatus: data.workers_status ?? prev?.workersStatus ?? 'active',
       }))
-      if (data.status === 'done') {
-        markBulkTransferTerminal('upload', uploadId, 'done')
-        releaseUploadTracking(uploadId)
-        uploadCompletionRegistryRef.current.settle(uploadId, 'done')
-        addAlert('File uploaded', 'success')
-        loadTree()
-        scheduleUploadStateRemoval(uploadId, 2000)
-      }
-      if (data.status === 'error') {
-        markBulkTransferTerminal('upload', uploadId, 'error')
-        releaseUploadTracking(uploadId)
-        uploadCompletionRegistryRef.current.settle(uploadId, 'error')
-        loadTree()
-        addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
-        scheduleUploadStateRemoval(uploadId, 3000)
-      }
-      if (data.status === 'skipped') {
-        markBulkTransferTerminal('upload', uploadId, 'skipped')
-        releaseUploadTracking(uploadId)
-        uploadCompletionRegistryRef.current.settle(uploadId, 'skipped')
-        loadTree()
-        addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
-        scheduleUploadStateRemoval(uploadId, 1500)
-      }
+      applyUploadTerminalState(uploadId, filename, data.status)
     })
     uploadProgressCancelsRef.current.set(uploadId, cancel)
     const controller = new AbortController()
@@ -481,16 +489,16 @@ export default function Files() {
     })
 
     try {
-      await runPhasedTransferPipeline(entriesToUpload, async (entry) => {
+      await runUploadPipeline(entriesToUpload, async (entry) => {
         if (bulkCancelledRef.current) return null
 
         const uploadId = createOperationId()
         if (showBulkProgress) registerBulkTransfer('upload', uploadId)
 
-        const transfer = startUploadSingleFile(entry.file, entry.targetPath, defaultConflictMode, uploadId)
+        const transfer = launchUpload(entry.file, entry.targetPath, defaultConflictMode, uploadId)
         dirFileNamesCacheRef.current.delete(normalizeUploadPath(entry.targetPath))
         return transfer
-      }, { maxActive: 2 })
+      })
 
       if (showBulkProgress) {
         finalizeBulkTransferLaunch('upload', bulkCancelledRef.current)

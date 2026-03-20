@@ -57,33 +57,35 @@ async function settlePromise(promise) {
   }
 }
 
-export async function runPhasedTransferPipeline(items, startTransfer, options = {}) {
-  const maxActive = Math.max(1, options.maxActive ?? 2)
-  const active = []
-  let lastStarted = null
+export async function runUploadPipeline(items, startUpload) {
+  let verifyingUpload = null
+  let uploadingUpload = null
 
   for (const item of items) {
-    if (lastStarted?.requestPromise) {
-      await settlePromise(lastStarted.requestPromise)
+    if (uploadingUpload?.requestPromise) {
+      await settlePromise(uploadingUpload.requestPromise)
+    }
+    if (verifyingUpload?.completionPromise) {
+      await settlePromise(verifyingUpload.completionPromise)
+      verifyingUpload = null
     }
 
-    while (active.length >= maxActive) {
-      await settlePromise(active[0]?.completionPromise)
-      active.shift()
-    }
+    const nextUpload = await startUpload(item)
+    if (!nextUpload) break
 
-    const transfer = await startTransfer(item)
-    if (!transfer) break
-
-    active.push(transfer)
-    lastStarted = transfer
+    verifyingUpload = uploadingUpload
+    uploadingUpload = nextUpload
   }
 
-  if (lastStarted?.requestPromise) {
-    await settlePromise(lastStarted.requestPromise)
+  if (uploadingUpload?.requestPromise) {
+    await settlePromise(uploadingUpload.requestPromise)
   }
-
-  await Promise.all(active.map((transfer) => settlePromise(transfer.completionPromise)))
+  if (verifyingUpload?.completionPromise) {
+    await settlePromise(verifyingUpload.completionPromise)
+  }
+  if (uploadingUpload?.completionPromise) {
+    await settlePromise(uploadingUpload.completionPromise)
+  }
 }
 
 export function getMediaType(name) {
