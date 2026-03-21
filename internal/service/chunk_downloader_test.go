@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync/atomic"
 	"testing"
 
 	"github.com/google/uuid"
@@ -292,5 +293,133 @@ func TestDownloadAndDecryptChunkDecryptionFailure(t *testing.T) {
 	}
 	if !errors.Is(err, domain.ErrDecryptionFailed) {
 		t.Fatalf("expected ErrDecryptionFailed, got: %v", err)
+	}
+}
+
+func TestDownloadChunkWithRetrySucceedsAfterTransientFailure(t *testing.T) {
+	storageID := uuid.New()
+
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile"):
+			n := attempts.Add(1)
+			if n < 3 {
+				// First two attempts fail
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"ok":false,"description":"temporary error"}`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk.bin"}}`))
+		case strings.Contains(r.URL.Path, "/file/"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("recovered-data"))
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		workersRepo: &fakeWorkersRepo{},
+		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
+			},
+		}, 1),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: NewChunkCipher("secret"),
+	}
+
+	data, err := m.downloadChunkWithRetry(context.Background(), domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
+		TelegramFileID: "FILE_ID",
+		Position:       0,
+	}, nil)
+	if err != nil {
+		t.Fatalf("expected retry to succeed, got: %v", err)
+	}
+	if string(data) != "recovered-data" {
+		t.Fatalf("unexpected content: %q", string(data))
+	}
+	if attempts.Load() < 3 {
+		t.Fatalf("expected at least 3 attempts, got %d", attempts.Load())
+	}
+}
+
+func TestDownloadChunkWithRetryExhaustsAttempts(t *testing.T) {
+	storageID := uuid.New()
+
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/getFile") {
+			attempts.Add(1)
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ok":false,"description":"persistent error"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		workersRepo: &fakeWorkersRepo{},
+		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
+			},
+		}, 1),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: NewChunkCipher("secret"),
+	}
+
+	_, err := m.downloadChunkWithRetry(context.Background(), domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
+		TelegramFileID: "FILE_ID",
+		Position:       0,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error after exhausting all attempts")
+	}
+	// Should have tried DownloadChunkMaxAttempts times (each attempt may also call worker fallback)
+	if attempts.Load() < int32(DownloadChunkMaxAttempts) {
+		t.Fatalf("expected at least %d attempts, got %d", DownloadChunkMaxAttempts, attempts.Load())
+	}
+}
+
+func TestDownloadChunkWithRetryContextCancellation(t *testing.T) {
+	storageID := uuid.New()
+	ctx, cancel := context.WithCancel(context.Background())
+
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/getFile") {
+			cancel()
+			w.WriteHeader(http.StatusInternalServerError)
+			_, _ = w.Write([]byte(`{"ok":false,"description":"error"}`))
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		workersRepo: &fakeWorkersRepo{},
+		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
+			},
+		}, 1),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: NewChunkCipher("secret"),
+	}
+
+	_, err := m.downloadChunkWithRetry(ctx, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
+		TelegramFileID: "FILE_ID",
+		Position:       0,
+	}, nil)
+	if err == nil {
+		t.Fatal("expected error after context cancellation")
+	}
+	if !errors.Is(err, context.Canceled) {
+		t.Fatalf("expected context.Canceled, got: %v", err)
 	}
 }

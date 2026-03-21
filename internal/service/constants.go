@@ -9,8 +9,11 @@ const (
 	UploadChunkSize         = MaxTelegramGetFileBytes - UploadChunkSafetyMargin
 
 	// Upload tuning
-	UploadChunkMaxAttempts = 3
+	UploadChunkMaxAttempts = 5
 	UploadChunkParallelism = 10
+
+	// Download tuning
+	DownloadChunkMaxAttempts = 3
 
 	// Delete tuning
 	DeleteParallelism = 5

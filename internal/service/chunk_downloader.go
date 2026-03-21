@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -147,8 +148,35 @@ func (m *StorageManager) downloadChunkWithPreferredWorker(ctx context.Context, s
 	return m.downloadChunk(ctx, storage, chunk)
 }
 
+// downloadChunkWithRetry wraps downloadChunkWithPreferredWorker with
+// retry + exponential backoff. Each attempt already includes worker fallback
+// logic via downloadChunk.
+func (m *StorageManager) downloadChunkWithRetry(ctx context.Context, storage domain.Storage, chunk domain.FileChunk, preferredWorker *repository.WorkerToken) ([]byte, error) {
+	var lastErr error
+	for attempt := 1; attempt <= DownloadChunkMaxAttempts; attempt++ {
+		data, err := m.downloadChunkWithPreferredWorker(ctx, storage, chunk, preferredWorker)
+		if err == nil {
+			return data, nil
+		}
+		if contextAborted(ctx, err) {
+			return nil, contextAbortError(ctx, err)
+		}
+		lastErr = err
+		if attempt < DownloadChunkMaxAttempts {
+			slog.Warn("download chunk failed, retrying", "position", chunk.Position, "attempt", attempt, "max_attempts", DownloadChunkMaxAttempts, "err", err)
+			backoff := time.Duration(attempt) * 500 * time.Millisecond
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(backoff):
+			}
+		}
+	}
+	return nil, lastErr
+}
+
 func (m *StorageManager) downloadAndDecryptChunk(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk, preferredWorker *repository.WorkerToken) ([]byte, error) {
-	data, err := m.downloadChunkWithPreferredWorker(ctx, storage, chunk, preferredWorker)
+	data, err := m.downloadChunkWithRetry(ctx, storage, chunk, preferredWorker)
 	if err != nil {
 		return nil, fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
 	}

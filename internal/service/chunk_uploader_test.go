@@ -185,9 +185,12 @@ func TestShouldRetryChunkUpload(t *testing.T) {
 
 func TestVerifyUploadedChunksEmpty(t *testing.T) {
 	m := &StorageManager{}
-	err := m.verifyUploadedChunks(context.Background(), &domain.File{}, domain.Storage{}, nil, nil)
+	failedPos, err := m.verifyUploadedChunks(context.Background(), &domain.File{}, domain.Storage{}, nil, nil)
 	if err != nil {
 		t.Fatalf("expected nil for empty results, got: %v", err)
+	}
+	if len(failedPos) != 0 {
+		t.Fatalf("expected no failed positions, got: %v", failedPos)
 	}
 }
 
@@ -240,12 +243,129 @@ func TestVerifyUploadedChunksContentMismatch(t *testing.T) {
 	}
 
 	file := &domain.File{ID: fileID, StorageID: storageID}
-	err = m.verifyUploadedChunks(context.Background(), file, domain.Storage{ID: storageID, ChatID: 123}, results, nil)
+	failedPos, err := m.verifyUploadedChunks(context.Background(), file, domain.Storage{ID: storageID, ChatID: 123}, results, nil)
 	if err == nil {
 		t.Fatal("expected content mismatch error")
 	}
-	if !strings.Contains(err.Error(), "content mismatch") {
-		t.Fatalf("expected mismatch error, got: %v", err)
+	if len(failedPos) != 1 || failedPos[0] != 0 {
+		t.Fatalf("expected failed position [0], got: %v", failedPos)
+	}
+	if !strings.Contains(err.Error(), "failed for 1 chunk") {
+		t.Fatalf("expected chunk failure error, got: %v", err)
+	}
+}
+
+func TestVerifyUploadedChunksRetriesTransientDownloadFailure(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New()
+	cipher := NewChunkCipher("secret")
+	plainData := []byte("verify-retry-data")
+
+	enc, err := cipher.EncryptChunk(fileID, 0, plainData)
+	if err != nil {
+		t.Fatalf("encrypt: %v", err)
+	}
+
+	var downloadAttempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch {
+		case strings.Contains(r.URL.Path, "/getFile"):
+			n := downloadAttempts.Add(1)
+			if n <= DownloadChunkMaxAttempts {
+				// First DownloadChunkMaxAttempts attempts fail (covers downloadChunkWithRetry attempts)
+				w.WriteHeader(http.StatusInternalServerError)
+				_, _ = w.Write([]byte(`{"ok":false,"description":"temporary error"}`))
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{"ok": true, "result": map[string]any{"file_path": "path/chunk.bin"}})
+		case strings.Contains(r.URL.Path, "/file/"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc)
+		default:
+			w.WriteHeader(http.StatusNotFound)
+		}
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		workersRepo: &fakeWorkersRepo{},
+		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
+			},
+		}, 1),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: cipher,
+	}
+
+	results := []uploadedChunkResult{
+		{
+			TelegramFileID:    "FILE_ID",
+			TelegramMessageID: 1,
+			Position:          0,
+			PlainHash:         sha256Hash(plainData),
+		},
+	}
+
+	file := &domain.File{ID: fileID, StorageID: storageID}
+	failedPos, err := m.verifyUploadedChunks(context.Background(), file, domain.Storage{ID: storageID, ChatID: 123}, results, nil)
+	if err != nil {
+		t.Fatalf("expected verification to succeed after retry, got: %v", err)
+	}
+	if len(failedPos) != 0 {
+		t.Fatalf("expected no failed positions, got: %v", failedPos)
+	}
+	// Should have needed more than 1 download attempt
+	if downloadAttempts.Load() <= 1 {
+		t.Fatalf("expected multiple download attempts, got %d", downloadAttempts.Load())
+	}
+}
+
+func TestUploadChunkWithRetryBackoffRespectsContext(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New()
+	cipher := NewChunkCipher("secret")
+
+	ctx, cancel := context.WithCancel(context.Background())
+	var attempts atomic.Int32
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if strings.Contains(r.URL.Path, "/sendDocument") {
+			n := attempts.Add(1)
+			if n == 1 {
+				// First attempt fails, then cancel context during backoff
+				go func() { cancel() }()
+				w.WriteHeader(http.StatusInternalServerError)
+				json.NewEncoder(w).Encode(map[string]any{"ok": false, "description": "error"})
+				return
+			}
+			w.WriteHeader(http.StatusOK)
+			json.NewEncoder(w).Encode(map[string]any{
+				"ok":     true,
+				"result": map[string]any{"message_id": 1, "document": map[string]any{"file_id": "F"}},
+			})
+			return
+		}
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer srv.Close()
+
+	m := &StorageManager{
+		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
+			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
+			},
+		}, 1),
+		tgClient:    telegram.NewClient(srv.URL),
+		chunkCipher: cipher,
+	}
+
+	file := &domain.File{ID: fileID, Path: "/backoff.txt", StorageID: storageID}
+	storage := &domain.Storage{ID: storageID, ChatID: 123, Name: "test"}
+
+	_, err := m.uploadChunkWithRetry(ctx, file, storage, 0, []byte("data"), [32]byte{})
+	if err == nil {
+		t.Fatal("expected error after context cancellation during backoff")
 	}
 }
 
