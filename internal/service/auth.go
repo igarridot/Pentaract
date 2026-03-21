@@ -7,7 +7,6 @@ import (
 	"github.com/Dominux/Pentaract/internal/domain"
 	appjwt "github.com/Dominux/Pentaract/internal/jwt"
 	"github.com/Dominux/Pentaract/internal/password"
-	"github.com/Dominux/Pentaract/internal/repository"
 )
 
 type AuthService struct {
@@ -20,11 +19,7 @@ type authUsersRepo interface {
 	GetByEmail(ctx context.Context, email string) (*domain.User, error)
 }
 
-func NewAuthService(usersRepo *repository.UsersRepo, secretKey string, expireInSecs int) *AuthService {
-	return NewAuthServiceWithRepo(usersRepo, secretKey, expireInSecs)
-}
-
-func NewAuthServiceWithRepo(usersRepo authUsersRepo, secretKey string, expireInSecs int) *AuthService {
+func NewAuthService(usersRepo authUsersRepo, secretKey string, expireInSecs int) *AuthService {
 	return &AuthService{
 		usersRepo: usersRepo,
 		secretKey: secretKey,

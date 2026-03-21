@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/signal"
@@ -17,40 +18,54 @@ import (
 	"github.com/Dominux/Pentaract/internal/startup"
 )
 
-var (
-	loadConfigFn        = config.Load
-	createDBFn          = startup.CreateDB
-	parsePoolConfigFn   = pgxpool.ParseConfig
-	newPoolWithConfigFn = pgxpool.NewWithConfig
-	initDBFn            = startup.InitDB
-	createSuperuserFn   = startup.CreateSuperuser
-	newServerHandlerFn  = server.New
-	signalNotifyFn      = signal.Notify
-	listenAndServeFn    = func(srv *http.Server) error { return srv.ListenAndServe() }
-)
+type runDeps struct {
+	loadConfig        func() *config.Config
+	createDB          func(ctx context.Context, cfg *config.Config) error
+	parsePoolConfig   func(connString string) (*pgxpool.Config, error)
+	newPoolWithConfig func(ctx context.Context, cfg *pgxpool.Config) (*pgxpool.Pool, error)
+	initDB            func(ctx context.Context, pool startup.StartupPool) error
+	createSuperuser   func(ctx context.Context, pool startup.StartupPool, cfg *config.Config) error
+	newServerHandler  func(cfg *config.Config, pool *pgxpool.Pool) http.Handler
+	signalNotify      func(c chan<- os.Signal, sig ...os.Signal)
+	listenAndServe    func(srv *http.Server) error
+}
+
+func defaultDeps() runDeps {
+	return runDeps{
+		loadConfig:        config.Load,
+		createDB:          startup.CreateDB,
+		parsePoolConfig:   pgxpool.ParseConfig,
+		newPoolWithConfig: pgxpool.NewWithConfig,
+		initDB:            startup.InitDB,
+		createSuperuser:   startup.CreateSuperuser,
+		newServerHandler:  server.New,
+		signalNotify:      signal.Notify,
+		listenAndServe:    func(srv *http.Server) error { return srv.ListenAndServe() },
+	}
+}
 
 func main() {
-	if err := run(context.Background()); err != nil {
+	if err := run(context.Background(), defaultDeps()); err != nil {
 		log.Fatalf("%v", err)
 	}
 }
 
-func run(ctx context.Context) error {
-	cfg := loadConfigFn()
+func run(ctx context.Context, deps runDeps) error {
+	cfg := deps.loadConfig()
 
 	// Create database if not exists
-	if err := createDBFn(ctx, cfg); err != nil {
+	if err := deps.createDB(ctx, cfg); err != nil {
 		return fmt.Errorf("Failed to create database: %v", err)
 	}
 
 	// Connect to database
-	poolCfg, err := parsePoolConfigFn(cfg.DatabaseURL())
+	poolCfg, err := deps.parsePoolConfig(cfg.DatabaseURL())
 	if err != nil {
 		return fmt.Errorf("Failed to parse database config: %v", err)
 	}
 	poolCfg.MaxConns = int32(cfg.Workers * 8)
 
-	pool, err := newPoolWithConfigFn(ctx, poolCfg)
+	pool, err := deps.newPoolWithConfig(ctx, poolCfg)
 	if err != nil {
 		return fmt.Errorf("Failed to connect to database: %v", err)
 	}
@@ -59,17 +74,17 @@ func run(ctx context.Context) error {
 	}
 
 	// Run migrations
-	if err := initDBFn(ctx, pool); err != nil {
+	if err := deps.initDB(ctx, pool); err != nil {
 		return fmt.Errorf("Failed to initialize database: %v", err)
 	}
 
 	// Create superuser
-	if err := createSuperuserFn(ctx, pool, cfg); err != nil {
+	if err := deps.createSuperuser(ctx, pool, cfg); err != nil {
 		return fmt.Errorf("Failed to create superuser: %v", err)
 	}
 
 	// Build and start server
-	handler := newServerHandlerFn(cfg, pool)
+	handler := deps.newServerHandler(cfg, pool)
 
 	srv := &http.Server{
 		Addr:              fmt.Sprintf("0.0.0.0:%d", cfg.Port),
@@ -84,17 +99,17 @@ func run(ctx context.Context) error {
 	// Graceful shutdown
 	go func() {
 		sigCh := make(chan os.Signal, 1)
-		signalNotifyFn(sigCh, syscall.SIGINT, syscall.SIGTERM)
+		deps.signalNotify(sigCh, syscall.SIGINT, syscall.SIGTERM)
 		<-sigCh
 
-		log.Println("Shutting down server...")
+		slog.Info("shutting down server")
 		shutdownCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer cancel()
 		_ = srv.Shutdown(shutdownCtx)
 	}()
 
-	log.Printf("Server starting on port %d", cfg.Port)
-	if err := listenAndServeFn(srv); err != nil && err != http.ErrServerClosed {
+	slog.Info("server starting", "port", cfg.Port)
+	if err := deps.listenAndServe(srv); err != nil && err != http.ErrServerClosed {
 		return fmt.Errorf("Server error: %v", err)
 	}
 	return nil

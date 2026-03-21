@@ -7,7 +7,6 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 	pgxmock "github.com/pashagolub/pgxmock/v3"
 
 	"github.com/Dominux/Pentaract/internal/config"
@@ -54,17 +53,17 @@ func TestInitDBAndCreateSuperuser(t *testing.T) {
 
 	// InitDB starts tx, executes many statements, commits.
 	mock.ExpectBegin()
-	for i := 0; i < 13; i++ {
+	for i := 0; i < 15; i++ {
 		mock.ExpectExec(".*").WillReturnResult(pgxmock.NewResult("EXEC", 1))
 	}
 	mock.ExpectCommit()
-	if err := initDBWithPool(context.Background(), mock); err != nil {
+	if err := InitDB(context.Background(), mock); err != nil {
 		t.Fatalf("init db failed: %v", err)
 	}
 
 	cfg := testConfig()
 	mock.ExpectExec("INSERT INTO users").WithArgs(cfg.SuperuserEmail, pgxmock.AnyArg()).WillReturnResult(pgxmock.NewResult("INSERT", 1))
-	if err := createSuperuserWithPool(context.Background(), mock, cfg); err != nil {
+	if err := CreateSuperuser(context.Background(), mock, cfg); err != nil {
 		t.Fatalf("create superuser failed: %v", err)
 	}
 }
@@ -136,20 +135,6 @@ func TestCreateDBWithConnBranches(t *testing.T) {
 	if err := createDBWithConn(context.Background(), cfg, connExecErr); err == nil {
 		t.Fatalf("expected exec error")
 	}
-}
-
-func TestWrapperFunctionsAreInvoked(t *testing.T) {
-	// Call wrappers with nil pool to execute wrapper lines. They panic because the
-	// wrapped implementation dereferences pool, which is expected in this test.
-	func() {
-		defer func() { _ = recover() }()
-		_ = InitDB(context.Background(), (*pgxpool.Pool)(nil))
-	}()
-
-	func() {
-		defer func() { _ = recover() }()
-		_ = CreateSuperuser(context.Background(), (*pgxpool.Pool)(nil), testConfig())
-	}()
 }
 
 func testConfig() *config.Config {

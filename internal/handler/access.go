@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
-	"github.com/Dominux/Pentaract/internal/service"
 )
 
 type AccessHandler struct {
@@ -21,11 +20,7 @@ type accessService interface {
 	ListGrantCandidates(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID) ([]domain.User, error)
 }
 
-func NewAccessHandler(svc *service.AccessService) *AccessHandler {
-	return NewAccessHandlerWithService(svc)
-}
-
-func NewAccessHandlerWithService(svc accessService) *AccessHandler {
+func NewAccessHandler(svc accessService) *AccessHandler {
 	return &AccessHandler{svc: svc}
 }
 

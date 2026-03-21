@@ -2,7 +2,7 @@ package server
 
 import (
 	"io/fs"
-	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"path"
@@ -41,7 +41,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	storagesSvc := service.NewStoragesService(storagesRepo, accessRepo, filesRepo, storageManager)
 	accessSvc := service.NewAccessService(accessRepo, usersRepo)
 	workersSvc := service.NewStorageWorkersService(workersRepo)
-	filesSvc := service.NewFilesService(filesRepo, accessRepo, storageManager)
+	filesSvc := service.NewFilesService(filesRepo, accessRepo, storageManager, storagesRepo, scheduler)
 
 	// Handlers
 	authH := handler.NewAuthHandler(authSvc)
@@ -119,13 +119,13 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 func serveUI(r chi.Router) {
 	uiDir := "ui/dist"
 	if _, err := os.Stat(uiDir); os.IsNotExist(err) {
-		log.Println("UI directory not found, skipping static file serving")
+		slog.Info("UI directory not found, skipping static file serving")
 		return
 	}
 
 	absUI, err := filepath.Abs(uiDir)
 	if err != nil {
-		log.Printf("Failed to resolve UI directory path: %v", err)
+		slog.Warn("failed to resolve UI directory path", "err", err)
 		return
 	}
 	uiFS := os.DirFS(absUI)

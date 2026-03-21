@@ -15,11 +15,7 @@ type authService interface {
 	Login(ctx context.Context, email, pass string) (*service.LoginResponse, error)
 }
 
-func NewAuthHandler(svc *service.AuthService) *AuthHandler {
-	return NewAuthHandlerWithService(svc)
-}
-
-func NewAuthHandlerWithService(svc authService) *AuthHandler {
+func NewAuthHandler(svc authService) *AuthHandler {
 	return &AuthHandler{svc: svc}
 }
 

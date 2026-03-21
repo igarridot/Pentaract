@@ -72,33 +72,19 @@ func (f *fakeFilesAccessRepo) HasAccess(ctx context.Context, userID, storageID u
 }
 
 type fakeFilesManager struct {
-	uploadFn              func(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error
-	downloadFn            func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
-	downloadWithWorkersFn func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error
-	listWorkersFn         func(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error)
-	streamFn              func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
-	exactFn               func(ctx context.Context, file *domain.File) (int64, error)
-	rangeFn               func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error
-	deleteFromTelegramFn  func(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error
+	uploadFn             func(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error
+	downloadFn           func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
+	streamFn             func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
+	exactFn              func(ctx context.Context, file *domain.File) (int64, error)
+	rangeFn              func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error
+	deleteFromTelegramFn func(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error
 }
 
 func (f *fakeFilesManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
 	return f.uploadFn(ctx, file, reader, progress)
 }
-func (f *fakeFilesManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+func (f *fakeFilesManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, preferredWorkers []repository.WorkerToken) error {
 	return f.downloadFn(ctx, file, w, progress)
-}
-func (f *fakeFilesManager) DownloadToWriterWithWorkers(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error {
-	if f.downloadWithWorkersFn != nil {
-		return f.downloadWithWorkersFn(ctx, file, w, progress, workers)
-	}
-	return f.downloadFn(ctx, file, w, progress)
-}
-func (f *fakeFilesManager) ListDownloadWorkers(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error) {
-	if f.listWorkersFn == nil {
-		return nil, nil
-	}
-	return f.listWorkersFn(ctx, storageID)
 }
 func (f *fakeFilesManager) StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 	if f.streamFn == nil {
@@ -184,7 +170,7 @@ func TestFilesServiceMainFlows(t *testing.T) {
 	storages := &fakeStorageRepo{getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
 		return &domain.Storage{ID: id, Name: "S"}, nil
 	}}
-	svc := NewFilesServiceWithDeps(repo, access, manager, storages, nil)
+	svc := NewFilesService(repo, access, manager, storages, nil)
 
 	if err := svc.CreateFolder(context.Background(), userID, storageID, "base", "folder"); err != nil {
 		t.Fatalf("create folder failed: %v", err)
@@ -241,7 +227,7 @@ func TestFilesServiceCreateFolderNormalizesPath(t *testing.T) {
 			return true, nil
 		},
 	}
-	svc := NewFilesServiceWithDeps(repo, access, &fakeFilesManager{}, &fakeStorageRepo{}, nil)
+	svc := NewFilesService(repo, access, &fakeFilesManager{}, &fakeStorageRepo{}, nil)
 
 	if err := svc.CreateFolder(context.Background(), userID, storageID, "/base/sub/", "/child/"); err != nil {
 		t.Fatalf("create folder failed: %v", err)
@@ -262,7 +248,7 @@ func TestFilesServiceCreateFolderRejectsInvalidName(t *testing.T) {
 			return true, nil
 		},
 	}
-	svc := NewFilesServiceWithDeps(repo, access, &fakeFilesManager{}, &fakeStorageRepo{}, nil)
+	svc := NewFilesService(repo, access, &fakeFilesManager{}, &fakeStorageRepo{}, nil)
 
 	if err := svc.CreateFolder(context.Background(), uuid.New(), uuid.New(), "base", "a/b"); err == nil {
 		t.Fatalf("expected bad request for folder name with slash")
@@ -319,7 +305,7 @@ func TestFilesServiceForbiddenAndErrors(t *testing.T) {
 		},
 	}
 	storages := &fakeStorageRepo{getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) { return nil, errors.New("x") }}
-	svc := NewFilesServiceWithDeps(repo, access, manager, storages, nil)
+	svc := NewFilesService(repo, access, manager, storages, nil)
 
 	if err := svc.CreateFolder(context.Background(), uuid.New(), uuid.New(), "", "folder"); err == nil {
 		t.Fatalf("expected forbidden")
@@ -345,15 +331,15 @@ func TestFilesServiceForbiddenAndErrors(t *testing.T) {
 }
 
 func TestFilesServiceWorkersStatus(t *testing.T) {
-	svc := NewFilesServiceWithDeps(nil, nil, nil, nil, nil)
+	svc := NewFilesService(nil, nil, nil, nil, nil)
 	if got := svc.WorkersStatus(uuid.New()); got != "active" {
 		t.Fatalf("expected active with nil scheduler, got %q", got)
 	}
 
 	storageID := uuid.New()
-	scheduler := NewWorkerSchedulerWithRepo(nil, 1)
+	scheduler := NewWorkerScheduler(nil, 1)
 	scheduler.waiting[storageID] = 1
-	svc = NewFilesServiceWithDeps(nil, nil, nil, nil, scheduler)
+	svc = NewFilesService(nil, nil, nil, nil, scheduler)
 	if got := svc.WorkersStatus(storageID); got != "waiting_rate_limit" {
 		t.Fatalf("expected waiting_rate_limit, got %q", got)
 	}
@@ -407,7 +393,7 @@ func TestFilesServiceUploadSkipConflict(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
+	svc := NewFilesService(repo, access, manager, &fakeStorageRepo{getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
 		return &domain.Storage{ID: id}, nil
 	}}, nil)
 
@@ -467,7 +453,7 @@ func TestFilesServiceUploadInvalidConflictPolicy(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
+	svc := NewFilesService(repo, access, manager, &fakeStorageRepo{getByIDFn: func(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
 		return &domain.Storage{ID: id}, nil
 	}}, nil)
 
@@ -517,7 +503,7 @@ func TestFilesServiceDeleteSkipsTelegramCleanupWhenNotNeeded(t *testing.T) {
 				},
 			}
 
-			svc := NewFilesServiceWithDeps(repo, access, manager, storageRepo, nil)
+			svc := NewFilesService(repo, access, manager, storageRepo, nil)
 			if err := svc.Delete(context.Background(), uuid.New(), uuid.New(), "docs/report.pdf", nil, tt.forceDelete); err != nil {
 				t.Fatalf("Delete returned error: %v", err)
 			}
@@ -551,7 +537,7 @@ func TestFilesServiceDownloadDirReturnsArchiveName(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{}, nil)
+	svc := NewFilesService(repo, access, manager, &fakeStorageRepo{}, nil)
 
 	if name, err := svc.DownloadDir(context.Background(), uuid.New(), uuid.New(), "", io.Discard, nil); err != nil || name != "files" {
 		t.Fatalf("root archive name = %q err=%v, want files", name, err)
@@ -596,7 +582,7 @@ func TestFilesServiceDownloadDirWritesValidZipArchive(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{}, nil)
+	svc := NewFilesService(repo, access, manager, &fakeStorageRepo{}, nil)
 
 	var archive bytes.Buffer
 	progress := &DownloadProgress{}
@@ -638,115 +624,6 @@ func TestFilesServiceDownloadDirWritesValidZipArchive(t *testing.T) {
 	}
 	if entries["sub/image.txt"] != "world" {
 		t.Fatalf("unexpected sub/image.txt contents: %q", entries["sub/image.txt"])
-	}
-}
-
-func TestBuildDirArchiveWorkerPlanUsesAllWorkersForStreaming(t *testing.T) {
-	workers := []repository.WorkerToken{
-		{Token: "w1", Name: "w1"},
-		{Token: "w2", Name: "w2"},
-		{Token: "w3", Name: "w3"},
-		{Token: "w4", Name: "w4"},
-		{Token: "w5", Name: "w5"},
-	}
-
-	plan := buildDirArchiveWorkerPlan(workers, 6)
-
-	if len(plan.streamWorkers) != len(workers) {
-		t.Fatalf("stream worker count = %d, want %d", len(plan.streamWorkers), len(workers))
-	}
-	if len(plan.prefetchGroups) != 0 {
-		t.Fatalf("prefetch group count = %d, want 0", len(plan.prefetchGroups))
-	}
-}
-
-func TestFilesServiceDownloadDirStreamsSequentiallyUsingAllWorkers(t *testing.T) {
-	userID := uuid.New()
-	storageID := uuid.New()
-	fileOneID := uuid.New()
-	fileTwoID := uuid.New()
-	fileThreeID := uuid.New()
-
-	access := &fakeFilesAccessRepo{
-		hasAccessFn: func(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
-			return true, nil
-		},
-	}
-	repo := &fakeFilesRepo{
-		listFilesUnderPathFn: func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) {
-			return []domain.File{
-				{ID: fileOneID, Path: "root/docs/a.txt", StorageID: storageID},
-				{ID: fileTwoID, Path: "root/docs/b.txt", StorageID: storageID},
-				{ID: fileThreeID, Path: "root/docs/c.txt", StorageID: storageID},
-			}, nil
-		},
-	}
-
-	fileOneDone := make(chan struct{})
-	manager := &fakeFilesManager{
-		listWorkersFn: func(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error) {
-			return []repository.WorkerToken{
-				{Token: "w1", Name: "w1"},
-				{Token: "w2", Name: "w2"},
-				{Token: "w3", Name: "w3"},
-			}, nil
-		},
-		downloadFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
-			t.Fatalf("expected directory zip to use worker-aware downloads")
-			return nil
-		},
-		downloadWithWorkersFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, workers []repository.WorkerToken) error {
-			if len(workers) != 3 {
-				t.Fatalf("workers = %d, want 3", len(workers))
-			}
-			switch file.ID {
-			case fileOneID:
-				_, _ = io.WriteString(w, "alpha")
-				close(fileOneDone)
-			case fileTwoID:
-				select {
-				case <-fileOneDone:
-				default:
-					t.Fatalf("second file started before first file finished streaming")
-				}
-				_, _ = io.WriteString(w, "beta")
-			case fileThreeID:
-				select {
-				case <-fileOneDone:
-				default:
-					t.Fatalf("third file started before first file finished streaming")
-				}
-				_, _ = io.WriteString(w, "gamma")
-			default:
-				t.Fatalf("unexpected file id %s", file.ID)
-			}
-			return nil
-		},
-	}
-	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{}, nil)
-
-	var archive bytes.Buffer
-	errCh := make(chan error, 1)
-	go func() {
-		_, err := svc.DownloadDir(context.Background(), userID, storageID, "root/docs", &archive, nil)
-		errCh <- err
-	}()
-
-	select {
-	case err := <-errCh:
-		if err != nil {
-			t.Fatalf("download dir failed: %v", err)
-		}
-	case <-time.After(2 * time.Second):
-		t.Fatalf("download dir did not complete")
-	}
-
-	reader, err := zip.NewReader(bytes.NewReader(archive.Bytes()), int64(archive.Len()))
-	if err != nil {
-		t.Fatalf("zip reader failed: %v", err)
-	}
-	if len(reader.File) != 3 {
-		t.Fatalf("zip entry count = %d, want 3", len(reader.File))
 	}
 }
 
@@ -795,7 +672,7 @@ func TestFilesServiceDownloadDirStreamsFilesSequentially(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewFilesServiceWithDeps(repo, access, manager, &fakeStorageRepo{}, nil)
+	svc := NewFilesService(repo, access, manager, &fakeStorageRepo{}, nil)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()

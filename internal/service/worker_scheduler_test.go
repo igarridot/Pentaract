@@ -33,7 +33,7 @@ func TestWorkerSchedulerGetTokenImmediate(t *testing.T) {
 			return 0, nil
 		},
 	}
-	s := NewWorkerSchedulerWithRepo(repo, 10)
+	s := NewWorkerScheduler(repo, 10)
 	wt, err := s.GetToken(context.Background(), sid)
 	if err != nil || wt == nil || wt.Token != "t" {
 		t.Fatalf("unexpected result: wt=%v err=%v", wt, err)
@@ -55,7 +55,7 @@ func TestWorkerSchedulerGetTokenWaitAndCancel(t *testing.T) {
 			return 10 * time.Millisecond, nil
 		},
 	}
-	s := NewWorkerSchedulerWithRepo(repo, 10)
+	s := NewWorkerScheduler(repo, 10)
 
 	ctx, cancel := context.WithTimeout(context.Background(), 20*time.Millisecond)
 	defer cancel()
@@ -77,7 +77,7 @@ func TestWorkerSchedulerRepoError(t *testing.T) {
 			return 0, nil
 		},
 	}
-	s := NewWorkerSchedulerWithRepo(repo, 10)
+	s := NewWorkerScheduler(repo, 10)
 	_, err := s.GetToken(context.Background(), uuid.New())
 	if err == nil {
 		t.Fatalf("expected repository error")

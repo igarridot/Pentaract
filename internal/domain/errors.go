@@ -1,8 +1,18 @@
 package domain
 
 import (
+	"errors"
 	"fmt"
 	"net/http"
+)
+
+// Sentinel errors for Telegram and crypto operations.
+var (
+	ErrTelegramGetFileFailed = errors.New("telegram getFile failed")
+	ErrTelegramFileTooBig    = errors.New("telegram file too big for Bot API")
+	ErrDecryptionFailed      = errors.New("chunk decryption failed")
+	ErrTelegramResolveFailed = errors.New("telegram file_id resolution failed")
+	ErrDownloadInterrupted   = errors.New("telegram download stream interrupted")
 )
 
 type AppError struct {

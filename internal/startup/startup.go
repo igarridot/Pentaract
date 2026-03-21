@@ -3,11 +3,10 @@ package startup
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/config"
 	"github.com/Dominux/Pentaract/internal/password"
@@ -15,7 +14,7 @@ import (
 
 var pgxConnect = pgx.Connect
 
-type startupPool interface {
+type StartupPool interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 	Exec(ctx context.Context, sql string, arguments ...any) (pgconn.CommandTag, error)
 }
@@ -43,7 +42,7 @@ func createDBWithConn(ctx context.Context, cfg *config.Config, conn createDBConn
 		return fmt.Errorf("checking database existence: %w", err)
 	}
 	if exists {
-		log.Printf("Database %s already exists", cfg.DatabaseName)
+		slog.Info("database already exists", "name", cfg.DatabaseName)
 		return nil
 	}
 
@@ -52,15 +51,11 @@ func createDBWithConn(ctx context.Context, cfg *config.Config, conn createDBConn
 	if err != nil {
 		return fmt.Errorf("creating database: %w", err)
 	}
-	log.Printf("Database %s created", cfg.DatabaseName)
+	slog.Info("database created", "name", cfg.DatabaseName)
 	return nil
 }
 
-func InitDB(ctx context.Context, pool *pgxpool.Pool) error {
-	return initDBWithPool(ctx, pool)
-}
-
-func initDBWithPool(ctx context.Context, pool startupPool) error {
+func InitDB(ctx context.Context, pool StartupPool) error {
 	queries := []string{
 		`DO $$ BEGIN
 			IF NOT EXISTS (SELECT 1 FROM pg_type WHERE typname = 'access_type') THEN
@@ -138,6 +133,10 @@ func initDBWithPool(ctx context.Context, pool startupPool) error {
 			SELECT regexp_replace($1, '([.?*+^$[\]\\(){}|\\-])', '\\\1', 'g');
 		$$ LANGUAGE sql IMMUTABLE`,
 
+		// Performance indexes for file queries
+		`CREATE INDEX IF NOT EXISTS files_storage_id_path_idx ON files (storage_id, path)`,
+		`CREATE INDEX IF NOT EXISTS files_storage_id_pending_idx ON files (storage_id) WHERE is_uploaded = false`,
+
 		// Fix double slashes in file paths from previous bug
 		`UPDATE files SET path = regexp_replace(path, '//', '/', 'g') WHERE path LIKE '%//%'`,
 	}
@@ -157,11 +156,7 @@ func initDBWithPool(ctx context.Context, pool startupPool) error {
 	return tx.Commit(ctx)
 }
 
-func CreateSuperuser(ctx context.Context, pool *pgxpool.Pool, cfg *config.Config) error {
-	return createSuperuserWithPool(ctx, pool, cfg)
-}
-
-func createSuperuserWithPool(ctx context.Context, pool startupPool, cfg *config.Config) error {
+func CreateSuperuser(ctx context.Context, pool StartupPool, cfg *config.Config) error {
 	hash, err := password.Hash(cfg.SuperuserPass)
 	if err != nil {
 		return fmt.Errorf("hashing superuser password: %w", err)
@@ -175,6 +170,6 @@ func createSuperuserWithPool(ctx context.Context, pool startupPool, cfg *config.
 		return fmt.Errorf("creating superuser: %w", err)
 	}
 
-	log.Printf("Superuser %s ensured", cfg.SuperuserEmail)
+	slog.Info("superuser ensured", "email", cfg.SuperuserEmail)
 	return nil
 }

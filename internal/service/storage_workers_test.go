@@ -26,7 +26,7 @@ func (f *fakeStorageWorkersRepo) HasWorkers(ctx context.Context, storageID uuid.
 }
 
 func TestStorageWorkersService(t *testing.T) {
-	svc := NewStorageWorkersServiceWithRepo(&fakeStorageWorkersRepo{})
+	svc := NewStorageWorkersService(&fakeStorageWorkersRepo{})
 	userID := uuid.New()
 	storageID := uuid.New()
 

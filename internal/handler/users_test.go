@@ -17,7 +17,7 @@ import (
 
 type mockUsersService struct {
 	registerFn       func(ctx context.Context, email, pass string) (*domain.User, error)
-	adminStatusFn    func(user *appjwt.AuthUser) bool
+	isAdminFn    func(user *appjwt.AuthUser) bool
 	listManagedFn    func(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error)
 	updatePasswordFn func(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error
 	deleteManagedFn  func(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID) error
@@ -26,8 +26,8 @@ type mockUsersService struct {
 func (m *mockUsersService) Register(ctx context.Context, email, pass string) (*domain.User, error) {
 	return m.registerFn(ctx, email, pass)
 }
-func (m *mockUsersService) AdminStatus(user *appjwt.AuthUser) bool {
-	return m.adminStatusFn(user)
+func (m *mockUsersService) IsAdmin(user *appjwt.AuthUser) bool {
+	return m.isAdminFn(user)
 }
 func (m *mockUsersService) ListManaged(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error) {
 	return m.listManagedFn(ctx, caller)
@@ -44,7 +44,7 @@ func withAuth(r *http.Request, user *appjwt.AuthUser) *http.Request {
 }
 
 func TestUsersHandlerRegister(t *testing.T) {
-	h := NewUsersHandlerWithService(&mockUsersService{
+	h := NewUsersHandler(&mockUsersService{
 		registerFn: func(ctx context.Context, email, pass string) (*domain.User, error) {
 			return &domain.User{Email: email}, nil
 		},
@@ -59,8 +59,8 @@ func TestUsersHandlerRegister(t *testing.T) {
 }
 
 func TestUsersHandlerAdminStatus(t *testing.T) {
-	h := NewUsersHandlerWithService(&mockUsersService{
-		adminStatusFn: func(user *appjwt.AuthUser) bool { return true },
+	h := NewUsersHandler(&mockUsersService{
+		isAdminFn: func(user *appjwt.AuthUser) bool { return true },
 	})
 
 	w := httptest.NewRecorder()
@@ -72,7 +72,7 @@ func TestUsersHandlerAdminStatus(t *testing.T) {
 }
 
 func TestUsersHandlerListManaged(t *testing.T) {
-	h := NewUsersHandlerWithService(&mockUsersService{
+	h := NewUsersHandler(&mockUsersService{
 		listManagedFn: func(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error) {
 			return []domain.User{{Email: "u@example.com"}}, nil
 		},
@@ -87,7 +87,7 @@ func TestUsersHandlerListManaged(t *testing.T) {
 
 func TestUsersHandlerUpdatePassword(t *testing.T) {
 	targetID := uuid.New()
-	h := NewUsersHandlerWithService(&mockUsersService{
+	h := NewUsersHandler(&mockUsersService{
 		updatePasswordFn: func(ctx context.Context, caller *appjwt.AuthUser, id uuid.UUID, pass string) error {
 			if id != targetID || pass != "newpass" {
 				t.Fatalf("unexpected args")
@@ -111,7 +111,7 @@ func TestUsersHandlerUpdatePassword(t *testing.T) {
 
 func TestUsersHandlerDeleteManaged(t *testing.T) {
 	targetID := uuid.New()
-	h := NewUsersHandlerWithService(&mockUsersService{
+	h := NewUsersHandler(&mockUsersService{
 		deleteManagedFn: func(ctx context.Context, caller *appjwt.AuthUser, id uuid.UUID) error {
 			if id != targetID {
 				t.Fatalf("unexpected target id")
@@ -129,7 +129,7 @@ func TestUsersHandlerDeleteManaged(t *testing.T) {
 }
 
 func TestUsersHandlerDeleteManagedBadRequest(t *testing.T) {
-	h := NewUsersHandlerWithService(&mockUsersService{
+	h := NewUsersHandler(&mockUsersService{
 		deleteManagedFn: func(ctx context.Context, caller *appjwt.AuthUser, id uuid.UUID) error { return nil },
 	})
 	req := withAuth(httptest.NewRequest(http.MethodDelete, "/users/manage", nil), &appjwt.AuthUser{Email: "admin@example.com"})
@@ -141,7 +141,7 @@ func TestUsersHandlerDeleteManagedBadRequest(t *testing.T) {
 }
 
 func TestUsersHandlerValidationErrors(t *testing.T) {
-	h := NewUsersHandlerWithService(&mockUsersService{
+	h := NewUsersHandler(&mockUsersService{
 		registerFn: func(ctx context.Context, email, pass string) (*domain.User, error) { return nil, nil },
 		updatePasswordFn: func(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error {
 			return nil
@@ -168,7 +168,7 @@ func TestUsersHandlerValidationErrors(t *testing.T) {
 }
 
 func TestUsersHandlerListManagedError(t *testing.T) {
-	h := NewUsersHandlerWithService(&mockUsersService{
+	h := NewUsersHandler(&mockUsersService{
 		listManagedFn: func(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error) {
 			return nil, domain.ErrForbidden()
 		},

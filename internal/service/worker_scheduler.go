@@ -3,7 +3,7 @@ package service
 import (
 	"context"
 	"fmt"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
@@ -24,11 +24,7 @@ type schedulerWorkersRepo interface {
 	NextAvailableIn(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error)
 }
 
-func NewWorkerScheduler(workersRepo *repository.StorageWorkersRepo, rateLimit int) *WorkerScheduler {
-	return NewWorkerSchedulerWithRepo(workersRepo, rateLimit)
-}
-
-func NewWorkerSchedulerWithRepo(workersRepo schedulerWorkersRepo, rateLimit int) *WorkerScheduler {
+func NewWorkerScheduler(workersRepo schedulerWorkersRepo, rateLimit int) *WorkerScheduler {
 	return &WorkerScheduler{
 		workersRepo: workersRepo,
 		rateLimit:   rateLimit,
@@ -85,7 +81,7 @@ func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*r
 		}
 
 		if !logged {
-			log.Printf("[scheduler] all workers at rate limit (%d/min) for storage %s, waiting %s", s.rateLimit, storageID, waitDur.Round(time.Millisecond))
+			slog.Info("all workers at rate limit, waiting", "rate_limit", s.rateLimit, "storage_id", storageID, "wait", waitDur.Round(time.Millisecond))
 			logged = true
 			if !markedWaiting {
 				s.setWaiting(storageID, 1)

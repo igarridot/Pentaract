@@ -49,7 +49,7 @@ func makeWorkerReq(method, body string, params map[string]string) *http.Request 
 }
 
 func TestStorageWorkersHandlerFlows(t *testing.T) {
-	h := NewStorageWorkersHandlerWithService(&mockStorageWorkersService{
+	h := NewStorageWorkersHandler(&mockStorageWorkersService{
 		createFn: func(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
 			return &domain.StorageWorker{Name: name}, nil
 		},
@@ -112,7 +112,7 @@ func TestStorageWorkersParseOptionalUUID(t *testing.T) {
 }
 
 func TestStorageWorkersHandlerValidationErrors(t *testing.T) {
-	h := NewStorageWorkersHandlerWithService(&mockStorageWorkersService{
+	h := NewStorageWorkersHandler(&mockStorageWorkersService{
 		createFn: func(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
 			return nil, nil
 		},
@@ -154,7 +154,7 @@ func TestStorageWorkersHandlerValidationErrors(t *testing.T) {
 }
 
 func TestStorageWorkersHandlerServiceErrors(t *testing.T) {
-	h := NewStorageWorkersHandlerWithService(&mockStorageWorkersService{
+	h := NewStorageWorkersHandler(&mockStorageWorkersService{
 		createFn: func(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
 			return nil, domain.ErrForbidden()
 		},

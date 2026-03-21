@@ -17,7 +17,7 @@ func newFilesRepoMock(t *testing.T) (pgxmock.PgxPoolIface, *FilesRepo) {
 	if err != nil {
 		t.Fatalf("new pgxmock pool: %v", err)
 	}
-	return mock, NewFilesRepoWithDB(mock)
+	return mock, NewFilesRepo(mock)
 }
 
 func TestFilesRepoCreateMarkGetDelete(t *testing.T) {

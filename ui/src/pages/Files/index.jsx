@@ -1,5 +1,5 @@
-import { useState, useEffect, useCallback, useRef } from 'react'
-import { useParams, useNavigate, useLocation, useBlocker } from 'react-router-dom'
+import { useState, useEffect } from 'react'
+import { useNavigate } from 'react-router-dom'
 import {
   Typography, List, Box, TextField, InputAdornment,
   MenuItem, Divider, Breadcrumbs, Link as MuiLink, Button, FormControlLabel, Checkbox,
@@ -11,7 +11,6 @@ import {
   DriveFolderUpload as FolderUploadIcon,
 } from '@mui/icons-material'
 import API from '../../api'
-import { createOperationId } from '../../common/operation_id'
 import { useAlert } from '../../components/AlertStack'
 import FSListItem from '../../components/FSListItem'
 import FileInfo from '../../components/FileInfo'
@@ -28,277 +27,120 @@ import BulkMoveDialog from '../../components/BulkMoveDialog'
 import MediaPreviewDialog from '../../components/MediaPreviewDialog'
 import RenameFolderDialog from '../../components/RenameFolderDialog'
 import UploadConflictDialog from '../../components/UploadConflictDialog'
-import {
-  applyDeleteProgressUpdate,
-  createDeleteProgressState,
-  getDeleteProgressResetDelay,
-} from '../../common/delete_progress'
-import { buildUploadEntries, normalizeUploadPath, resolveUploadEntries } from './upload_conflicts'
-import { createUploadCompletionRegistry } from './upload_completion'
-import { isTerminalTransferStatus, isActiveUploadStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from '../../common/progress'
-import {
-  buildBulkMoveTargetPath,
-  buildRenamedPath,
-  createBulkOperation,
-  getBulkOperationMetrics,
-  getItemPath,
-  getMediaType,
-  runUploadPipeline,
-} from './operations'
+import { getItemPath, getMediaType, buildRenamedPath, getBulkOperationMetrics } from './operations'
+import { useFileNavigation } from './useFileNavigation'
+import { useUploads } from './useUploads'
+import { useDownloads } from './useDownloads'
+import { useDeleteOperation } from './useDeleteOperation'
+import { useBulkOperations } from './useBulkOperations'
+import { useNavigationBlock } from './useNavigationBlock'
 
 export default function Files() {
-  const { id: storageId } = useParams()
-  const location = useLocation()
   const navigate = useNavigate()
   const addAlert = useAlert()
 
-  const prefix = `/storages/${storageId}/files/`
-  const currentPathFromUrl = location.pathname.startsWith(prefix)
-    ? location.pathname.slice(prefix.length)
-    : ''
-  let currentPath = currentPathFromUrl
-  try {
-    currentPath = decodeURIComponent(currentPathFromUrl)
-  } catch {
-    currentPath = currentPathFromUrl
-  }
-
-  const [items, setItems] = useState([])
-  const [search, setSearch] = useState('')
-  const [searchResults, setSearchResults] = useState(null)
   const [infoFile, setInfoFile] = useState(null)
   const [previewFile, setPreviewFile] = useState(null)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
-  const [deleteTarget, setDeleteTarget] = useState(null)
-  const [forceDelete, setForceDelete] = useState(false)
   const [moveTarget, setMoveTarget] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
-  const [selectedFilePaths, setSelectedFilePaths] = useState([])
-  const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
-  const [bulkMoveOpen, setBulkMoveOpen] = useState(false)
-  const [bulkOperation, setBulkOperation] = useState(null)
-  const [uploadStates, setUploadStates] = useState([])
-  const [downloadStates, setDownloadStates] = useState([])
-  const [deleteState, setDeleteState] = useState(null)
-  const uploadStatesRef = useRef([])
-  const downloadStatesRef = useRef([])
-  const uploadProgressCancelsRef = useRef(new Map())
-  const uploadAbortControllersRef = useRef(new Map())
-  const uploadCompletionRegistryRef = useRef(createUploadCompletionRegistry())
-  const uploadConflictResolverRef = useRef(null)
-  const dirFileNamesCacheRef = useRef(new Map())
-  const downloadProgressCancelsRef = useRef(new Map())
-  const downloadFramesRef = useRef(new Map())
-  const bulkCancelRef = useRef(null)
-  const cancelDeleteProgressRef = useRef(null)
-  const [uploadConflictDialog, setUploadConflictDialog] = useState({
-    open: false,
-    filename: '',
-    targetPath: '',
-    applyForAll: false,
+
+  // Hook 1: File navigation (path, items, search)
+  // We pass onPathChange later via updateDirCache from uploads
+  const nav = useFileNavigation(addAlert)
+  const {
+    storageId, prefix, currentPath, pathParts,
+    items, search, setSearch, searchResults, setSearchResults,
+    loadTree, handleSearch,
+  } = nav
+
+  // Hook 4: Bulk operations (needs uploadStates/downloadStates for metrics — passed each render)
+  // Callbacks are stable and don't depend on transfer states.
+  const bulk = useBulkOperations(addAlert, storageId, loadTree)
+  const {
+    selectedFilePaths, setSelectedFilePaths,
+    bulkDeleteOpen, setBulkDeleteOpen,
+    bulkMoveOpen, setBulkMoveOpen,
+    bulkOperation, setBulkOperation, bulkCancelRef,
+    isBulkOperating, isBulkUpload, isBulkDownload, isBulkDelete, isBulkMove,
+    registerBulkTransfer, markBulkTransferTerminal, finalizeBulkTransferLaunch,
+    handleBulkDownload, handleBulkDelete, handleBulkMove,
+  } = bulk
+
+  // Hook 2: Uploads
+  const uploads = useUploads(addAlert, storageId, currentPath, loadTree, {
+    registerBulkTransfer,
+    markBulkTransferTerminal,
+    finalizeBulkTransferLaunch,
+    setBulkOperation,
+    bulkCancelRef,
   })
+  const {
+    uploadStates, isUploading,
+    startUpload, cancelUpload, cleanupUploads,
+    uploadConflictDialog, setUploadConflictDialog, handleUploadConflictDecision,
+    updateDirCache,
+  } = uploads
 
-  const loadTree = useCallback(async () => {
-    try {
-      const data = await API.files.tree(storageId, currentPath)
-      setItems(data || [])
-      const filesInCurrentPath = new Set((data || []).filter((item) => item.is_file).map((item) => item.name))
-      dirFileNamesCacheRef.current.set(normalizeUploadPath(currentPath), filesInCurrentPath)
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }, [storageId, currentPath])
+  // Hook 3: Downloads
+  const downloads = useDownloads(addAlert, storageId, loadTree, {
+    markBulkTransferTerminal,
+  })
+  const {
+    downloadStates, downloadStatesRef, isDownloading,
+    startDownload, cancelDownload, cleanupDownloads, releaseDownloadTracking,
+  } = downloads
 
+  // Hook 5: Delete
+  const del = useDeleteOperation(addAlert, storageId, loadTree)
+  const {
+    deleteTarget, setDeleteTarget,
+    forceDelete, setForceDelete,
+    deleteState, isDeleting,
+    confirmDelete, cleanupDelete,
+  } = del
+
+  // Derived flags
+  const hasActiveFileOperation = isUploading || isDownloading || isDeleting || isBulkOperating
+
+  // Hook 6: Navigation blocking
+  const { blocker } = useNavigationBlock({ hasActiveFileOperation, isDeleting, isBulkDelete })
+
+  // Wire navigation's onPathChange to upload's dir cache
+  // (useFileNavigation calls onPathChange on loadTree; we update cache + reset selection)
+  // Since we can't change the callback ref after hook init, we use an effect approach:
+  // The navigation hook passes data via loadTree -> setItems. We handle cache update here.
   useEffect(() => {
-    loadTree()
-    setSearchResults(null)
-    setSearch('')
+    if (items.length > 0 || currentPath !== undefined) {
+      updateDirCache(currentPath, items)
+    }
+  }, [items, currentPath, updateDirCache])
+
+  // Reset selection on path change
+  useEffect(() => {
     setSelectedFilePaths([])
   }, [loadTree])
 
+  // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (bulkCancelRef.current) bulkCancelRef.current()
-      uploadProgressCancelsRef.current.forEach((_, uploadId) => {
-        API.files.cancelUpload(uploadId).catch(() => {})
-      })
-      uploadProgressCancelsRef.current.forEach((cancel) => cancel())
-      uploadProgressCancelsRef.current.clear()
-      uploadAbortControllersRef.current.forEach((controller) => controller.abort())
-      uploadAbortControllersRef.current.clear()
-      uploadCompletionRegistryRef.current.clear()
-      downloadProgressCancelsRef.current.forEach((_, downloadId) => {
-        API.files.cancelDownload(downloadId).catch(() => {})
-      })
-      downloadProgressCancelsRef.current.forEach((cancel) => cancel())
-      downloadProgressCancelsRef.current.clear()
-      downloadFramesRef.current.forEach((frame) => frame.remove())
-      downloadFramesRef.current.clear()
-      if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
+      bulk.cleanupBulk()
+      cleanupUploads()
+      cleanupDownloads()
+      cleanupDelete()
     }
   }, [])
 
-  useEffect(() => {
-    uploadStatesRef.current = uploadStates
-  }, [uploadStates])
+  // Compute bulk metrics with actual current transfer states
+  const {
+    totalBytes: bulkTotalBytes,
+    processedBytes: bulkProcessedBytes,
+    totalChunks: bulkTotalChunks,
+    processedChunks: bulkProcessedChunks,
+    workersStatus: bulkWorkersStatus,
+  } = getBulkOperationMetrics(bulkOperation, uploadStates, downloadStates)
 
-  useEffect(() => {
-    downloadStatesRef.current = downloadStates
-  }, [downloadStates])
-
-  const isUploading = uploadStates.some((u) => isActiveUploadStatus(u.status))
-  const isDownloading = downloadStates.some((d) => d.status === 'downloading')
-  const isDeleting = deleteState?.status === 'deleting'
-  const isBulkOperating = bulkOperation?.status === 'running'
-  const isBulkUpload = isBulkOperating && bulkOperation?.operation === 'upload'
-  const isBulkDownload = isBulkOperating && bulkOperation?.operation === 'download'
-  const isBulkDelete = isBulkOperating && bulkOperation?.operation === 'delete'
-  const isBulkMove = isBulkOperating && bulkOperation?.operation === 'move'
-  const hasActiveFileOperation = isUploading || isDownloading || isDeleting || isBulkOperating
-
-  useEffect(() => {
-    if (!hasActiveFileOperation) return
-    const handler = (e) => {
-      const isDeleteFlow = isDeleting || isBulkDelete
-      const message = isDeleteFlow
-        ? 'Operation in progress. Leaving will cancel it. If delete is interrupted, the file will be irrecoverable and orphaned data may remain in storage.'
-        : 'Operation in progress. Leaving will cancel it.'
-      e.preventDefault()
-      e.returnValue = message
-      return message
-    }
-    window.addEventListener('beforeunload', handler)
-    return () => window.removeEventListener('beforeunload', handler)
-  }, [hasActiveFileOperation, isDeleting, isBulkDelete])
-
-  const blocker = useBlocker(hasActiveFileOperation)
-
-  const updateUploadState = useCallback((id, updater) => {
-    setUploadStates((prev) => prev.map((u) => (u.id === id ? updater(u) : u)))
-  }, [])
-
-  const updateDownloadState = useCallback((id, updater) => {
-    setDownloadStates((prev) => prev.map((d) => (d.id === id ? updater(d) : d)))
-  }, [])
-
-  const scheduleUploadStateRemoval = useCallback((uploadId, delayMs) => {
-    setTimeout(() => {
-      setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
-    }, delayMs)
-  }, [])
-
-  const scheduleDownloadStateRemoval = useCallback((downloadId, delayMs) => {
-    setTimeout(() => {
-      setDownloadStates((prev) => prev.filter((d) => d.id !== downloadId))
-    }, delayMs)
-  }, [])
-
-  const releaseUploadTracking = useCallback((uploadId, { abort = false } = {}) => {
-    uploadProgressCancelsRef.current.get(uploadId)?.()
-    uploadProgressCancelsRef.current.delete(uploadId)
-    const controller = uploadAbortControllersRef.current.get(uploadId)
-    if (abort) controller?.abort()
-    uploadAbortControllersRef.current.delete(uploadId)
-  }, [])
-
-  const releaseDownloadTracking = useCallback((downloadId) => {
-    downloadProgressCancelsRef.current.get(downloadId)?.()
-    downloadProgressCancelsRef.current.delete(downloadId)
-    downloadFramesRef.current.get(downloadId)?.remove()
-    downloadFramesRef.current.delete(downloadId)
-  }, [])
-
-  const triggerBrowserDownload = useCallback((downloadId, url) => {
-    const existingFrame = downloadFramesRef.current.get(downloadId)
-    existingFrame?.remove()
-
-    const frame = document.createElement('iframe')
-    frame.style.display = 'none'
-    frame.setAttribute('aria-hidden', 'true')
-    frame.src = url
-
-    downloadFramesRef.current.set(downloadId, frame)
-    document.body.appendChild(frame)
-  }, [])
-
-  const registerBulkTransfer = useCallback((operation, transferId) => {
-    setBulkOperation((prev) => {
-      if (!prev || prev.operation !== operation) return prev
-      if ((prev.transferIds || []).includes(transferId)) return prev
-      return { ...prev, transferIds: [...(prev.transferIds || []), transferId] }
-    })
-  }, [])
-
-  const markBulkTransferTerminal = useCallback((operation, transferId, terminalStatus) => {
-    if (!isTerminalTransferStatus(terminalStatus)) return
-
-    setBulkOperation((prev) => {
-      if (!prev || prev.operation !== operation) return prev
-      if (!(prev.transferIds || []).includes(transferId)) return prev
-      const currentStatus = prev.terminalStatuses?.[transferId]
-      if (currentStatus === terminalStatus) return prev
-
-      const terminalStatuses = { ...(prev.terminalStatuses || {}), [transferId]: terminalStatus }
-      const summary = summarizeTerminalStatuses(terminalStatuses)
-      let nextStatus = prev.status
-
-      if (prev.status === 'running' && prev.startedAll && summary.completed >= prev.total) {
-        nextStatus = resolveBulkTransferStatus(summary)
-      }
-
-      return {
-        ...prev,
-        terminalStatuses,
-        completed: summary.completed,
-        status: nextStatus,
-      }
-    })
-  }, [])
-
-  const finalizeBulkTransferLaunch = useCallback((operation, wasCancelled) => {
-    setBulkOperation((prev) => {
-      if (!prev || prev.operation !== operation) return prev
-      const summary = summarizeTerminalStatuses(prev.terminalStatuses || {})
-      let nextStatus = prev.status
-
-      if (wasCancelled) {
-        nextStatus = 'cancelled'
-      } else if (summary.completed >= prev.total) {
-        nextStatus = resolveBulkTransferStatus(summary)
-      }
-
-      return {
-        ...prev,
-        startedAll: true,
-        completed: summary.completed,
-        status: nextStatus,
-      }
-    })
-  }, [])
-
-  useEffect(() => {
-    if (!bulkOperation || !['upload', 'download'].includes(bulkOperation.operation)) return
-    if (bulkOperation.status === 'running') return
-
-    const timeoutMs = bulkOperation.status === 'error' ? 3000 : 1500
-    const timeout = setTimeout(() => setBulkOperation(null), timeoutMs)
-    return () => clearTimeout(timeout)
-  }, [bulkOperation])
-
-  const handleSearch = async (e) => {
-    e.preventDefault()
-    if (!search) {
-      setSearchResults(null)
-      return
-    }
-    try {
-      const data = await API.files.search(storageId, currentPath, search)
-      setSearchResults(data || [])
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
-
+  // --- Local handlers that compose hooks ---
   const handleCreateFolder = async (name) => {
     try {
       await API.files.createFolder(storageId, currentPath, name)
@@ -309,375 +151,13 @@ export default function Files() {
     }
   }
 
-  const applyUploadTerminalState = useCallback((uploadId, filename, status) => {
-    if (status === 'done') {
-      markBulkTransferTerminal('upload', uploadId, 'done')
-      releaseUploadTracking(uploadId)
-      uploadCompletionRegistryRef.current.settle(uploadId, 'done')
-      addAlert('File uploaded', 'success')
-      loadTree()
-      scheduleUploadStateRemoval(uploadId, 2000)
-      return
-    }
-
-    if (status === 'error') {
-      markBulkTransferTerminal('upload', uploadId, 'error')
-      releaseUploadTracking(uploadId)
-      uploadCompletionRegistryRef.current.settle(uploadId, 'error')
-      loadTree()
-      addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
-      scheduleUploadStateRemoval(uploadId, 3000)
-      return
-    }
-
-    if (status === 'skipped') {
-      markBulkTransferTerminal('upload', uploadId, 'skipped')
-      releaseUploadTracking(uploadId)
-      uploadCompletionRegistryRef.current.settle(uploadId, 'skipped')
-      loadTree()
-      addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
-      scheduleUploadStateRemoval(uploadId, 1500)
-    }
-  }, [addAlert, loadTree, markBulkTransferTerminal, releaseUploadTracking, scheduleUploadStateRemoval])
-
-  const launchUpload = (file, targetPath, onConflict = 'keep_both', providedUploadId = createOperationId()) => {
-    const filename = file.name
-    const uploadId = providedUploadId
-    const completionPromise = uploadCompletionRegistryRef.current.waitFor(uploadId)
-    const terminalPromise = completionPromise.then((status) => status)
-    setUploadStates((prev) => [...prev, {
-      id: uploadId,
-      filename,
-      totalBytes: file.size,
-      uploadedBytes: 0,
-      totalChunks: 0,
-      uploadedChunks: 0,
-      verificationTotal: 0,
-      verifiedChunks: 0,
-      status: 'uploading',
-      workersStatus: 'active',
-    }])
-
-    const cancel = API.files.subscribeProgress(uploadId, (data) => {
-      updateUploadState(uploadId, (prev) => ({
-        ...prev,
-        filename,
-        totalBytes: data.total_bytes ?? prev?.totalBytes ?? file.size,
-        uploadedBytes: data.uploaded_bytes ?? 0,
-        totalChunks: data.total ?? prev?.totalChunks ?? 0,
-        uploadedChunks: data.uploaded ?? 0,
-        verificationTotal: data.verification_total ?? prev?.verificationTotal ?? 0,
-        verifiedChunks: data.verified ?? 0,
-        status: data.status,
-        workersStatus: data.workers_status ?? prev?.workersStatus ?? 'active',
-      }))
-      applyUploadTerminalState(uploadId, filename, data.status)
-    })
-    uploadProgressCancelsRef.current.set(uploadId, cancel)
-    const controller = new AbortController()
-    uploadAbortControllersRef.current.set(uploadId, controller)
-
-    const requestPromise = API.files.upload(
-      storageId,
-      targetPath.replace(/\/+$/, ''),
-      file,
-      uploadId,
-      { signal: controller.signal, onConflict },
-    ).then(
-      () => 'sent',
-      (err) => {
-        if (err?.name !== 'AbortError') {
-          markBulkTransferTerminal('upload', uploadId, 'error')
-          updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
-          uploadCompletionRegistryRef.current.settle(uploadId, 'error')
-          addAlert(`Upload interrupted: ${err.message}`, 'error', { persistent: true })
-        } else {
-          markBulkTransferTerminal('upload', uploadId, 'cancelled')
-          uploadCompletionRegistryRef.current.settle(uploadId, 'cancelled')
-        }
-        releaseUploadTracking(uploadId)
-        loadTree()
-        scheduleUploadStateRemoval(uploadId, 1500)
-        return err?.name === 'AbortError' ? 'cancelled' : 'error'
-      },
-    )
-
-    return {
-      uploadId,
-      requestPromise,
-      completionPromise: terminalPromise,
-    }
-  }
-
-  const askUploadConflictDecision = useCallback((filename, targetPath) => (
-    new Promise((resolve) => {
-      uploadConflictResolverRef.current = resolve
-      setUploadConflictDialog({
-        open: true,
-        filename,
-        targetPath: normalizeUploadPath(targetPath),
-        applyForAll: false,
-      })
-    })
-  ), [])
-
-  const handleUploadConflictDecision = useCallback((action, applyForAll) => {
-    const resolve = uploadConflictResolverRef.current
-    uploadConflictResolverRef.current = null
-    setUploadConflictDialog((prev) => ({ ...prev, open: false, applyForAll: false }))
-    if (resolve) {
-      resolve({ action, applyForAll })
-    }
-  }, [])
-
-  const getDirFileNames = useCallback(async (targetPath) => {
-    const normalizedPath = normalizeUploadPath(targetPath)
-    if (dirFileNamesCacheRef.current.has(normalizedPath)) {
-      return dirFileNamesCacheRef.current.get(normalizedPath)
-    }
-    const data = await API.files.tree(storageId, normalizedPath)
-    const fileNames = new Set((data || []).filter((item) => item.is_file).map((item) => item.name))
-    dirFileNamesCacheRef.current.set(normalizedPath, fileNames)
-    return fileNames
-  }, [storageId])
-
-  const hasUploadConflict = useCallback(async (targetPath, filename) => {
-    const fileNames = await getDirFileNames(targetPath)
-    return fileNames.has(filename)
-  }, [getDirFileNames])
-
-  const runUploadBatch = useCallback(async (entries) => {
-    const showBulkProgress = entries.length > 1
-    const bulkCancelledRef = { current: false }
-    let defaultConflictMode = 'keep_both'
-    const askConflictDecision = async (filename, targetPath) => {
-      const decision = await askUploadConflictDecision(filename, targetPath)
-      if (decision.applyForAll && decision.action === 'skip') {
-        defaultConflictMode = 'skip'
-      }
-      return decision
-    }
-
-    const entriesToUpload = await resolveUploadEntries(
-      entries,
-      hasUploadConflict,
-      askConflictDecision,
-    )
-
-    if (showBulkProgress) {
-      setBulkOperation(createBulkOperation('upload', entriesToUpload.length))
-      bulkCancelRef.current = async () => {
-        bulkCancelledRef.current = true
-        const currentIds = uploadStatesRef.current
-          .filter((u) => isActiveUploadStatus(u.status))
-          .map((u) => u.id)
-        await Promise.all(currentIds.map(async (uploadId) => {
-          releaseUploadTracking(uploadId, { abort: true })
-          uploadCompletionRegistryRef.current.settle(uploadId, 'cancelled')
-          await API.files.cancelUpload(uploadId).catch(() => {})
-          markBulkTransferTerminal('upload', uploadId, 'cancelled')
-        }))
-      }
-    }
-
-    const uploadedKeys = new Set(entriesToUpload.map((entry) => `${entry.targetPath}::${entry.filename}`))
-    entries.forEach((entry) => {
-      const key = `${entry.targetPath}::${entry.filename}`
-      if (!uploadedKeys.has(key)) {
-        addAlert(`Skipped upload for "${entry.filename}"`, 'info', { persistent: false })
-      }
-    })
-
-    try {
-      await runUploadPipeline(entriesToUpload, async (entry) => {
-        if (bulkCancelledRef.current) return null
-
-        const uploadId = createOperationId()
-        if (showBulkProgress) registerBulkTransfer('upload', uploadId)
-
-        const transfer = launchUpload(entry.file, entry.targetPath, defaultConflictMode, uploadId)
-        dirFileNamesCacheRef.current.delete(normalizeUploadPath(entry.targetPath))
-        return transfer
-      })
-
-      if (showBulkProgress) {
-        finalizeBulkTransferLaunch('upload', bulkCancelledRef.current)
-      }
-    } catch (err) {
-      if (showBulkProgress) {
-        setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
-      }
-      throw err
-    } finally {
-      loadTree()
-      if (showBulkProgress) bulkCancelRef.current = null
-    }
-  }, [addAlert, askUploadConflictDecision, finalizeBulkTransferLaunch, hasUploadConflict, loadTree, markBulkTransferTerminal, registerBulkTransfer])
-
-  const handleUpload = async (e) => {
-    const files = Array.from(e.target.files || [])
-    if (files.length === 0) return
-    await runUploadBatch(buildUploadEntries(files, currentPath))
-    e.target.value = ''
-  }
-
-  const handleUploadDirectory = async (e) => {
-    const files = Array.from(e.target.files || [])
-    if (files.length === 0) return
-
-    await runUploadBatch(buildUploadEntries(files, currentPath))
-    e.target.value = ''
-  }
-
-  const handleCancelUpload = async (uploadId) => {
-    if (!uploadId) return
-    try {
-      releaseUploadTracking(uploadId, { abort: true })
-      uploadCompletionRegistryRef.current.settle(uploadId, 'cancelled')
-      await API.files.cancelUpload(uploadId)
-      markBulkTransferTerminal('upload', uploadId, 'cancelled')
-      addAlert('Upload cancelled', 'info')
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-    setUploadStates((prev) => prev.filter((u) => u.id !== uploadId))
-    loadTree()
-  }
-
-  const handleDownload = async (item, providedDownloadId = createOperationId()) => {
-    try {
-      const downloadId = providedDownloadId
-      const filename = item.is_file ? item.name : `${item.name}.zip`
-
-      setDownloadStates((prev) => [...prev, {
-        id: downloadId,
-        filename,
-        totalBytes: 0,
-        downloadedBytes: 0,
-        totalChunks: 0,
-        downloadedChunks: 0,
-        status: 'downloading',
-        workersStatus: 'active',
-        errorMessage: '',
-      }])
-
-      const cancel = API.files.subscribeDownloadProgress(downloadId, (data) => {
-        updateDownloadState(downloadId, (prev) => ({
-          ...prev,
-          filename,
-          totalBytes: data.total_bytes || prev?.totalBytes || 0,
-          downloadedBytes: data.downloaded_bytes || 0,
-          totalChunks: data.total || prev?.totalChunks || 0,
-          downloadedChunks: data.downloaded || 0,
-          status: data.status,
-          workersStatus: data.workers_status || prev?.workersStatus || 'active',
-          errorMessage: data.status === 'error' ? (data.error_message || prev?.errorMessage || '') : '',
-        }))
-
-        if (data.status === 'done') {
-          markBulkTransferTerminal('download', downloadId, 'done')
-          releaseDownloadTracking(downloadId)
-          loadTree()
-          scheduleDownloadStateRemoval(downloadId, 2000)
-        }
-        if (data.status === 'error') {
-          markBulkTransferTerminal('download', downloadId, 'error')
-          releaseDownloadTracking(downloadId)
-          loadTree()
-          addAlert(data.error_message || 'Download failed unexpectedly. Please try again.', 'error', { persistent: true })
-          scheduleDownloadStateRemoval(downloadId, 6000)
-        }
-        if (data.status === 'cancelled') {
-          markBulkTransferTerminal('download', downloadId, 'cancelled')
-          releaseDownloadTracking(downloadId)
-          loadTree()
-          addAlert('Download cancelled', 'info')
-          scheduleDownloadStateRemoval(downloadId, 1500)
-        }
-      })
-      downloadProgressCancelsRef.current.set(downloadId, cancel)
-
-      const url = item.is_file
-        ? API.files.downloadFileUrl(storageId, item.path, downloadId)
-        : API.files.downloadDirUrl(storageId, item.path, downloadId)
-
-      triggerBrowserDownload(downloadId, url)
-      return downloadId
-    } catch (err) {
-      markBulkTransferTerminal('download', providedDownloadId, 'error')
-      addAlert(err.message, 'error')
-      return null
-    }
-  }
-
-  const handleCancelDownload = async (downloadId) => {
-    if (!downloadId) return
-    try {
-      await API.files.cancelDownload(downloadId)
-      releaseDownloadTracking(downloadId)
-      updateDownloadState(downloadId, (prev) => (prev ? { ...prev, status: 'cancelled' } : prev))
-      markBulkTransferTerminal('download', downloadId, 'cancelled')
-      addAlert('Download cancelled', 'info')
-      loadTree()
-      scheduleDownloadStateRemoval(downloadId, 1500)
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
-
   const handlePreview = (item) => {
     const mediaType = getMediaType(item.name)
     if (!mediaType) {
-      handleDownload(item)
+      startDownload(item)
       return
     }
     setPreviewFile(item)
-  }
-
-  const handleDelete = async () => {
-    const target = deleteTarget
-    if (!target) return
-
-    setDeleteTarget(null)
-
-    try {
-      const path = getItemPath(target)
-      const deleteId = createOperationId()
-      if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
-      setDeleteState(createDeleteProgressState(target.name || path))
-
-      const cancel = API.files.subscribeDeleteProgress(deleteId, (data) => {
-        setDeleteState((prev) => applyDeleteProgressUpdate(prev, data))
-
-        if (data.status === 'done') {
-          cancel()
-          cancelDeleteProgressRef.current = null
-          loadTree()
-          setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay(data.status))
-        }
-        if (data.status === 'error') {
-          cancel()
-          cancelDeleteProgressRef.current = null
-          setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay(data.status))
-        }
-      })
-      cancelDeleteProgressRef.current = cancel
-
-      await API.files.delete(storageId, path, deleteId, forceDelete)
-      addAlert('Deleted', 'success')
-      loadTree()
-    } catch (err) {
-      if (cancelDeleteProgressRef.current) {
-        cancelDeleteProgressRef.current()
-        cancelDeleteProgressRef.current = null
-      }
-      setDeleteState((prev) => (prev ? { ...prev, status: 'error' } : null))
-      setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay('error'))
-      addAlert(err.message, 'error')
-    } finally {
-      setForceDelete(false)
-      loadTree()
-    }
   }
 
   const handleMove = async (item, newPath) => {
@@ -704,44 +184,11 @@ export default function Files() {
     }
   }
 
-  const pathParts = currentPath.split('/').filter(Boolean)
-  const breadcrumbs = [
-    <MuiLink
-      key="root"
-      underline="hover"
-      color="inherit"
-      sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
-      onClick={() => navigate(prefix)}
-    >
-      Root
-    </MuiLink>,
-    ...pathParts.map((part, i) => {
-      const pathTo = prefix + pathParts.slice(0, i + 1).join('/') + '/'
-      return (
-        <MuiLink
-          key={pathTo}
-          underline="hover"
-          color="inherit"
-          sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
-          onClick={() => navigate(pathTo)}
-        >
-          {part}
-        </MuiLink>
-      )
-    }),
-  ]
-
+  // --- Display items and selection ---
   const displayItems = searchResults || items
   const selectableFiles = displayItems.filter((item) => item.is_file)
   const selectedFiles = selectableFiles.filter((item) => selectedFilePaths.includes(item.path))
   const allFilesSelected = selectableFiles.length > 0 && selectedFiles.length === selectableFiles.length
-  const {
-    totalBytes: bulkTotalBytes,
-    processedBytes: bulkProcessedBytes,
-    totalChunks: bulkTotalChunks,
-    processedChunks: bulkProcessedChunks,
-    workersStatus: bulkWorkersStatus,
-  } = getBulkOperationMetrics(bulkOperation, uploadStates, downloadStates)
 
   useEffect(() => {
     const visiblePaths = new Set(selectableFiles.map((item) => item.path))
@@ -771,118 +218,32 @@ export default function Files() {
     setSelectedFilePaths(selectableFiles.map((item) => item.path))
   }
 
-  const handleBulkDownload = async () => {
-    const targets = [...selectedFiles]
-    const bulkCancelledRef = { current: false }
-    setBulkOperation(createBulkOperation('download', targets.length))
-    bulkCancelRef.current = async () => {
-      bulkCancelledRef.current = true
-      const currentIds = downloadStatesRef.current
-        .filter((d) => d.status === 'downloading')
-        .map((d) => d.id)
-      await Promise.all(currentIds.map(async (downloadId) => {
-        await API.files.cancelDownload(downloadId).catch(() => {})
-        releaseDownloadTracking(downloadId)
-        markBulkTransferTerminal('download', downloadId, 'cancelled')
-      }))
-    }
-    try {
-      for (let i = 0; i < targets.length; i += 1) {
-        if (bulkCancelledRef.current) break
-        const downloadId = createOperationId()
-        registerBulkTransfer('download', downloadId)
-        // Keep stable progress state behavior.
-        // eslint-disable-next-line no-await-in-loop
-        const startedId = await handleDownload(targets[i], downloadId)
-        if (!startedId) {
-          markBulkTransferTerminal('download', downloadId, 'error')
-        }
-      }
-      finalizeBulkTransferLaunch('download', bulkCancelledRef.current)
-    } catch (err) {
-      setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
-      addAlert(err.message, 'error')
-    } finally {
-      bulkCancelRef.current = null
-      loadTree()
-    }
-  }
-
-  const deleteSingleItem = async (item) => {
-    await API.files.delete(storageId, getItemPath(item))
-  }
-
-  const handleBulkDelete = async () => {
-    setBulkDeleteOpen(false)
-    const targets = [...selectedFiles]
-    const bulkCancelledRef = { current: false }
-    setBulkOperation(createBulkOperation('delete', targets.length))
-    bulkCancelRef.current = () => { bulkCancelledRef.current = true }
-    try {
-      let deletedCount = 0
-      for (let i = 0; i < targets.length; i += 1) {
-        if (bulkCancelledRef.current) break
-        // Keep API calls sequential to avoid overwhelming the backend.
-        // eslint-disable-next-line no-await-in-loop
-        await deleteSingleItem(targets[i])
-        deletedCount += 1
-        setBulkOperation((prev) => (prev ? { ...prev, completed: i + 1 } : prev))
-      }
-      setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
-      setTimeout(() => setBulkOperation(null), 1500)
-      addAlert(`Deleted ${deletedCount} file(s)`, 'success')
-      setSelectedFilePaths([])
-    } catch (err) {
-      setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
-      setTimeout(() => setBulkOperation(null), 3000)
-      addAlert(err.message, 'error')
-    } finally {
-      bulkCancelRef.current = null
-      loadTree()
-    }
-  }
-
-  const handleBulkMove = async (targetPath) => {
-    setBulkMoveOpen(false)
-    const targets = [...selectedFiles]
-    const bulkCancelledRef = { current: false }
-    const moveAbortController = new AbortController()
-    setBulkOperation(createBulkOperation('move', targets.length))
-    bulkCancelRef.current = () => {
-      bulkCancelledRef.current = true
-      moveAbortController.abort()
-    }
-    try {
-      let movedCount = 0
-      for (let i = 0; i < targets.length; i += 1) {
-        if (bulkCancelledRef.current) break
-        const item = targets[i]
-        const newPath = buildBulkMoveTargetPath(targetPath, item.name)
-        // Keep move operations sequential for predictable ordering and cancellation.
-        // eslint-disable-next-line no-await-in-loop
-        await API.files.move(storageId, item.path, newPath, { signal: moveAbortController.signal })
-        movedCount += 1
-        setBulkOperation((prev) => (prev ? { ...prev, completed: i + 1 } : prev))
-      }
-      setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
-      setTimeout(() => setBulkOperation(null), 1500)
-      addAlert(`Moved ${movedCount} file(s)`, 'success')
-      setSelectedFilePaths([])
-    } catch (err) {
-      if (err?.name === 'AbortError') {
-        setBulkOperation((prev) => (prev ? { ...prev, status: 'cancelled' } : prev))
-        setTimeout(() => setBulkOperation(null), 1500)
-        addAlert('Bulk move cancelled', 'info')
-      } else {
-        setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
-        setTimeout(() => setBulkOperation(null), 3000)
-        addAlert(err.message, 'error')
-      }
-    } finally {
-      bulkCancelRef.current = null
-      loadTree()
-    }
-  }
+  // --- Breadcrumbs ---
+  const breadcrumbs = [
+    <MuiLink
+      key="root"
+      underline="hover"
+      color="inherit"
+      sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
+      onClick={() => navigate(prefix)}
+    >
+      Root
+    </MuiLink>,
+    ...pathParts.map((part, i) => {
+      const pathTo = prefix + pathParts.slice(0, i + 1).join('/') + '/'
+      return (
+        <MuiLink
+          key={pathTo}
+          underline="hover"
+          color="inherit"
+          sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
+          onClick={() => navigate(pathTo)}
+        >
+          {part}
+        </MuiLink>
+      )
+    }),
+  ]
 
   return (
     <Box>
@@ -900,7 +261,7 @@ export default function Files() {
           verifiedChunks={uploadState.verifiedChunks}
           status={uploadState.status}
           workersStatus={uploadState.workersStatus}
-          onCancel={() => handleCancelUpload(uploadState.id)}
+          onCancel={() => cancelUpload(uploadState.id)}
         />
       ))}
       {downloadStates.map((downloadState) => (
@@ -914,7 +275,7 @@ export default function Files() {
           status={downloadState.status}
           workersStatus={downloadState.workersStatus}
           errorMessage={downloadState.errorMessage}
-          onCancel={() => handleCancelDownload(downloadState.id)}
+          onCancel={() => cancelDownload(downloadState.id)}
         />
       ))}
       {deleteState && (
@@ -979,7 +340,11 @@ export default function Files() {
           <Button size="small" onClick={() => setBulkMoveOpen(true)} disabled={selectedFiles.length === 0 || isBulkOperating}>
             Move selected
           </Button>
-          <Button size="small" onClick={handleBulkDownload} disabled={selectedFiles.length === 0 || isBulkOperating}>
+          <Button
+            size="small"
+            onClick={() => handleBulkDownload(selectedFiles, { startDownload, downloadStatesRef, releaseDownloadTracking })}
+            disabled={selectedFiles.length === 0 || isBulkOperating}
+          >
             Download selected
           </Button>
           <Button
@@ -1015,7 +380,7 @@ export default function Files() {
                 onInfo={setInfoFile}
                 onPreview={handlePreview}
                 onDelete={setDeleteTarget}
-                onDownload={handleDownload}
+                onDownload={startDownload}
                 onMove={setMoveTarget}
                 onRename={setRenameTarget}
                 selectionEnabled
@@ -1041,7 +406,7 @@ export default function Files() {
           </MenuItem>,
           <MenuItem key="upload" component="label">
             <UploadIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> Upload File
-            <input type="file" hidden multiple onChange={(e) => { close(); handleUpload(e) }} />
+            <input type="file" hidden multiple onChange={(e) => { close(); startUpload(e) }} />
           </MenuItem>,
           <MenuItem key="upload-folder" component="label">
             <FolderUploadIcon sx={{ mr: 1.5, fontSize: 18, color: 'text.secondary' }} /> Upload Folder
@@ -1051,7 +416,7 @@ export default function Files() {
               multiple
               webkitdirectory=""
               directory=""
-              onChange={(e) => { close(); handleUploadDirectory(e) }}
+              onChange={(e) => { close(); startUpload(e) }}
             />
           </MenuItem>,
         ]}
@@ -1068,7 +433,7 @@ export default function Files() {
           if (!previewFile) return
           const file = previewFile
           setPreviewFile(null)
-          handleDownload(file)
+          startDownload(file)
         }}
       />
 
@@ -1083,7 +448,7 @@ export default function Files() {
         entity={deleteTarget?.name || 'item'}
         action="Delete"
         description={`Are you sure you want to delete "${deleteTarget?.name}"?`}
-        onConfirm={handleDelete}
+        onConfirm={confirmDelete}
         onCancel={() => { setDeleteTarget(null); setForceDelete(false) }}
       >
         <Box sx={{ mt: 2 }}>
@@ -1111,7 +476,7 @@ export default function Files() {
         entity={`${selectedFiles.length} file(s)`}
         action="Delete"
         description={`Are you sure you want to delete ${selectedFiles.length} selected file(s)?`}
-        onConfirm={handleBulkDelete}
+        onConfirm={() => handleBulkDelete(selectedFiles)}
         onCancel={() => setBulkDeleteOpen(false)}
       />
 
@@ -1135,7 +500,7 @@ export default function Files() {
         open={bulkMoveOpen}
         count={selectedFiles.length}
         storageId={storageId}
-        onConfirm={handleBulkMove}
+        onConfirm={(targetPath) => handleBulkMove(targetPath, selectedFiles)}
         onClose={() => setBulkMoveOpen(false)}
       />
 

@@ -21,11 +21,7 @@ type storagesService interface {
 	Delete(ctx context.Context, userID uuid.UUID, storageID uuid.UUID, progress *service.DeleteProgress) error
 }
 
-func NewStoragesHandler(svc *service.StoragesService) *StoragesHandler {
-	return NewStoragesHandlerWithService(svc)
-}
-
-func NewStoragesHandlerWithService(svc storagesService) *StoragesHandler {
+func NewStoragesHandler(svc storagesService) *StoragesHandler {
 	return &StoragesHandler{svc: svc}
 }
 

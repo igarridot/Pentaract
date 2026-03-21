@@ -17,7 +17,7 @@ func TestAccessRepoCRUD(t *testing.T) {
 	}
 	defer mock.Close()
 
-	repo := NewAccessRepoWithDB(mock)
+	repo := NewAccessRepo(mock)
 	uid := uuid.New()
 	sid := uuid.New()
 
@@ -51,7 +51,7 @@ func TestAccessRepoHasAccessAndDeleteNotFound(t *testing.T) {
 	}
 	defer mock.Close()
 
-	repo := NewAccessRepoWithDB(mock)
+	repo := NewAccessRepo(mock)
 	uid := uuid.New()
 	sid := uuid.New()
 

@@ -42,7 +42,7 @@ func getDeleteTracker(deleteID string) (*deleteTracker, bool) {
 }
 
 func scheduleDeleteTrackerCleanup(deleteID string) {
-	deleteTrackerAfterFunc(5*time.Minute, func() {
+	deleteTrackerAfterFunc(service.TrackerCleanupDelay, func() {
 		deleteRegistry.mu.Lock()
 		delete(deleteRegistry.m, deleteID)
 		deleteRegistry.mu.Unlock()

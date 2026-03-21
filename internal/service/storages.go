@@ -6,7 +6,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
-	"github.com/Dominux/Pentaract/internal/repository"
 )
 
 type StoragesService struct {
@@ -37,15 +36,6 @@ type storagesManager interface {
 }
 
 func NewStoragesService(
-	storagesRepo *repository.StoragesRepo,
-	accessRepo *repository.AccessRepo,
-	filesRepo *repository.FilesRepo,
-	manager *StorageManager,
-) *StoragesService {
-	return NewStoragesServiceWithDeps(storagesRepo, accessRepo, filesRepo, manager)
-}
-
-func NewStoragesServiceWithDeps(
 	storagesRepo storagesRepository,
 	accessRepo storagesAccessRepository,
 	filesRepo storagesFilesRepository,

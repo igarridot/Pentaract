@@ -7,7 +7,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
-	"github.com/Dominux/Pentaract/internal/service"
 )
 
 type StorageWorkersHandler struct {
@@ -22,11 +21,7 @@ type storageWorkersService interface {
 	HasWorkers(ctx context.Context, storageID uuid.UUID) (bool, error)
 }
 
-func NewStorageWorkersHandler(svc *service.StorageWorkersService) *StorageWorkersHandler {
-	return NewStorageWorkersHandlerWithService(svc)
-}
-
-func NewStorageWorkersHandlerWithService(svc storageWorkersService) *StorageWorkersHandler {
+func NewStorageWorkersHandler(svc storageWorkersService) *StorageWorkersHandler {
 	return &StorageWorkersHandler{svc: svc}
 }
 
