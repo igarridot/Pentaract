@@ -11,7 +11,12 @@
       "Bash(npm test:*)",
       "Bash(npx vitest:*)",
       "WebFetch(domain:github.com)",
-      "WebFetch(domain:raw.githubusercontent.com)"
+      "WebFetch(domain:raw.githubusercontent.com)",
+      "Bash(npm run:*)",
+      "Bash(md5)",
+      "Bash(md5 /Volumes/SUNEAST/workspace/pentaract/internal/telegram/client.go)",
+      "Bash(ls:*)",
+      "Bash(gh run:*)"
     ]
   }
 }
