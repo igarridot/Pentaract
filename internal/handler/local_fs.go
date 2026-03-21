@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bufio"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -187,8 +188,14 @@ func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
 		}
 
 		pr, pw := io.Pipe()
+		// S3: Buffer one chunk ahead so the file reader can race ahead of
+		// the chunk encryption/upload pipeline, smoothing throughput.
 		go func() {
-			_, copyErr := io.Copy(pw, f)
+			bw := bufio.NewWriterSize(pw, service.UploadChunkSize)
+			_, copyErr := io.Copy(bw, f)
+			if flushErr := bw.Flush(); copyErr == nil {
+				copyErr = flushErr
+			}
 			f.Close()
 			pw.CloseWithError(copyErr)
 		}()

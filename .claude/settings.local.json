@@ -23,7 +23,9 @@
       "Bash(npx pnpm:*)",
       "Bash(gh pr:*)",
       "Bash(git fetch:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(pushd /Volumes/SUNEAST/workspace/pentaract-cli)",
+      "Bash(popd)"
     ]
   }
 }
