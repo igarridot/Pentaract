@@ -15,7 +15,11 @@ import (
 
 func (m *StorageManager) downloadParallelism(ctx context.Context, storageID uuid.UUID, chunksCount int) int {
 	if workers := m.preferredDownloadWorkers(ctx, storageID, chunksCount); len(workers) > 0 {
-		return len(workers)
+		n := len(workers)
+		if n > DownloadChunkParallelism {
+			n = DownloadChunkParallelism
+		}
+		return n
 	}
 	return 1
 }
@@ -229,6 +233,9 @@ func (m *StorageManager) downloadChunksInOrderWithLoaderAndWorkers(
 			preferredWorkers = nil
 		}
 		parallelism = 1
+	}
+	if parallelism > DownloadChunkParallelism {
+		parallelism = DownloadChunkParallelism
 	}
 
 	jobs := make([]chunkDownloadJob, len(chunks))
