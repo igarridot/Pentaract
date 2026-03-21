@@ -25,21 +25,37 @@ const maxRetries = 3
 var telegramSleep = time.Sleep
 
 type Client struct {
-	baseURL    string
-	httpClient *http.Client
+	baseURL        string
+	httpClient     *http.Client
+	downloadClient *http.Client
 }
 
-func newHTTPClient() *http.Client {
+func newTransport() *http.Transport {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
 	transport.MaxIdleConns = 30
 	transport.MaxIdleConnsPerHost = 20
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.ExpectContinueTimeout = time.Second
 	transport.ForceAttemptHTTP2 = true
+	return transport
+}
 
+// newUploadClient returns an HTTP client for uploads (large body sends).
+// 30s is enough for 20MB at 300 Mbps (~0.5s) with generous margin for
+// Telegram processing, TLS negotiation and rate-limit waits.
+func newUploadClient() *http.Client {
 	return &http.Client{
-		Timeout:   10 * time.Minute, // 20MB chunks can be slow on limited connections
-		Transport: transport,
+		Timeout:   30 * time.Second,
+		Transport: newTransport(),
+	}
+}
+
+// newDownloadClient returns an HTTP client for downloads and API calls
+// where a 2-minute timeout is more than enough for ~20MB chunks.
+func newDownloadClient() *http.Client {
+	return &http.Client{
+		Timeout:   2 * time.Minute,
+		Transport: newTransport(),
 	}
 }
 
@@ -54,8 +70,9 @@ func retryBackoff(ctx context.Context, attempt int) {
 
 func NewClient(baseURL string) *Client {
 	return &Client{
-		baseURL:    baseURL,
-		httpClient: newHTTPClient(),
+		baseURL:        baseURL,
+		httpClient:     newUploadClient(),
+		downloadClient: newDownloadClient(),
 	}
 }
 
@@ -300,7 +317,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		if err != nil {
 			return nil, fmt.Errorf("creating getFile request: %w", err)
 		}
-		resp, err := c.httpClient.Do(req)
+		resp, err := c.downloadClient.Do(req)
 		if err != nil {
 			return nil, fmt.Errorf("getting file info: %w", err)
 		}
@@ -339,7 +356,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		if err != nil {
 			return nil, fmt.Errorf("creating file download request: %w", err)
 		}
-		dlResp, err := c.httpClient.Do(req)
+		dlResp, err := c.downloadClient.Do(req)
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
 				slog.Warn("transient file download error, retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
