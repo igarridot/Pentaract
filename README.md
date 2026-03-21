@@ -9,7 +9,7 @@ The API and UI provide file management, access control, progress tracking, and w
 
 ## Current Project Status
 
-- Backend: Go 1.24 (`chi`, `pgx`)
+- Backend: Go 1.25 (`chi`, `pgx`)
 - Frontend: React 19 + Vite + MUI 7
 - Database: PostgreSQL
 

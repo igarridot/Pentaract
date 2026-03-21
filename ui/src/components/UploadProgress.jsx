@@ -1,8 +1,8 @@
-import { Box, LinearProgress, Typography, IconButton } from '@mui/material'
-import { Close as CloseIcon } from '@mui/icons-material'
+import { Box, Typography } from '@mui/material'
 import { convertSize } from '../common/size_converter'
 import { calculatePercent } from '../common/progress'
 import { useTransferSpeed } from '../common/use_transfer_speed'
+import ProgressCard from './ProgressCard'
 
 export default function UploadProgress({
   filename,
@@ -45,47 +45,17 @@ export default function UploadProgress({
         ? 'Uploading'
         : 'Complete'
 
-  const progressVariant = isVerifying || totalBytes > 0 ? 'determinate' : 'indeterminate'
-
   return (
-    <Box
-      sx={{
-        width: '100%',
-        maxWidth: '100%',
-        boxSizing: 'border-box',
-        mb: 2,
-        p: 2,
-        bgcolor: isError ? 'rgba(255,59,48,0.06)' : 'background.paper',
-        borderRadius: 3,
-        border: '1px solid',
-        borderColor: isError ? 'rgba(255,59,48,0.15)' : 'divider',
-        overflow: 'hidden',
-      }}
+    <ProgressCard
+      title={title}
+      subtitle={filename}
+      percent={percent}
+      variant={isVerifying || totalBytes > 0 ? 'determinate' : 'indeterminate'}
+      progressColor={isError ? 'error' : isActive ? 'primary' : 'success'}
+      isError={isError}
+      showCancel={isActive}
+      onCancel={onCancel}
     >
-      <Box sx={{ display: 'flex', alignItems: { xs: 'flex-start', sm: 'center' }, justifyContent: 'space-between', mb: 1, minWidth: 0 }}>
-        <Typography variant="body2" sx={{ fontWeight: 500, flexGrow: 1, minWidth: 0, pr: 1, wordBreak: 'break-word' }}>
-          {title}
-          <Typography
-            component="span"
-            variant="body2"
-            color="text.secondary"
-            sx={{ ml: 0.5, maxWidth: '100%', overflowWrap: 'anywhere' }}
-          >
-            {filename}
-          </Typography>
-        </Typography>
-        {isActive && onCancel && (
-          <IconButton size="small" onClick={onCancel} sx={{ ml: 1, opacity: 0.5, '&:hover': { opacity: 1 } }}>
-            <CloseIcon sx={{ fontSize: 16 }} />
-          </IconButton>
-        )}
-      </Box>
-      <LinearProgress
-        variant={progressVariant}
-        value={percent}
-        color={isError ? 'error' : isActive ? 'primary' : 'success'}
-        sx={{ mb: 0.75, width: '100%' }}
-      />
       <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 0.75, flexDirection: { xs: 'column', sm: 'row' } }}>
         <Typography variant="caption" color="text.secondary">
           {progressText}
@@ -94,6 +64,6 @@ export default function UploadProgress({
           {[workersText, isActive && chunkText, isActive && speedText].filter(Boolean).join(' \u00b7 ')}
         </Typography>
       </Box>
-    </Box>
+    </ProgressCard>
   )
 }

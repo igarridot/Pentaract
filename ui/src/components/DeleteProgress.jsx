@@ -1,5 +1,6 @@
-import { Box, LinearProgress, Typography } from '@mui/material'
+import { Typography } from '@mui/material'
 import { calculatePercent } from '../common/progress'
+import ProgressCard from './ProgressCard'
 
 export default function DeleteProgress({ label, totalChunks, deletedChunks, status, workersStatus }) {
   const isActive = status === 'deleting'
@@ -8,37 +9,20 @@ export default function DeleteProgress({ label, totalChunks, deletedChunks, stat
   const pending = totalChunks > 0 ? Math.max(totalChunks - deletedChunks, 0) : 0
   const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
 
+  const title = isError ? 'Delete failed' : isActive ? 'Deleting' : 'Delete complete'
+
   return (
-    <Box
-      sx={{
-        width: '100%',
-        maxWidth: '100%',
-        boxSizing: 'border-box',
-        mb: 2,
-        p: 2,
-        bgcolor: isError ? 'rgba(255,59,48,0.06)' : 'background.paper',
-        borderRadius: 3,
-        border: '1px solid',
-        borderColor: isError ? 'rgba(255,59,48,0.15)' : 'divider',
-      }}
+    <ProgressCard
+      title={title}
+      subtitle={label}
+      percent={percent}
+      variant={totalChunks > 0 ? 'determinate' : 'indeterminate'}
+      progressColor={isError ? 'error' : isActive ? 'primary' : 'success'}
+      isError={isError}
     >
-      <Typography variant="body2" sx={{ fontWeight: 500, mb: 1 }}>
-        {isError ? 'Delete failed' : isActive ? 'Deleting' : 'Delete complete'}
-        <Typography component="span" variant="body2" color="text.secondary" sx={{ ml: 0.5 }}>
-          {label}
-        </Typography>
-      </Typography>
-
-      <LinearProgress
-        variant={totalChunks > 0 ? 'determinate' : 'indeterminate'}
-        value={percent}
-        color={isError ? 'error' : isActive ? 'primary' : 'success'}
-        sx={{ mb: 0.75, width: '100%' }}
-      />
-
       <Typography variant="caption" color="text.secondary">
         {totalChunks > 0 ? `${workersText} · ${deletedChunks}/${totalChunks} chunks · ${pending} pending` : `${workersText} · Calculating chunks...`}
       </Typography>
-    </Box>
+    </ProgressCard>
   )
 }

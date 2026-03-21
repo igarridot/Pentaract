@@ -95,6 +95,32 @@ func parseRateLimitError(resp *http.Response) *RateLimitError {
 	}
 }
 
+// doWithRateLimitRetry executes do() up to maxRetries+1 times, handling 429 rate-limit
+// responses by sleeping for the retry_after duration and retrying. The name parameter
+// is used in log messages to identify the operation.
+func (c *Client) doWithRateLimitRetry(ctx context.Context, name string, do func() (*http.Response, error)) (*http.Response, error) {
+	for attempt := 0; attempt <= maxRetries; attempt++ {
+		resp, err := do()
+		if err != nil {
+			return nil, err
+		}
+
+		if rlErr := parseRateLimitError(resp); rlErr != nil {
+			resp.Body.Close()
+			if attempt == maxRetries {
+				return nil, rlErr
+			}
+			slog.Warn("telegram rate limited on "+name, "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
+			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
+			continue
+		}
+
+		return resp, nil
+	}
+
+	return nil, fmt.Errorf("telegram %s failed after %d retries", name, maxRetries)
+}
+
 func buildUploadEnvelope(chatID int64, filename string) (prefix, suffix []byte, contentType string, err error) {
 	var buf bytes.Buffer
 	writer := multipart.NewWriter(&buf)
@@ -127,8 +153,9 @@ func (c *Client) Upload(token string, chatID int64, data []byte, filename string
 		return nil, err
 	}
 
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		apiURL := fmt.Sprintf("%s/bot%s/sendDocument", c.baseURL, token)
+	apiURL := fmt.Sprintf("%s/bot%s/sendDocument", c.baseURL, token)
+
+	resp, err := c.doWithRateLimitRetry(context.Background(), "sendDocument", func() (*http.Response, error) {
 		body := io.MultiReader(bytes.NewReader(prefix), bytes.NewReader(data), bytes.NewReader(suffix))
 		req, err := http.NewRequest("POST", apiURL, body)
 		if err != nil {
@@ -141,41 +168,33 @@ func (c *Client) Upload(token string, chatID int64, data []byte, filename string
 		if err != nil {
 			return nil, fmt.Errorf("sending document: %w", err)
 		}
-
-		if rlErr := parseRateLimitError(resp); rlErr != nil {
-			resp.Body.Close()
-			if attempt == maxRetries {
-				return nil, rlErr
-			}
-			slog.Warn("telegram rate limited", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
-			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			respBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			return nil, fmt.Errorf("telegram API error (status %d): %s", resp.StatusCode, string(respBody))
-		}
-
-		var result SendDocumentResponse
-		err = json.NewDecoder(resp.Body).Decode(&result)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("decoding response: %w", err)
-		}
-
-		if !result.OK {
-			return nil, fmt.Errorf("telegram sendDocument failed")
-		}
-
-		return &UploadResult{
-			FileID:    result.Result.Document.FileID,
-			MessageID: result.Result.MessageID,
-		}, nil
+		return resp, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	return nil, fmt.Errorf("telegram upload failed after %d retries", maxRetries)
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return nil, fmt.Errorf("telegram API error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+
+	var result SendDocumentResponse
+	err = json.NewDecoder(resp.Body).Decode(&result)
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("decoding response: %w", err)
+	}
+
+	if !result.OK {
+		return nil, fmt.Errorf("telegram sendDocument failed")
+	}
+
+	return &UploadResult{
+		FileID:    result.Result.Document.FileID,
+		MessageID: result.Result.MessageID,
+	}, nil
 }
 
 // DeleteMessage deletes a message from a Telegram channel.
@@ -185,31 +204,24 @@ func (c *Client) DeleteMessage(token string, chatID int64, messageID int64) erro
 	apiURL := fmt.Sprintf("%s/bot%s/deleteMessage?chat_id=%d&message_id=%d",
 		c.baseURL, token, convertedChatID, messageID)
 
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	resp, err := c.doWithRateLimitRetry(context.Background(), "deleteMessage", func() (*http.Response, error) {
 		resp, err := c.httpClient.Get(apiURL)
 		if err != nil {
-			return fmt.Errorf("deleting message: %w", err)
+			return nil, fmt.Errorf("deleting message: %w", err)
 		}
-
-		if rlErr := parseRateLimitError(resp); rlErr != nil {
-			resp.Body.Close()
-			if attempt == maxRetries {
-				return rlErr
-			}
-			slog.Warn("telegram rate limited on deleteMessage", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
-			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
-			continue
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			respBody, _ := io.ReadAll(resp.Body)
-			resp.Body.Close()
-			return fmt.Errorf("telegram deleteMessage error (status %d): %s", resp.StatusCode, string(respBody))
-		}
-		resp.Body.Close()
-		return nil
+		return resp, nil
+	})
+	if err != nil {
+		return err
 	}
-	return fmt.Errorf("telegram deleteMessage failed after %d retries", maxRetries)
+
+	if resp.StatusCode != http.StatusOK {
+		respBody, _ := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		return fmt.Errorf("telegram deleteMessage error (status %d): %s", resp.StatusCode, string(respBody))
+	}
+	resp.Body.Close()
+	return nil
 }
 
 // ResolveFileIDByMessage forwards an existing message to the same chat and extracts
@@ -219,52 +231,44 @@ func (c *Client) ResolveFileIDByMessage(ctx context.Context, token string, chatI
 	apiURL := fmt.Sprintf("%s/bot%s/forwardMessage?chat_id=%d&from_chat_id=%d&message_id=%d&disable_notification=true",
 		c.baseURL, token, convertedChatID, convertedChatID, messageID)
 
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	resp, err := c.doWithRateLimitRetry(ctx, "forwardMessage", func() (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
 		if err != nil {
-			return "", fmt.Errorf("creating forwardMessage request: %w", err)
+			return nil, fmt.Errorf("creating forwardMessage request: %w", err)
 		}
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			return "", fmt.Errorf("forwarding message: %w", err)
+			return nil, fmt.Errorf("forwarding message: %w", err)
 		}
-
-		if rlErr := parseRateLimitError(resp); rlErr != nil {
-			resp.Body.Close()
-			if attempt == maxRetries {
-				return "", rlErr
-			}
-			slog.Warn("telegram rate limited on forwardMessage", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
-			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
-			continue
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return "", fmt.Errorf("reading forwardMessage response: %w", err)
-		}
-
-		var forwardResp ForwardMessageResponse
-		if err := json.Unmarshal(body, &forwardResp); err != nil {
-			return "", fmt.Errorf("decoding forwardMessage response: %w", err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("%w: forwardMessage failed (status %d): %s", domain.ErrTelegramResolveFailed, resp.StatusCode, string(body))
-		}
-		if !forwardResp.OK || forwardResp.Result.Document.FileID == "" {
-			return "", fmt.Errorf("%w: forwardMessage missing document file_id: %s", domain.ErrTelegramResolveFailed, string(body))
-		}
-
-		if err := c.DeleteMessage(token, chatID, forwardResp.Result.MessageID); err != nil {
-			slog.Warn("failed to delete forwarded message", "message_id", forwardResp.Result.MessageID, "err", err)
-		}
-
-		return forwardResp.Result.Document.FileID, nil
+		return resp, nil
+	})
+	if err != nil {
+		return "", err
 	}
 
-	return "", fmt.Errorf("telegram forwardMessage failed after %d retries", maxRetries)
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return "", fmt.Errorf("reading forwardMessage response: %w", err)
+	}
+
+	var forwardResp ForwardMessageResponse
+	if err := json.Unmarshal(body, &forwardResp); err != nil {
+		return "", fmt.Errorf("decoding forwardMessage response: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		return "", fmt.Errorf("%w: forwardMessage failed (status %d): %s", domain.ErrTelegramResolveFailed, resp.StatusCode, string(body))
+	}
+	if !forwardResp.OK || forwardResp.Result.Document.FileID == "" {
+		return "", fmt.Errorf("%w: forwardMessage missing document file_id: %s", domain.ErrTelegramResolveFailed, string(body))
+	}
+
+	if err := c.DeleteMessage(token, chatID, forwardResp.Result.MessageID); err != nil {
+		slog.Warn("failed to delete forwarded message", "message_id", forwardResp.Result.MessageID, "err", err)
+	}
+
+	return forwardResp.Result.Document.FileID, nil
 }
 
 func isRetryableDownloadError(ctx context.Context, err error) bool {
@@ -288,62 +292,48 @@ func isRetryableDownloadError(ctx context.Context, err error) bool {
 // Download retrieves a file from Telegram by its file_id honoring request cancellation.
 // Automatically retries on 429 (Too Many Requests).
 func (c *Client) Download(ctx context.Context, token string, telegramFileID string) ([]byte, error) {
-	// Step 1: Get file path (with retry on 429)
-	var filePath string
+	// Step 1: Get file path (with retry on 429 and transient errors)
 	getFileURL := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", c.baseURL, token, url.QueryEscape(telegramFileID))
 
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	resp, err := c.doWithRateLimitRetry(ctx, "getFile", func() (*http.Response, error) {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, getFileURL, nil)
 		if err != nil {
 			return nil, fmt.Errorf("creating getFile request: %w", err)
 		}
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
-			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
-				slog.Warn("transient getFile error, retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
-				retryBackoff(ctx, attempt)
-				continue
-			}
 			return nil, fmt.Errorf("getting file info: %w", err)
 		}
-
-		if rlErr := parseRateLimitError(resp); rlErr != nil {
-			resp.Body.Close()
-			if attempt == maxRetries {
-				return nil, rlErr
-			}
-			slog.Warn("telegram rate limited on getFile", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
-			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
-			continue
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			return nil, fmt.Errorf("reading getFile response: %w", err)
-		}
-
-		var fileResp GetFileResponse
-		if err := json.Unmarshal(body, &fileResp); err != nil {
-			return nil, fmt.Errorf("decoding file info: %w", err)
-		}
-
-		if resp.StatusCode != http.StatusOK {
-			errMsg := string(body)
-			if strings.Contains(strings.ToLower(errMsg), "file is too big") {
-				return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramFileTooBig, resp.StatusCode, errMsg)
-			}
-			return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramGetFileFailed, resp.StatusCode, errMsg)
-		}
-		if !fileResp.OK || fileResp.Result.FilePath == "" {
-			return nil, fmt.Errorf("%w: %s", domain.ErrTelegramGetFileFailed, string(body))
-		}
-		filePath = fileResp.Result.FilePath
-		break
+		return resp, nil
+	})
+	if err != nil {
+		return nil, err
 	}
 
-	// Step 2: Download the file
-	downloadURL := fmt.Sprintf("%s/file/bot%s/%s", c.baseURL, token, filePath)
+	body, err := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if err != nil {
+		return nil, fmt.Errorf("reading getFile response: %w", err)
+	}
+
+	var fileResp GetFileResponse
+	if err := json.Unmarshal(body, &fileResp); err != nil {
+		return nil, fmt.Errorf("decoding file info: %w", err)
+	}
+
+	if resp.StatusCode != http.StatusOK {
+		errMsg := string(body)
+		if strings.Contains(strings.ToLower(errMsg), "file is too big") {
+			return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramFileTooBig, resp.StatusCode, errMsg)
+		}
+		return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramGetFileFailed, resp.StatusCode, errMsg)
+	}
+	if !fileResp.OK || fileResp.Result.FilePath == "" {
+		return nil, fmt.Errorf("%w: %s", domain.ErrTelegramGetFileFailed, string(body))
+	}
+
+	// Step 2: Download the file (with retry on 429 and transient errors)
+	downloadURL := fmt.Sprintf("%s/file/bot%s/%s", c.baseURL, token, fileResp.Result.FilePath)
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
 		if err != nil {

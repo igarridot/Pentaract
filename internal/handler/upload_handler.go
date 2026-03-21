@@ -168,65 +168,39 @@ func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 // UploadProgress returns an SSE stream with upload progress updates.
 func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 	uploadID := r.URL.Query().Get("upload_id")
-	if uploadID == "" {
-		writeError(w, domain.ErrBadRequest("upload_id is required"))
-		return
-	}
 
-	flusher, ok := setupSSE(w)
-	if !ok {
-		writeError(w, domain.ErrInternal("streaming not supported"))
-		return
-	}
-
-	ticker := time.NewTicker(service.SSEPollingInterval)
-	defer ticker.Stop()
-	waitStart := time.Now()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-		}
-
-		h.mu.RLock()
-		tracker, exists := h.uploads[uploadID]
-		h.mu.RUnlock()
-
-		if !exists {
-			if time.Since(waitStart) < service.DownloadProgressWaitTime {
-				writeSSE(w, flusher, map[string]any{
-					"total": 0, "uploaded": 0, "total_bytes": 0, "uploaded_bytes": 0,
-					"verification_total": 0, "verified": 0, "status": "uploading",
-				})
-				continue
+	pollSSE(w, r, "upload_id",
+		map[string]any{
+			"total": 0, "uploaded": 0, "total_bytes": 0, "uploaded_bytes": 0,
+			"verification_total": 0, "verified": 0, "status": "uploading",
+		},
+		map[string]any{"status": "error"},
+		func() (map[string]any, bool, bool) {
+			h.mu.RLock()
+			tracker, exists := h.uploads[uploadID]
+			h.mu.RUnlock()
+			if !exists {
+				return nil, false, false
 			}
-			writeSSE(w, flusher, map[string]any{"status": "error"})
-			return
-		}
 
-		p := tracker.progress
-		h.mu.RLock()
-		isDone := tracker.done
-		uploadErr := tracker.err
-		isSkipped := tracker.skipped
-		h.mu.RUnlock()
-		status := uploadProgressStatus(p, isDone, uploadErr, isSkipped)
+			p := tracker.progress
+			h.mu.RLock()
+			isDone := tracker.done
+			uploadErr := tracker.err
+			isSkipped := tracker.skipped
+			h.mu.RUnlock()
+			status := uploadProgressStatus(p, isDone, uploadErr, isSkipped)
 
-		writeSSE(w, flusher, map[string]any{
-			"total":              p.TotalChunks,
-			"uploaded":           p.UploadedChunks.Load(),
-			"total_bytes":        p.TotalBytes,
-			"uploaded_bytes":     p.UploadedBytes.Load(),
-			"verification_total": p.VerificationTotalChunks,
-			"verified":           p.VerifiedChunks.Load(),
-			"status":             status,
-			"workers_status":     h.svc.WorkersStatus(tracker.storageID),
-		})
-
-		if isDone {
-			return
-		}
-	}
+			return map[string]any{
+				"total":              p.TotalChunks,
+				"uploaded":           p.UploadedChunks.Load(),
+				"total_bytes":        p.TotalBytes,
+				"uploaded_bytes":     p.UploadedBytes.Load(),
+				"verification_total": p.VerificationTotalChunks,
+				"verified":           p.VerifiedChunks.Load(),
+				"status":             status,
+				"workers_status":     h.svc.WorkersStatus(tracker.storageID),
+			}, isDone, true
+		},
+	)
 }
