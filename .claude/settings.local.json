@@ -25,6 +25,8 @@
       "Bash(git fetch:*)",
       "Bash(git checkout:*)",
       "Bash(npx --yes vite build)"
+      "Bash(pushd /Volumes/SUNEAST/workspace/pentaract-cli)",
+      "Bash(popd)"
     ]
   }
 }
