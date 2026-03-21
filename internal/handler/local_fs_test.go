@@ -13,6 +13,14 @@ import (
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
+// newTestFilesHandlerWithBase creates a FilesHandler with a custom localBasePath
+// for testing (the production constructor auto-detects from /mnt/data).
+func newTestFilesHandlerWithBase(svc filesService, basePath string) *FilesHandler {
+	h := NewFilesHandler(svc)
+	h.localBasePath = basePath
+	return h
+}
+
 // resolvedTempDir returns a temp directory with symlinks resolved, so that
 // safePath prefix checks work correctly on macOS (/var → /private/var).
 func resolvedTempDir(t *testing.T) string {
@@ -89,7 +97,7 @@ func TestBrowseLocalFS(t *testing.T) {
 	}
 
 	t.Run("lists files and directories", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		req := makeFilesReq(http.MethodGet, "/api/local_fs/browse?path=", "", "", "")
 		w := httptest.NewRecorder()
 		h.BrowseLocalFS(w, req)
@@ -122,7 +130,7 @@ func TestBrowseLocalFS(t *testing.T) {
 	})
 
 	t.Run("forbidden when localBasePath is empty", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, "")
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, "")
 		w := httptest.NewRecorder()
 		h.BrowseLocalFS(w, makeFilesReq(http.MethodGet, "/api/local_fs/browse", "", "", ""))
 
@@ -132,7 +140,7 @@ func TestBrowseLocalFS(t *testing.T) {
 	})
 
 	t.Run("path traversal blocked", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		w := httptest.NewRecorder()
 		h.BrowseLocalFS(w, makeFilesReq(http.MethodGet, "/api/local_fs/browse?path=../../etc", "", "", ""))
 
@@ -154,7 +162,7 @@ func TestUploadLocal(t *testing.T) {
 	storageID := uuid.New().String()
 
 	t.Run("returns 202 with upload_id", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		body := `{"local_path":"test.dat","dest_path":"docs","upload_id":"up-local-1"}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -174,7 +182,7 @@ func TestUploadLocal(t *testing.T) {
 	})
 
 	t.Run("forbidden when localBasePath is empty", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, "")
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, "")
 		body := `{"local_path":"test.dat","dest_path":"docs"}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -186,7 +194,7 @@ func TestUploadLocal(t *testing.T) {
 	})
 
 	t.Run("rejects empty local_path", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		body := `{"local_path":"","dest_path":"docs"}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -198,7 +206,7 @@ func TestUploadLocal(t *testing.T) {
 	})
 
 	t.Run("rejects directory as local_path", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		body := `{"local_path":"mydir","dest_path":"docs"}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -210,7 +218,7 @@ func TestUploadLocal(t *testing.T) {
 	})
 
 	t.Run("rejects path traversal", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		body := `{"local_path":"../../../etc/passwd","dest_path":"docs"}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -237,7 +245,7 @@ func TestUploadLocalBatch(t *testing.T) {
 	storageID := uuid.New().String()
 
 	t.Run("returns upload_ids for each item", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		body := `{"items":[{"local_path":"a.txt","dest_path":""},{"local_path":"b.txt","dest_path":"docs"}]}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -258,7 +266,7 @@ func TestUploadLocalBatch(t *testing.T) {
 	})
 
 	t.Run("forbidden when localBasePath is empty", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, "")
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, "")
 		body := `{"items":[{"local_path":"a.txt","dest_path":""}]}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -270,7 +278,7 @@ func TestUploadLocalBatch(t *testing.T) {
 	})
 
 	t.Run("rejects empty items", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		body := `{"items":[]}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -282,7 +290,7 @@ func TestUploadLocalBatch(t *testing.T) {
 	})
 
 	t.Run("rejects batch exceeding 100 items", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		items := make([]map[string]string, 101)
 		for i := range items {
 			items[i] = map[string]string{"local_path": "a.txt", "dest_path": ""}
@@ -299,7 +307,7 @@ func TestUploadLocalBatch(t *testing.T) {
 	})
 
 	t.Run("rejects directory in batch item", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		body := `{"items":[{"local_path":"dir","dest_path":""}]}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -311,7 +319,7 @@ func TestUploadLocalBatch(t *testing.T) {
 	})
 
 	t.Run("rejects path traversal in batch item", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		body := `{"items":[{"local_path":"../../../etc/passwd","dest_path":""}]}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()
@@ -323,7 +331,7 @@ func TestUploadLocalBatch(t *testing.T) {
 	})
 
 	t.Run("rejects empty local_path in batch item", func(t *testing.T) {
-		h := NewFilesHandler(&mockFilesService{}, base)
+		h := newTestFilesHandlerWithBase(&mockFilesService{}, base)
 		body := `{"items":[{"local_path":"","dest_path":""}]}`
 		req := makeFilesReq(http.MethodPost, "/", body, storageID, "")
 		w := httptest.NewRecorder()

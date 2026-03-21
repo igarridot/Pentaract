@@ -6,10 +6,10 @@ services:
       - "${PORT:-8000}:8000"
     env_file: .env
     restart: unless-stopped
-    volumes:
-      - type: bind
-        source: "${LOCAL_UPLOAD_BASE_PATH}"
-        target: /data
+    # To enable local filesystem uploads, set LOCAL_UPLOAD_BASE_PATH in .env
+    # to the host directory you want to expose, then uncomment the volume below.
+    # volumes:
+    #   - "${LOCAL_UPLOAD_BASE_PATH}:/mnt/data:ro"
     depends_on:
       db:
         condition: service_healthy
