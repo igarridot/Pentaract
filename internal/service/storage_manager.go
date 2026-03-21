@@ -106,7 +106,7 @@ type UploadProgress struct {
 	UploadedChunks          atomic.Int32
 	TotalBytes              int64
 	UploadedBytes           atomic.Int64
-	VerificationTotalChunks int32
+	VerificationTotalChunks atomic.Int32 // S1: atomic for concurrent pipeline verification
 	VerifiedChunks          atomic.Int32
 }
 
@@ -129,4 +129,27 @@ type uploadedChunkResult struct {
 	TelegramMessageID int64
 	Position          int16
 	PlainHash         [sha256.Size]byte
+}
+
+// S7: uploadParallelism calculates optimal upload concurrency based on
+// available workers and rate limit, avoiding contention when few workers
+// are configured.
+func (m *StorageManager) uploadParallelism(ctx context.Context, storageID uuid.UUID) int {
+	if m.workersRepo == nil || m.scheduler == nil {
+		return UploadChunkParallelism
+	}
+	tokens, err := m.workersRepo.ListTokensByStorage(ctx, storageID)
+	if err != nil || len(tokens) == 0 {
+		return UploadChunkParallelism
+	}
+	// workers * rateLimit / 6 gives a reasonable concurrency:
+	// 2 workers * 18 rpm / 6 = 6;  4 workers * 18 rpm / 6 = 12 (capped at 10)
+	p := len(tokens) * m.scheduler.RateLimit() / 6
+	if p < 2 {
+		p = 2
+	}
+	if p > UploadChunkParallelism {
+		p = UploadChunkParallelism
+	}
+	return p
 }

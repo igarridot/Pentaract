@@ -224,6 +224,70 @@ func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, 
 	return &WorkerToken{Token: token, Name: name}, nil
 }
 
+// GetTokenBatch atomically selects up to `count` worker tokens, distributing
+// across workers proportionally to their free slots, and records one usage
+// entry per returned token. Returns nil if no workers are available.
+// S2: reduces DB round-trips for parallel chunk uploads.
+func (r *StorageWorkersRepo) GetTokenBatch(ctx context.Context, storageID uuid.UUID, rateLimit, count int) ([]WorkerToken, error) {
+	tx, err := r.pool.Begin(ctx)
+	if err != nil {
+		return nil, err
+	}
+	defer tx.Rollback(ctx)
+
+	rows, err := tx.Query(ctx,
+		`WITH available_workers AS (
+			SELECT sw.id, sw.name, sw.token,
+			       $2::int - COUNT(swu.id)::int AS free_slots
+			FROM storage_workers sw
+			LEFT JOIN storage_workers_usages swu
+				ON swu.worker_id = sw.id
+				AND swu.created_at >= now() - interval '1 minute'
+			WHERE sw.storage_id = $1 OR sw.storage_id IS NULL
+			GROUP BY sw.id, sw.name, sw.token
+			HAVING COUNT(swu.id) < $2
+			ORDER BY COUNT(swu.id) ASC, sw.id
+		),
+		expanded AS (
+			SELECT aw.id, aw.name, aw.token
+			FROM available_workers aw, LATERAL generate_series(1, aw.free_slots) AS gs
+			LIMIT $3
+		),
+		inserted AS (
+			INSERT INTO storage_workers_usages (worker_id)
+			SELECT id FROM expanded
+			RETURNING worker_id
+		)
+		SELECT e.token, e.name
+		FROM expanded e`,
+		storageID, rateLimit, count,
+	)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	var tokens []WorkerToken
+	for rows.Next() {
+		var wt WorkerToken
+		if err := rows.Scan(&wt.Token, &wt.Name); err != nil {
+			return nil, err
+		}
+		tokens = append(tokens, wt)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, err
+	}
+
+	if len(tokens) > 0 {
+		if err := tx.Commit(ctx); err != nil {
+			return nil, err
+		}
+	}
+	r.scheduleUsageCleanup()
+	return tokens, nil
+}
+
 // NextAvailableIn returns the duration until the next worker slot becomes available.
 // It finds the oldest usage entry that, when it expires (after 1 minute), frees a slot.
 func (r *StorageWorkersRepo) NextAvailableIn(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error) {

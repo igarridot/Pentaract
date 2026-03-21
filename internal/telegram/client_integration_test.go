@@ -77,7 +77,7 @@ func TestUploadSendsMultipartAndReturnsResult(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	res, err := c.Upload(token, chatID, payload, filename)
+	res, err := c.Upload(context.Background(), token, chatID, payload, filename)
 	if err != nil {
 		t.Fatalf("upload failed: %v", err)
 	}

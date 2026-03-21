@@ -24,7 +24,7 @@ func TestUploadReturnsAPIErrorWhenNotOK(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	_, err := c.Upload("TOKEN", 1, []byte("x"), "a.bin")
+	_, err := c.Upload(context.Background(), "TOKEN", 1, []byte("x"), "a.bin")
 	if err == nil || !strings.Contains(err.Error(), "telegram sendDocument failed") {
 		t.Fatalf("expected sendDocument failed error, got: %v", err)
 	}
@@ -96,7 +96,7 @@ func TestUploadDecodeError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	_, err := c.Upload("TOKEN", 1, []byte("x"), "a.bin")
+	_, err := c.Upload(context.Background(), "TOKEN", 1, []byte("x"), "a.bin")
 	if err == nil || !strings.Contains(err.Error(), "decoding response") {
 		t.Fatalf("expected decoding response error, got: %v", err)
 	}

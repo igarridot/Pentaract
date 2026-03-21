@@ -200,7 +200,7 @@ func TestVerifyUploadedChunksContentMismatch(t *testing.T) {
 	cipher := NewChunkCipher("secret")
 
 	// Encrypt "original" data
-	enc, err := cipher.EncryptChunk(fileID, 0, []byte("original"))
+	enc, _, err := cipher.EncryptChunk(fileID, 0, []byte("original"))
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -261,7 +261,7 @@ func TestVerifyUploadedChunksRetriesTransientDownloadFailure(t *testing.T) {
 	cipher := NewChunkCipher("secret")
 	plainData := []byte("verify-retry-data")
 
-	enc, err := cipher.EncryptChunk(fileID, 0, plainData)
+	enc, _, err := cipher.EncryptChunk(fileID, 0, plainData)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}

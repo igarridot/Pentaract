@@ -8,11 +8,16 @@ import (
 	"crypto/sha256"
 	"encoding/binary"
 	"fmt"
+	"sync"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/pbkdf2"
 )
+
+// S5: Pool for encryption output buffers to reduce GC pressure during
+// parallel chunk uploads (~20 MB per buffer, up to 10 concurrent).
+var encryptBufPool sync.Pool
 
 var chunkCipherMagic = []byte{'P', 'T', 'R', 'C', '1'}
 
@@ -58,17 +63,34 @@ func (c *ChunkCipher) aad(fileID uuid.UUID, position int16) []byte {
 	return aad
 }
 
-func (c *ChunkCipher) EncryptChunk(fileID uuid.UUID, position int16, plain []byte) ([]byte, error) {
+// EncryptChunk encrypts a plaintext chunk using AES-256-GCM.
+// The returned release function returns the output buffer to a pool;
+// callers MUST call release when the encrypted data is no longer needed.
+func (c *ChunkCipher) EncryptChunk(fileID uuid.UUID, position int16, plain []byte) ([]byte, func(), error) {
 	nonce := make([]byte, c.aead.NonceSize())
 	if _, err := rand.Read(nonce); err != nil {
-		return nil, fmt.Errorf("generating nonce: %w", err)
+		return nil, nil, fmt.Errorf("generating nonce: %w", err)
 	}
 
-	out := make([]byte, 0, len(chunkCipherMagic)+len(nonce)+len(plain)+c.aead.Overhead())
+	needed := len(chunkCipherMagic) + len(nonce) + len(plain) + c.aead.Overhead()
+	var out []byte
+	if v := encryptBufPool.Get(); v != nil {
+		out = v.([]byte)
+		if cap(out) < needed {
+			out = make([]byte, 0, needed)
+		} else {
+			out = out[:0]
+		}
+	} else {
+		out = make([]byte, 0, needed)
+	}
+
 	out = append(out, chunkCipherMagic...)
 	out = append(out, nonce...)
 	out = c.aead.Seal(out, nonce, plain, c.aad(fileID, position))
-	return out, nil
+
+	release := func() { encryptBufPool.Put(out[:0]) }
+	return out, release, nil
 }
 
 func (c *ChunkCipher) DecryptChunk(fileID uuid.UUID, position int16, payload []byte) ([]byte, error) {

@@ -24,6 +24,7 @@ import (
 
 type fakeManagerSchedulerRepo struct {
 	getTokenFn        func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error)
+	getTokenBatchFn   func(ctx context.Context, storageID uuid.UUID, rateLimit, count int) ([]repository.WorkerToken, error)
 	nextAvailableInFn func(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error)
 }
 
@@ -32,6 +33,20 @@ func (f *fakeManagerSchedulerRepo) GetToken(ctx context.Context, storageID uuid.
 		return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
 	}
 	return f.getTokenFn(ctx, storageID, rateLimit)
+}
+
+func (f *fakeManagerSchedulerRepo) GetTokenBatch(ctx context.Context, storageID uuid.UUID, rateLimit, count int) ([]repository.WorkerToken, error) {
+	if f.getTokenBatchFn != nil {
+		return f.getTokenBatchFn(ctx, storageID, rateLimit, count)
+	}
+	wt, err := f.GetToken(ctx, storageID, rateLimit)
+	if err != nil {
+		return nil, err
+	}
+	if wt == nil {
+		return nil, nil
+	}
+	return []repository.WorkerToken{*wt}, nil
 }
 
 func (f *fakeManagerSchedulerRepo) NextAvailableIn(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error) {
@@ -53,7 +68,7 @@ func TestStorageManagerDownloadToWriter(t *testing.T) {
 	chunkID := uuid.New()
 	plain := []byte("hello")
 	cipher := NewChunkCipher("secret")
-	enc, err := cipher.EncryptChunk(fileID, 0, plain)
+	enc, _, err := cipher.EncryptChunk(fileID, 0, plain)
 	if err != nil {
 		t.Fatalf("encrypt chunk: %v", err)
 	}
@@ -122,11 +137,11 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 	plain0 := []byte("hello ")
 	plain1 := []byte("world")
 	cipher := NewChunkCipher("secret")
-	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	enc0, _, err := cipher.EncryptChunk(fileID, 0, plain0)
 	if err != nil {
 		t.Fatalf("encrypt chunk 0: %v", err)
 	}
-	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	enc1, _, err := cipher.EncryptChunk(fileID, 1, plain1)
 	if err != nil {
 		t.Fatalf("encrypt chunk 1: %v", err)
 	}
@@ -252,11 +267,11 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 	plain0 := []byte("hello ")
 	plain1 := []byte("world")
 	cipher := NewChunkCipher("secret")
-	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	enc0, _, err := cipher.EncryptChunk(fileID, 0, plain0)
 	if err != nil {
 		t.Fatalf("encrypt chunk 0: %v", err)
 	}
-	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	enc1, _, err := cipher.EncryptChunk(fileID, 1, plain1)
 	if err != nil {
 		t.Fatalf("encrypt chunk 1: %v", err)
 	}
@@ -378,15 +393,15 @@ func TestStorageManagerDownloadToWriterCyclesReservedWorkersAcrossAllChunks(t *t
 	plain1 := []byte("world ")
 	plain2 := []byte("again")
 	cipher := NewChunkCipher("secret")
-	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	enc0, _, err := cipher.EncryptChunk(fileID, 0, plain0)
 	if err != nil {
 		t.Fatalf("encrypt chunk 0: %v", err)
 	}
-	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	enc1, _, err := cipher.EncryptChunk(fileID, 1, plain1)
 	if err != nil {
 		t.Fatalf("encrypt chunk 1: %v", err)
 	}
-	enc2, err := cipher.EncryptChunk(fileID, 2, plain2)
+	enc2, _, err := cipher.EncryptChunk(fileID, 2, plain2)
 	if err != nil {
 		t.Fatalf("encrypt chunk 2: %v", err)
 	}
@@ -503,11 +518,11 @@ func TestStorageManagerDownloadRangeToWriterUsesAllWorkersForMultiChunkStream(t 
 	plain0 := []byte("hello ")
 	plain1 := []byte("world")
 	cipher := NewChunkCipher("secret")
-	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	enc0, _, err := cipher.EncryptChunk(fileID, 0, plain0)
 	if err != nil {
 		t.Fatalf("encrypt chunk 0: %v", err)
 	}
-	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	enc1, _, err := cipher.EncryptChunk(fileID, 1, plain1)
 	if err != nil {
 		t.Fatalf("encrypt chunk 1: %v", err)
 	}
@@ -623,7 +638,7 @@ func TestStorageManagerExactFileSizeAndRange(t *testing.T) {
 	chunkID := uuid.New()
 	plain := []byte("hello world")
 	cipher := NewChunkCipher("secret")
-	enc, err := cipher.EncryptChunk(fileID, 0, plain)
+	enc, _, err := cipher.EncryptChunk(fileID, 0, plain)
 	if err != nil {
 		t.Fatalf("encrypt chunk: %v", err)
 	}
@@ -696,7 +711,7 @@ func TestStorageManagerStreamToWriterPrimesChunkCacheForLaterSeek(t *testing.T) 
 	chunkID := uuid.New()
 	plain := []byte("hello world")
 	cipher := NewChunkCipher("secret")
-	enc, err := cipher.EncryptChunk(fileID, 0, plain)
+	enc, _, err := cipher.EncryptChunk(fileID, 0, plain)
 	if err != nil {
 		t.Fatalf("encrypt chunk: %v", err)
 	}
@@ -783,7 +798,7 @@ func TestStorageManagerDownloadToWriterDoesNotPrimeChunkCache(t *testing.T) {
 	chunkID := uuid.New()
 	plain := []byte("hello world")
 	cipher := NewChunkCipher("secret")
-	enc, err := cipher.EncryptChunk(fileID, 0, plain)
+	enc, _, err := cipher.EncryptChunk(fileID, 0, plain)
 	if err != nil {
 		t.Fatalf("encrypt chunk: %v", err)
 	}
@@ -872,11 +887,11 @@ func TestStorageManagerDownloadRangeToWriterSeekSkipsEarlierChunks(t *testing.T)
 	plain0 := bytes.Repeat([]byte("a"), UploadChunkSize)
 	plain1 := []byte("tail-data")
 	cipher := NewChunkCipher("secret")
-	enc0, err := cipher.EncryptChunk(fileID, 0, plain0)
+	enc0, _, err := cipher.EncryptChunk(fileID, 0, plain0)
 	if err != nil {
 		t.Fatalf("encrypt chunk 0: %v", err)
 	}
-	enc1, err := cipher.EncryptChunk(fileID, 1, plain1)
+	enc1, _, err := cipher.EncryptChunk(fileID, 1, plain1)
 	if err != nil {
 		t.Fatalf("encrypt chunk 1: %v", err)
 	}
@@ -951,7 +966,7 @@ func TestStorageManagerExactFileSizeUsesOnlyLastChunk(t *testing.T) {
 	lastChunkID := uuid.New()
 	lastPlain := []byte("tail")
 	cipher := NewChunkCipher("secret")
-	lastEnc, err := cipher.EncryptChunk(fileID, 1, lastPlain)
+	lastEnc, _, err := cipher.EncryptChunk(fileID, 1, lastPlain)
 	if err != nil {
 		t.Fatalf("encrypt chunk: %v", err)
 	}
@@ -1081,8 +1096,8 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	if progress.UploadedChunks.Load() != 1 {
 		t.Fatalf("unexpected uploaded chunks: %d", progress.UploadedChunks.Load())
 	}
-	if progress.VerificationTotalChunks != 1 || progress.VerifiedChunks.Load() != 1 {
-		t.Fatalf("unexpected verification progress: total=%d verified=%d", progress.VerificationTotalChunks, progress.VerifiedChunks.Load())
+	if progress.VerificationTotalChunks.Load() != 1 || progress.VerifiedChunks.Load() != 1 {
+		t.Fatalf("unexpected verification progress: total=%d verified=%d", progress.VerificationTotalChunks.Load(), progress.VerifiedChunks.Load())
 	}
 	if bytes.Equal(uploadedChunk, []byte("abc")) {
 		t.Fatalf("uploaded chunk should be encrypted")
@@ -1256,8 +1271,8 @@ func TestStorageManagerUploadRetriesOnlyFailedChunk(t *testing.T) {
 	if progress.UploadedChunks.Load() != 2 || progress.UploadedBytes.Load() != totalSize {
 		t.Fatalf("unexpected upload progress: chunks=%d bytes=%d", progress.UploadedChunks.Load(), progress.UploadedBytes.Load())
 	}
-	if progress.VerificationTotalChunks != 2 || progress.VerifiedChunks.Load() != 2 {
-		t.Fatalf("unexpected verification progress: total=%d verified=%d", progress.VerificationTotalChunks, progress.VerifiedChunks.Load())
+	if progress.VerificationTotalChunks.Load() != 2 || progress.VerifiedChunks.Load() != 2 {
+		t.Fatalf("unexpected verification progress: total=%d verified=%d", progress.VerificationTotalChunks.Load(), progress.VerifiedChunks.Load())
 	}
 }
 
@@ -1271,7 +1286,7 @@ func TestStorageManagerUploadVerifiesRoundTripAndCleansUpOnMismatch(t *testing.T
 	fileID := uuid.New()
 	storageID := uuid.New()
 	cipher := NewChunkCipher("secret")
-	badCiphertext, err := cipher.EncryptChunk(fileID, 0, []byte("xyz"))
+	badCiphertext, _, err := cipher.EncryptChunk(fileID, 0, []byte("xyz"))
 	if err != nil {
 		t.Fatalf("encrypt bad chunk: %v", err)
 	}
@@ -1453,7 +1468,7 @@ func TestValidateEncryptedChunkSize(t *testing.T) {
 	fileID := uuid.New()
 	plain := bytes.Repeat([]byte("a"), UploadChunkSize)
 
-	enc, err := cipher.EncryptChunk(fileID, 0, plain)
+	enc, _, err := cipher.EncryptChunk(fileID, 0, plain)
 	if err != nil {
 		t.Fatalf("encrypt chunk: %v", err)
 	}

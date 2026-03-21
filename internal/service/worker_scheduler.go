@@ -17,10 +17,14 @@ type WorkerScheduler struct {
 	rateLimit   int
 	mu          sync.RWMutex
 	waiting     map[uuid.UUID]int
+	// S2: buffered tokens to reduce DB round-trips
+	tokenBufMu sync.Mutex
+	tokenBuf   map[uuid.UUID][]*repository.WorkerToken
 }
 
 type schedulerWorkersRepo interface {
 	GetToken(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error)
+	GetTokenBatch(ctx context.Context, storageID uuid.UUID, rateLimit, count int) ([]repository.WorkerToken, error)
 	NextAvailableIn(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error)
 }
 
@@ -29,7 +33,13 @@ func NewWorkerScheduler(workersRepo schedulerWorkersRepo, rateLimit int) *Worker
 		workersRepo: workersRepo,
 		rateLimit:   rateLimit,
 		waiting:     make(map[uuid.UUID]int),
+		tokenBuf:    make(map[uuid.UUID][]*repository.WorkerToken),
 	}
+}
+
+// RateLimit returns the configured rate limit per worker per minute.
+func (s *WorkerScheduler) RateLimit() int {
+	return s.rateLimit
 }
 
 func (s *WorkerScheduler) setWaiting(storageID uuid.UUID, delta int) {
@@ -47,31 +57,58 @@ func (s *WorkerScheduler) IsWaiting(storageID uuid.UUID) bool {
 	return s.waiting[storageID] > 0
 }
 
+// popBufferedToken returns a pre-fetched token from the buffer, or nil.
+func (s *WorkerScheduler) popBufferedToken(storageID uuid.UUID) *repository.WorkerToken {
+	s.tokenBufMu.Lock()
+	defer s.tokenBufMu.Unlock()
+	buf := s.tokenBuf[storageID]
+	if len(buf) == 0 {
+		return nil
+	}
+	token := buf[0]
+	s.tokenBuf[storageID] = buf[1:]
+	return token
+}
+
 // GetToken blocks until a worker token is available for the given storage.
-// It queries the DB for the next available slot and waits accordingly
-// instead of polling every second.
+// S2: tries to fetch tokens in batches and buffer extras to reduce DB queries.
 func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*repository.WorkerToken, error) {
+	// Try buffer first
+	if t := s.popBufferedToken(storageID); t != nil {
+		return t, nil
+	}
+
 	logged := false
 	markedWaiting := false
+	defer func() {
+		if markedWaiting {
+			s.setWaiting(storageID, -1)
+		}
+	}()
+
 	for {
 		select {
 		case <-ctx.Done():
-			if markedWaiting {
-				s.setWaiting(storageID, -1)
-			}
 			return nil, ctx.Err()
 		default:
 		}
 
-		wt, err := s.workersRepo.GetToken(ctx, storageID, s.rateLimit)
+		// Try batch fetch
+		tokens, err := s.workersRepo.GetTokenBatch(ctx, storageID, s.rateLimit, TokenBatchSize)
 		if err != nil {
-			return nil, fmt.Errorf("getting worker token: %w", err)
+			return nil, fmt.Errorf("getting worker tokens: %w", err)
 		}
-		if wt != nil {
-			if markedWaiting {
-				s.setWaiting(storageID, -1)
+		if len(tokens) > 0 {
+			// Buffer extras
+			if len(tokens) > 1 {
+				s.tokenBufMu.Lock()
+				for i := 1; i < len(tokens); i++ {
+					t := tokens[i]
+					s.tokenBuf[storageID] = append(s.tokenBuf[storageID], &t)
+				}
+				s.tokenBufMu.Unlock()
 			}
-			return wt, nil
+			return &tokens[0], nil
 		}
 
 		// All workers are at rate limit. Query when the next slot opens.
@@ -91,9 +128,6 @@ func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*r
 
 		select {
 		case <-ctx.Done():
-			if markedWaiting {
-				s.setWaiting(storageID, -1)
-			}
 			return nil, ctx.Err()
 		case <-time.After(waitDur):
 		}

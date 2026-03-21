@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"bufio"
 	"context"
 	"io"
 	"log/slog"
@@ -83,9 +84,15 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	pr, pw := io.Pipe()
 	copyDone := make(chan struct{})
 
+	// S3: Buffer one chunk ahead so the HTTP body reader can race ahead of
+	// the chunk encryption/upload pipeline, smoothing throughput.
 	go func() {
 		defer close(copyDone)
-		_, err := io.Copy(pw, filePart)
+		bw := bufio.NewWriterSize(pw, service.UploadChunkSize)
+		_, err := io.Copy(bw, filePart)
+		if flushErr := bw.Flush(); err == nil {
+			err = flushErr
+		}
 		filePart.Close()
 		pw.CloseWithError(err)
 	}()
@@ -196,7 +203,7 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 				"uploaded":           p.UploadedChunks.Load(),
 				"total_bytes":        p.TotalBytes,
 				"uploaded_bytes":     p.UploadedBytes.Load(),
-				"verification_total": p.VerificationTotalChunks,
+				"verification_total": p.VerificationTotalChunks.Load(),
 				"verified":           p.VerifiedChunks.Load(),
 				"status":             status,
 				"workers_status":     h.svc.WorkersStatus(tracker.storageID),

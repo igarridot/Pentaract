@@ -38,10 +38,13 @@ func shouldRetryChunkUpload(ctx context.Context, err error) bool {
 }
 
 func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.File, storage *domain.Storage, position int16, chunkData []byte, plainHash [sha256.Size]byte) (uploadedChunkResult, error) {
-	encryptedChunkData, err := m.chunkCipher.EncryptChunk(file.ID, position, chunkData)
+	// S5: use pooled encryption buffer
+	encryptedChunkData, releaseEncBuf, err := m.chunkCipher.EncryptChunk(file.ID, position, chunkData)
 	if err != nil {
 		return uploadedChunkResult{}, fmt.Errorf("encrypting chunk %d: %w", position, err)
 	}
+	defer releaseEncBuf()
+
 	if err := validateEncryptedChunkSize(encryptedChunkData); err != nil {
 		return uploadedChunkResult{}, fmt.Errorf("validating encrypted chunk %d size: %w", position, err)
 	}
@@ -55,7 +58,8 @@ func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.
 
 		slog.Info("uploading chunk", "position", position, "file", file.Path, "worker", wt.Name, "storage", storage.Name, "attempt", attempt, "max_attempts", UploadChunkMaxAttempts)
 
-		result, err := m.tgClient.Upload(wt.Token, storage.ChatID, encryptedChunkData, filename)
+		// S6: propagate context to Telegram upload
+		result, err := m.tgClient.Upload(ctx, wt.Token, storage.ChatID, encryptedChunkData, filename)
 		if err == nil {
 			return uploadedChunkResult{
 				TelegramFileID:    result.FileID,
@@ -82,8 +86,59 @@ func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.
 	return uploadedChunkResult{}, fmt.Errorf("uploading chunk %d: exhausted retries", position)
 }
 
+// verifySingleChunk downloads and hash-checks a single uploaded chunk.
+// Returns nil on success, error on failure (after retries).
+func (m *StorageManager) verifySingleChunk(ctx context.Context, file *domain.File, storage domain.Storage, result uploadedChunkResult) error {
+	chunk := domain.FileChunk{
+		FileID:            file.ID,
+		TelegramFileID:    result.TelegramFileID,
+		TelegramMessageID: result.TelegramMessageID,
+		Position:          result.Position,
+	}
+
+	const verifyExtraAttempts = 2
+	verifyBackoffs := []time.Duration{500 * time.Millisecond, 1 * time.Second}
+
+	for attempt := 0; attempt <= verifyExtraAttempts; attempt++ {
+		if attempt > 0 {
+			select {
+			case <-ctx.Done():
+				return ctx.Err()
+			case <-time.After(verifyBackoffs[attempt-1]):
+			}
+			slog.Warn("retrying chunk verification", "position", result.Position, "file", file.Path, "attempt", attempt+1)
+		}
+
+		chunkStartedAt := time.Now()
+		data, err := m.downloadAndDecryptChunkCached(ctx, file.ID, storage, chunk, nil)
+		if err != nil {
+			if contextAborted(ctx, err) {
+				return ctx.Err()
+			}
+			slog.Warn("chunk verification download failed", "position", result.Position, "file", file.Path, "attempt", attempt+1, "elapsed", time.Since(chunkStartedAt).Round(time.Millisecond), "err", err)
+			if attempt == verifyExtraAttempts {
+				return fmt.Errorf("verifying chunk %d: %w", result.Position, err)
+			}
+			continue
+		}
+
+		if sha256.Sum256(data) != result.PlainHash {
+			slog.Error("chunk verification content mismatch", "position", result.Position, "file", file.Path, "attempt", attempt+1, "elapsed", time.Since(chunkStartedAt).Round(time.Millisecond))
+			// Hash mismatch is not transient — no point retrying
+			return fmt.Errorf("verifying chunk %d: uploaded chunk content mismatch after Telegram round-trip", result.Position)
+		}
+
+		slog.Info("chunk verified", "position", result.Position, "file", file.Path, "elapsed", time.Since(chunkStartedAt).Round(time.Millisecond))
+		return nil
+	}
+
+	return fmt.Errorf("verifying chunk %d: exhausted retries", result.Position)
+}
+
 // Upload reads from reader chunk by chunk (streaming), uploads to Telegram in parallel,
 // and records chunk metadata in the DB. Never holds the full file in memory.
+// S1: verification runs concurrently as chunks complete (pipeline).
+// S7: upload parallelism adapts to available workers.
 func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
 	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
@@ -104,6 +159,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 	var mu sync.Mutex
 	var results []uploadedChunkResult
 	var failedChunks []failedChunkInfo
+	var failedVerifyPositions []int16
 
 	// cleanupResultsSelective deletes the given chunk results from Telegram.
 	cleanupResultsSelective := func(toClean []uploadedChunkResult) {
@@ -133,8 +189,43 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		cleanupResultsSelective(uploaded)
 	}
 
+	// S7: adaptive parallelism
+	uploadPar := m.uploadParallelism(ctx, storage.ID)
+	slog.Info("upload parallelism", "file", file.Path, "parallelism", uploadPar)
+
 	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(UploadChunkParallelism)
+	g.SetLimit(uploadPar)
+
+	// S1: pipeline verification — verify chunks as they finish uploading
+	verifyCh := make(chan uploadedChunkResult, uploadPar)
+	vg, vctx := errgroup.WithContext(ctx)
+	vg.SetLimit(VerifyChunkParallelism)
+
+	var verifyMu sync.Mutex
+	verifyDone := make(chan struct{})
+	go func() {
+		defer close(verifyDone)
+		for result := range verifyCh {
+			result := result
+			vg.Go(func() error {
+				err := m.verifySingleChunk(vctx, file, *storage, result)
+				if err != nil {
+					if contextAborted(vctx, err) {
+						return err
+					}
+					verifyMu.Lock()
+					failedVerifyPositions = append(failedVerifyPositions, result.Position)
+					verifyMu.Unlock()
+					slog.Error("pipeline verification failed", "position", result.Position, "file", file.Path, "err", err)
+					return nil
+				}
+				if progress != nil {
+					progress.VerifiedChunks.Add(1)
+				}
+				return nil
+			})
+		}
+	}()
 
 	// Close the reader when context is cancelled so io.ReadFull unblocks.
 	cancelled := make(chan struct{})
@@ -208,6 +299,14 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			if progress != nil {
 				progress.UploadedChunks.Add(1)
 				progress.UploadedBytes.Add(int64(len(chunkDataRef)))
+				progress.VerificationTotalChunks.Add(1)
+			}
+
+			// S1: send for pipeline verification
+			select {
+			case verifyCh <- result:
+			case <-gctx.Done():
+				return gctx.Err()
 			}
 
 			return nil
@@ -229,6 +328,9 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 
 	// If cancelled or errgroup propagated a context error, clean up
 	if readCancelled || waitErr != nil {
+		close(verifyCh)
+		<-verifyDone
+		vg.Wait()
 		cleanupAllResults()
 		if waitErr != nil {
 			return waitErr
@@ -241,11 +343,17 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		slog.Warn("retrying failed chunks sequentially", "file", file.Path, "failed", len(failedChunks), "succeeded", len(results))
 		for _, fc := range failedChunks {
 			if ctx.Err() != nil {
+				close(verifyCh)
+				<-verifyDone
+				vg.Wait()
 				cleanupAllResults()
 				return ctx.Err()
 			}
 			result, err := m.uploadChunkWithRetry(ctx, file, storage, fc.position, fc.data, fc.plainHash)
 			if err != nil {
+				close(verifyCh)
+				<-verifyDone
+				vg.Wait()
 				cleanupAllResults()
 				return fmt.Errorf("second-round upload chunk %d: %w", fc.position, err)
 			}
@@ -256,45 +364,52 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			if progress != nil {
 				progress.UploadedChunks.Add(1)
 				progress.UploadedBytes.Add(int64(len(fc.data)))
+				progress.VerificationTotalChunks.Add(1)
 			}
+
+			// Send retried chunk for verification too
+			verifyCh <- result
 		}
 		slog.Info("second-round upload completed", "file", file.Path, "recovered", len(failedChunks))
+	}
+
+	// Signal verification consumer to stop, then wait for all verifications
+	close(verifyCh)
+	<-verifyDone
+	verifyWaitErr := vg.Wait()
+
+	if verifyWaitErr != nil {
+		cleanupAllResults()
+		return verifyWaitErr
+	}
+
+	// Handle verification failures
+	verifyMu.Lock()
+	failedVPos := append([]int16(nil), failedVerifyPositions...)
+	verifyMu.Unlock()
+
+	if len(failedVPos) > 0 {
+		slog.Error("upload verification completed with failures", "file", file.Path, "failed", len(failedVPos), "total", len(results))
+		failedSet := make(map[int16]struct{}, len(failedVPos))
+		for _, pos := range failedVPos {
+			failedSet[pos] = struct{}{}
+		}
+		var failedResults, goodResults []uploadedChunkResult
+		for _, r := range results {
+			if _, failed := failedSet[r.Position]; failed {
+				failedResults = append(failedResults, r)
+			} else {
+				goodResults = append(goodResults, r)
+			}
+		}
+		cleanupResultsSelective(failedResults)
+		cleanupResultsSelective(goodResults)
+		return fmt.Errorf("verification failed for %d chunk(s)", len(failedVPos))
 	}
 
 	sort.Slice(results, func(i, j int) bool {
 		return results[i].Position < results[j].Position
 	})
-
-	if progress != nil {
-		progress.VerificationTotalChunks = int32(len(results))
-		progress.VerifiedChunks.Store(0)
-	}
-
-	failedPositions, verifyErr := m.verifyUploadedChunks(ctx, file, *storage, results, progress)
-	if verifyErr != nil {
-		if len(failedPositions) > 0 {
-			// Selective cleanup: only delete the chunks that failed verification
-			failedSet := make(map[int16]struct{}, len(failedPositions))
-			for _, pos := range failedPositions {
-				failedSet[pos] = struct{}{}
-			}
-			var failedResults []uploadedChunkResult
-			var goodResults []uploadedChunkResult
-			for _, r := range results {
-				if _, failed := failedSet[r.Position]; failed {
-					failedResults = append(failedResults, r)
-				} else {
-					goodResults = append(goodResults, r)
-				}
-			}
-			cleanupResultsSelective(failedResults)
-			// Also clean up the good ones since we can't proceed with a partial upload
-			cleanupResultsSelective(goodResults)
-		} else {
-			cleanupAllResults()
-		}
-		return verifyErr
-	}
 
 	// Create chunk records
 	fileChunks := make([]domain.FileChunk, len(results))
@@ -318,8 +433,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 }
 
 // verifyUploadedChunks verifies each uploaded chunk by downloading it and comparing
-// its hash. Transient download failures are retried with backoff. Returns the
-// positions of chunks that could not be verified so the caller can do selective cleanup.
+// its hash. Retained for backward compatibility with tests.
 func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.File, storage domain.Storage, results []uploadedChunkResult, progress *UploadProgress) (failedPositions []int16, err error) {
 	if len(results) == 0 {
 		return nil, nil
@@ -332,9 +446,6 @@ func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.
 	startedAt := time.Now()
 	slog.Info("verifying upload", "file", file.Path, "chunks", len(results), "parallelism", parallelism, "storage", storage.Name)
 
-	const verifyExtraAttempts = 2
-	verifyBackoffs := []time.Duration{500 * time.Millisecond, 1 * time.Second}
-
 	var mu sync.Mutex
 
 	g, gctx := errgroup.WithContext(ctx)
@@ -343,56 +454,18 @@ func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.
 	for _, result := range results {
 		result := result
 		g.Go(func() error {
-			chunk := domain.FileChunk{
-				FileID:            file.ID,
-				TelegramFileID:    result.TelegramFileID,
-				TelegramMessageID: result.TelegramMessageID,
-				Position:          result.Position,
-			}
-
-			var lastErr error
-			for attempt := 0; attempt <= verifyExtraAttempts; attempt++ {
-				if attempt > 0 {
-					backoff := verifyBackoffs[attempt-1]
-					select {
-					case <-gctx.Done():
-						return gctx.Err()
-					case <-time.After(backoff):
-					}
-					slog.Warn("retrying chunk verification", "position", result.Position, "file", file.Path, "attempt", attempt+1)
+			err := m.verifySingleChunk(gctx, file, storage, result)
+			if err != nil {
+				if contextAborted(gctx, err) {
+					return err
 				}
-
-				chunkStartedAt := time.Now()
-				data, err := m.downloadAndDecryptChunkCached(gctx, file.ID, storage, chunk, nil)
-				if err != nil {
-					if contextAborted(gctx, err) {
-						return gctx.Err()
-					}
-					lastErr = fmt.Errorf("verifying chunk %d: %w", result.Position, err)
-					slog.Warn("chunk verification download failed", "position", result.Position, "file", file.Path, "attempt", attempt+1, "elapsed", time.Since(chunkStartedAt).Round(time.Millisecond), "err", err)
-					continue
-				}
-
-				if sha256.Sum256(data) != result.PlainHash {
-					lastErr = fmt.Errorf("verifying chunk %d: uploaded chunk content mismatch after Telegram round-trip", result.Position)
-					slog.Error("chunk verification content mismatch", "position", result.Position, "file", file.Path, "attempt", attempt+1, "elapsed", time.Since(chunkStartedAt).Round(time.Millisecond))
-					// Hash mismatch is not transient — no point retrying
-					break
-				}
-
-				// Verified successfully
-				if progress != nil {
-					progress.VerifiedChunks.Add(1)
-				}
-				slog.Info("chunk verified", "position", result.Position, "file", file.Path, "elapsed", time.Since(chunkStartedAt).Round(time.Millisecond))
-				lastErr = nil
-				break
-			}
-
-			if lastErr != nil {
 				mu.Lock()
 				failedPositions = append(failedPositions, result.Position)
 				mu.Unlock()
+				return nil
+			}
+			if progress != nil {
+				progress.VerifiedChunks.Add(1)
 			}
 			return nil
 		})
