@@ -181,6 +181,7 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 
 	ticker := time.NewTicker(service.SSEPollingInterval)
 	defer ticker.Stop()
+	waitStart := time.Now()
 
 	for {
 		select {
@@ -194,7 +195,14 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		h.mu.RUnlock()
 
 		if !exists {
-			writeSSE(w, flusher, map[string]any{"status": "done"})
+			if time.Since(waitStart) < service.DownloadProgressWaitTime {
+				writeSSE(w, flusher, map[string]any{
+					"total": 0, "uploaded": 0, "total_bytes": 0, "uploaded_bytes": 0,
+					"verification_total": 0, "verified": 0, "status": "uploading",
+				})
+				continue
+			}
+			writeSSE(w, flusher, map[string]any{"status": "error"})
 			return
 		}
 
