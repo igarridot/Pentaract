@@ -136,6 +136,7 @@ const API = {
       formData.append('path', path || '')
       if (uploadId) formData.append('upload_id', uploadId)
       formData.append('on_conflict', options.onConflict || 'keep_both')
+      if (file.size > 0) formData.append('file_size', String(file.size))
       formData.append('file', file)
       return apiMultipartRequest(filesPath(storageId, '/upload'), 'POST', formData, true, options)
     },
