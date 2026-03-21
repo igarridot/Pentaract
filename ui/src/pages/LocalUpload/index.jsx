@@ -9,12 +9,14 @@ import {
   Folder as FolderIcon,
   InsertDriveFile as FileIcon,
   CloudUpload as CloudUploadIcon,
+  FolderOpen as FolderOpenIcon,
 } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
 import { convertSize } from '../../common/size_converter'
 import UploadProgress from '../../components/UploadProgress'
 import BulkOperationProgress from '../../components/BulkOperationProgress'
+import FolderBrowserDialog from '../../components/FolderBrowserDialog'
 import { useLocalUploads } from './useLocalUploads'
 
 export default function LocalUpload() {
@@ -37,6 +39,9 @@ export default function LocalUpload() {
   // Uploads
   const { uploadStates, isUploading, launchLocalBatch, cancelUpload } = useLocalUploads(addAlert)
   const [batchUploading, setBatchUploading] = useState(false)
+
+  // Destination folder picker
+  const [folderDialogOpen, setFolderDialogOpen] = useState(false)
 
   // Bulk progress
   const [bulkProgress, setBulkProgress] = useState(null)
@@ -234,7 +239,29 @@ export default function LocalUpload() {
           onChange={(e) => setDestPath(e.target.value)}
           sx={{ minWidth: 200 }}
         />
+        <Button
+          variant="outlined"
+          size="small"
+          startIcon={<FolderOpenIcon />}
+          disabled={!storageId}
+          onClick={() => setFolderDialogOpen(true)}
+          sx={{ height: 40 }}
+        >
+          Browse
+        </Button>
       </Box>
+
+      <FolderBrowserDialog
+        open={folderDialogOpen}
+        title="Choose destination folder"
+        storageId={storageId}
+        onClose={() => setFolderDialogOpen(false)}
+        actionLabel="Select"
+        onConfirm={(path) => {
+          setDestPath(path)
+          setFolderDialogOpen(false)
+        }}
+      />
 
       {/* Upload progress */}
       {uploadStates.map((u) => (
