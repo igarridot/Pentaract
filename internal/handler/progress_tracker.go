@@ -118,7 +118,9 @@ func uploadProgressStatus(progress *service.UploadProgress, done bool, err error
 		return "skipped"
 	case done:
 		return "done"
-	case progress != nil && progress.VerificationTotalChunks.Load() > 0:
+	case progress != nil && progress.TotalChunks > 0 &&
+		progress.UploadedChunks.Load() >= progress.TotalChunks &&
+		progress.VerificationTotalChunks.Load() > 0:
 		return "verifying"
 	default:
 		return "uploading"

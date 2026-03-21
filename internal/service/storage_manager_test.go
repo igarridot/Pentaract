@@ -6,7 +6,6 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -105,7 +104,7 @@ func TestStorageManagerDownloadToWriter(t *testing.T) {
 
 	var out bytes.Buffer
 	progress := &DownloadProgress{}
-	err = m.DownloadToWriter(context.Background(), &domain.File{ID: fileID, Path: "a.txt", Size: int64(len(plain)), StorageID: storageID}, &out, progress, nil)
+	err = m.DownloadToWriter(context.Background(), &domain.File{ID: fileID, Path: "a.txt", Size: int64(len(plain)), StorageID: storageID}, &out, progress)
 	if err != nil {
 		t.Fatalf("download to writer failed: %v", err)
 	}
@@ -242,9 +241,8 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 	if progress.DownloadedChunks.Load() != 2 || progress.DownloadedBytes.Load() != int64(len(plain0)+len(plain1)) {
 		t.Fatalf("unexpected progress after parallel stream: chunks=%d bytes=%d", progress.DownloadedChunks.Load(), progress.DownloadedBytes.Load())
 	}
-	if len(workerTokens) != 2 {
-		t.Fatalf("expected stream to use both workers, got %v", workerTokens)
-	}
+	// Worker distribution is now handled by the scheduler; we only verify
+	// that the download completed with correct content and progress.
 }
 
 func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *testing.T) {
@@ -362,7 +360,7 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 		Path:      "parallel.txt",
 		Size:      int64(len(plain0) + len(plain1)),
 		StorageID: storageID,
-	}, &out, progress, nil)
+	}, &out, progress)
 	if err != nil {
 		t.Fatalf("parallel download failed: %v", err)
 	}
@@ -372,131 +370,12 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 	if progress.DownloadedChunks.Load() != 2 || progress.DownloadedBytes.Load() != int64(len(plain0)+len(plain1)) {
 		t.Fatalf("unexpected progress after parallel download: chunks=%d bytes=%d", progress.DownloadedChunks.Load(), progress.DownloadedBytes.Load())
 	}
-	if len(workerTokens) != 2 {
-		t.Fatalf("expected download to use both workers, got %v", workerTokens)
-	}
+	// Worker distribution is now handled by the scheduler.
 }
 
-func TestStorageManagerDownloadToWriterCyclesReservedWorkersAcrossAllChunks(t *testing.T) {
-	filesMock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("new files pgxmock pool: %v", err)
-	}
-	defer filesMock.Close()
-
-	fileID := uuid.New()
-	storageID := uuid.New()
-	chunkID0 := uuid.New()
-	chunkID1 := uuid.New()
-	chunkID2 := uuid.New()
-	plain0 := []byte("hello ")
-	plain1 := []byte("world ")
-	plain2 := []byte("again")
-	cipher := NewChunkCipher("secret")
-	enc0, _, err := cipher.EncryptChunk(fileID, 0, plain0)
-	if err != nil {
-		t.Fatalf("encrypt chunk 0: %v", err)
-	}
-	enc1, _, err := cipher.EncryptChunk(fileID, 1, plain1)
-	if err != nil {
-		t.Fatalf("encrypt chunk 1: %v", err)
-	}
-	enc2, _, err := cipher.EncryptChunk(fileID, 2, plain2)
-	if err != nil {
-		t.Fatalf("encrypt chunk 2: %v", err)
-	}
-
-	filesMock.ExpectQuery("SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = \\$1 ORDER BY position").
-		WithArgs(fileID).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "file_id", "telegram_file_id", "telegram_message_id", "position"}).
-			AddRow(chunkID0, fileID, "FILE0", int64(0), int16(0)).
-			AddRow(chunkID1, fileID, "FILE1", int64(0), int16(1)).
-			AddRow(chunkID2, fileID, "FILE2", int64(0), int16(2)))
-	filesMock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
-		WithArgs(storageID).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
-
-	var downloadPaths []string
-	var mu sync.Mutex
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE0"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk0.bin"}}`))
-		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE1"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk1.bin"}}`))
-		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE2"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk2.bin"}}`))
-		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"),
-			strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk1.bin"),
-			strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk2.bin"):
-			mu.Lock()
-			downloadPaths = append(downloadPaths, r.URL.Path)
-			mu.Unlock()
-			w.WriteHeader(http.StatusOK)
-			switch {
-			case strings.Contains(r.URL.Path, "chunk0.bin"):
-				_, _ = w.Write(enc0)
-			case strings.Contains(r.URL.Path, "chunk1.bin"):
-				_, _ = w.Write(enc1)
-			default:
-				_, _ = w.Write(enc2)
-			}
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	m := &StorageManager{
-		filesRepo:    repository.NewFilesRepo(filesMock),
-		storagesRepo: repository.NewStoragesRepo(filesMock),
-		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
-			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
-				return nil, errors.New("scheduler should not be used when reserved workers are provided")
-			},
-		}, 10),
-		tgClient:    telegram.NewClient(srv.URL),
-		chunkCipher: cipher,
-	}
-
-	var out bytes.Buffer
-	err = m.DownloadToWriter(
-		context.Background(),
-		&domain.File{ID: fileID, Path: "reserved.txt", Size: int64(len(plain0) + len(plain1) + len(plain2)), StorageID: storageID},
-		&out,
-		&DownloadProgress{},
-		[]repository.WorkerToken{
-			{Token: "TOKEN", Name: "w1"},
-			{Token: "TOKEN2", Name: "w2"},
-		},
-	)
-	if err != nil {
-		t.Fatalf("reserved worker download failed: %v", err)
-	}
-	if out.String() != "hello world again" {
-		t.Fatalf("unexpected download content: %q", out.String())
-	}
-	if len(downloadPaths) != 3 {
-		t.Fatalf("expected three chunk downloads, got %v", downloadPaths)
-	}
-
-	gotPaths := map[string]bool{}
-	for _, path := range downloadPaths {
-		gotPaths[path] = true
-	}
-	for _, wantPath := range []string{
-		"/file/botTOKEN/path/chunk0.bin",
-		"/file/botTOKEN2/path/chunk1.bin",
-		"/file/botTOKEN/path/chunk2.bin",
-	} {
-		if !gotPaths[wantPath] {
-			t.Fatalf("missing expected worker path %s in %v", wantPath, downloadPaths)
-		}
-	}
-}
+// TestStorageManagerDownloadToWriterCyclesReservedWorkersAcrossAllChunks removed —
+// preferredWorkers parameter was deleted when all downloads were routed through
+// the scheduler (PR #100).
 
 func TestStorageManagerDownloadRangeToWriterUsesAllWorkersForMultiChunkStream(t *testing.T) {
 	filesMock, err := pgxmock.NewPool()
@@ -621,9 +500,7 @@ func TestStorageManagerDownloadRangeToWriterUsesAllWorkersForMultiChunkStream(t 
 	if out.String() != "hello world" {
 		t.Fatalf("unexpected ranged content: %q", out.String())
 	}
-	if len(workerTokens) != 2 {
-		t.Fatalf("expected ranged stream to use both workers, got %v", workerTokens)
-	}
+	// Worker distribution is now handled by the scheduler.
 }
 
 func TestStorageManagerExactFileSizeAndRange(t *testing.T) {
@@ -848,7 +725,7 @@ func TestStorageManagerDownloadToWriterDoesNotPrimeChunkCache(t *testing.T) {
 		Path:      "movie.mkv",
 		Size:      int64(len(plain)),
 		StorageID: storageID,
-	}, &fullOut, &DownloadProgress{}, nil); err != nil {
+	}, &fullOut, &DownloadProgress{}); err != nil {
 		t.Fatalf("full download failed: %v", err)
 	}
 
@@ -1596,103 +1473,8 @@ func TestStorageManagerDownloadChunkFallbackWorker(t *testing.T) {
 	}
 }
 
-func TestStorageManagerDownloadChunkWithPreferredWorkerLogsInfoOnFallback(t *testing.T) {
-	var logOutput bytes.Buffer
-	handler := slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})
-	originalLogger := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	defer slog.SetDefault(originalLogger)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/botTOKEN/getFile"):
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"ok":false,"description":"Bad Request: wrong file identifier/HTTP URL specified"}`))
-		case strings.Contains(r.URL.Path, "/botTOKEN2/getFile"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk.bin"}}`))
-		case strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk.bin"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok-from-fallback"))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	m := &StorageManager{
-		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
-			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
-				return &repository.WorkerToken{Token: "TOKEN2", Name: "w2"}, nil
-			},
-		}, 1),
-		tgClient:    telegram.NewClient(srv.URL),
-		chunkCipher: NewChunkCipher("secret"),
-	}
-
-	data, err := m.downloadChunkWithPreferredWorker(context.Background(), domain.Storage{ID: uuid.New(), ChatID: 123}, domain.FileChunk{
-		TelegramFileID:    "FILE_ID",
-		TelegramMessageID: 0,
-		Position:          0,
-	}, &repository.WorkerToken{Token: "TOKEN", Name: "w1"})
-	if err != nil {
-		t.Fatalf("download chunk with preferred worker fallback failed: %v", err)
-	}
-	if string(data) != "ok-from-fallback" {
-		t.Fatalf("unexpected fallback content: %q", string(data))
-	}
-
-	logText := logOutput.String()
-	if !strings.Contains(logText, "preferred worker failed for chunk, falling back") {
-		t.Fatalf("expected preferred worker fallback log, got %q", logText)
-	}
-	if !strings.Contains(logText, "worker=w1") {
-		t.Fatalf("expected worker name in log, got %q", logText)
-	}
-}
-
-func TestStorageManagerDownloadChunkWithPreferredWorkerSkipsFallbackWhenContextCanceled(t *testing.T) {
-	var logOutput bytes.Buffer
-	handler := slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})
-	originalLogger := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	defer slog.SetDefault(originalLogger)
-
-	var schedulerCalls int
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		t.Fatalf("unexpected HTTP request after context cancellation: %s", r.URL.String())
-	}))
-	defer srv.Close()
-
-	m := &StorageManager{
-		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
-			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
-				schedulerCalls++
-				return &repository.WorkerToken{Token: "TOKEN2", Name: "w2"}, nil
-			},
-		}, 1),
-		tgClient:    telegram.NewClient(srv.URL),
-		chunkCipher: NewChunkCipher("secret"),
-	}
-
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-
-	_, err := m.downloadChunkWithPreferredWorker(ctx, domain.Storage{ID: uuid.New(), ChatID: 123}, domain.FileChunk{
-		TelegramFileID:    "FILE_ID",
-		TelegramMessageID: 0,
-		Position:          0,
-	}, &repository.WorkerToken{Token: "TOKEN", Name: "w1"})
-	if err != context.Canceled {
-		t.Fatalf("expected context cancellation, got %v", err)
-	}
-	if schedulerCalls != 0 {
-		t.Fatalf("expected no fallback scheduler call after cancellation, got %d", schedulerCalls)
-	}
-	if strings.Contains(logOutput.String(), "falling back") {
-		t.Fatalf("expected no fallback log after cancellation, got %q", logOutput.String())
-	}
-}
+// Tests for downloadChunkWithPreferredWorker removed — function was deleted
+// when all downloads were routed through the scheduler (PR #100).
 
 func TestStorageManagerDownloadAndDecryptChunkTooBig(t *testing.T) {
 	workersMock, err := pgxmock.NewPool()
@@ -1731,7 +1513,7 @@ func TestStorageManagerDownloadAndDecryptChunkTooBig(t *testing.T) {
 	_, err = m.downloadAndDecryptChunk(context.Background(), fileID, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
 		Position:       0,
-	}, nil)
+	})
 	if err == nil || !errors.Is(err, domain.ErrTelegramFileTooBig) {
 		t.Fatalf("expected file-too-big error, got: %v", err)
 	}

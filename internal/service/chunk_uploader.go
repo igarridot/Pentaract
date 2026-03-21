@@ -110,7 +110,7 @@ func (m *StorageManager) verifySingleChunk(ctx context.Context, file *domain.Fil
 		}
 
 		chunkStartedAt := time.Now()
-		data, err := m.downloadAndDecryptChunkCached(ctx, file.ID, storage, chunk, nil)
+		data, err := m.downloadAndDecryptChunkCached(ctx, file.ID, storage, chunk)
 		if err != nil {
 			if contextAborted(ctx, err) {
 				return ctx.Err()
@@ -439,10 +439,7 @@ func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.
 		return nil, nil
 	}
 
-	parallelism := m.downloadParallelism(ctx, storage.ID, len(results))
-	if parallelism > VerifyChunkParallelism {
-		parallelism = VerifyChunkParallelism
-	}
+	parallelism := VerifyChunkParallelism
 	startedAt := time.Now()
 	slog.Info("verifying upload", "file", file.Path, "chunks", len(results), "parallelism", parallelism, "storage", storage.Name)
 
