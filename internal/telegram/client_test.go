@@ -103,7 +103,7 @@ func TestUploadSuccessWithHTTPRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	result, err := c.Upload("TOKEN", 999, []byte("payload"), "test.bin")
+	result, err := c.Upload(context.Background(), "TOKEN", 999, []byte("payload"), "test.bin")
 	if err != nil {
 		t.Fatalf("upload failed: %v", err)
 	}
@@ -142,7 +142,7 @@ func TestUploadRetryOn429(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	result, err := c.Upload("TOKEN", 999, []byte("data"), "chunk.bin")
+	result, err := c.Upload(context.Background(), "TOKEN", 999, []byte("data"), "chunk.bin")
 	if err != nil {
 		t.Fatalf("upload after retries failed: %v", err)
 	}

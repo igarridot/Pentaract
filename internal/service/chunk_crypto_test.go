@@ -13,10 +13,11 @@ func TestChunkCipherEncryptDecryptRoundTrip(t *testing.T) {
 	pos := int16(3)
 	plain := []byte("hello telegram encrypted world")
 
-	enc, err := c.EncryptChunk(fileID, pos, plain)
+	enc, release, err := c.EncryptChunk(fileID, pos, plain)
 	if err != nil {
 		t.Fatalf("encrypt failed: %v", err)
 	}
+	defer release()
 	if bytes.Equal(enc, plain) {
 		t.Fatalf("encrypted payload should differ from plaintext")
 	}
@@ -52,10 +53,11 @@ func TestChunkCipherRejectsWrongAAD(t *testing.T) {
 	pos := int16(1)
 	plain := []byte("secret")
 
-	enc, err := c.EncryptChunk(fileID, pos, plain)
+	enc, release, err := c.EncryptChunk(fileID, pos, plain)
 	if err != nil {
 		t.Fatalf("encrypt failed: %v", err)
 	}
+	defer release()
 
 	if _, err := c.DecryptChunk(otherFileID, pos, enc); err == nil {
 		t.Fatalf("expected decrypt to fail with different file ID")

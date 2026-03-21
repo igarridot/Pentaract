@@ -216,7 +216,7 @@ func TestDownloadAndDecryptChunkRoundTrip(t *testing.T) {
 	fileID := uuid.New()
 	plain := []byte("round-trip-test-data")
 	cipher := NewChunkCipher("secret")
-	enc, err := cipher.EncryptChunk(fileID, 0, plain)
+	enc, _, err := cipher.EncryptChunk(fileID, 0, plain)
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}
@@ -259,7 +259,7 @@ func TestDownloadAndDecryptChunkDecryptionFailure(t *testing.T) {
 	// Create encrypted data with wrong fileID so decryption fails
 	wrongFileID := uuid.New()
 	cipher := NewChunkCipher("secret")
-	enc, err := cipher.EncryptChunk(wrongFileID, 0, []byte("data"))
+	enc, _, err := cipher.EncryptChunk(wrongFileID, 0, []byte("data"))
 	if err != nil {
 		t.Fatalf("encrypt: %v", err)
 	}

@@ -641,7 +641,7 @@ func TestUploadProgressStatus(t *testing.T) {
 		t.Fatalf("expected uploading, got %q", got)
 	}
 
-	progress.VerificationTotalChunks = 2
+	progress.VerificationTotalChunks.Store(2)
 	if got := uploadProgressStatus(progress, false, nil, false); got != "verifying" {
 		t.Fatalf("expected verifying, got %q", got)
 	}
@@ -793,10 +793,10 @@ func TestFilesHandlerUploadProgressVerifying(t *testing.T) {
 	h := NewFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 	progress := &service.UploadProgress{
-		TotalBytes:              10,
-		TotalChunks:             2,
-		VerificationTotalChunks: 2,
+		TotalBytes:  10,
+		TotalChunks: 2,
 	}
+	progress.VerificationTotalChunks.Store(2)
 	progress.UploadedBytes.Store(10)
 	progress.UploadedChunks.Store(2)
 	progress.VerifiedChunks.Store(1)

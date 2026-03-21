@@ -13,11 +13,26 @@ import (
 
 type fakeSchedulerRepo struct {
 	getTokenFn        func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error)
+	getTokenBatchFn   func(ctx context.Context, storageID uuid.UUID, rateLimit, count int) ([]repository.WorkerToken, error)
 	nextAvailableInFn func(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error)
 }
 
 func (f *fakeSchedulerRepo) GetToken(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
 	return f.getTokenFn(ctx, storageID, rateLimit)
+}
+func (f *fakeSchedulerRepo) GetTokenBatch(ctx context.Context, storageID uuid.UUID, rateLimit, count int) ([]repository.WorkerToken, error) {
+	if f.getTokenBatchFn != nil {
+		return f.getTokenBatchFn(ctx, storageID, rateLimit, count)
+	}
+	// Default: delegate to single GetToken for backward compat
+	wt, err := f.getTokenFn(ctx, storageID, rateLimit)
+	if err != nil {
+		return nil, err
+	}
+	if wt == nil {
+		return nil, nil
+	}
+	return []repository.WorkerToken{*wt}, nil
 }
 func (f *fakeSchedulerRepo) NextAvailableIn(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error) {
 	return f.nextAvailableInFn(ctx, storageID, rateLimit)

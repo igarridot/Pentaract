@@ -36,7 +36,7 @@ func TestUploadRetriesOn429(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	res, err := c.Upload("TOKEN", 1, []byte("x"), "a.bin")
+	res, err := c.Upload(context.Background(), "TOKEN", 1, []byte("x"), "a.bin")
 	if err != nil || res == nil || attempt < 2 {
 		t.Fatalf("expected retry success, res=%v err=%v attempts=%d", res, err, attempt)
 	}

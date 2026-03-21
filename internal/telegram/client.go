@@ -115,8 +115,15 @@ func parseRateLimitError(resp *http.Response) *RateLimitError {
 // doWithRateLimitRetry executes do() up to maxRetries+1 times, handling 429 rate-limit
 // responses by sleeping for the retry_after duration and retrying. The name parameter
 // is used in log messages to identify the operation.
+// S6: respects context cancellation between retries.
 func (c *Client) doWithRateLimitRetry(ctx context.Context, name string, do func() (*http.Response, error)) (*http.Response, error) {
 	for attempt := 0; attempt <= maxRetries; attempt++ {
+		select {
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		default:
+		}
+
 		resp, err := do()
 		if err != nil {
 			return nil, err
@@ -128,7 +135,12 @@ func (c *Client) doWithRateLimitRetry(ctx context.Context, name string, do func(
 				return nil, rlErr
 			}
 			slog.Warn("telegram rate limited on "+name, "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
-			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
+			sleepDur := time.Duration(rlErr.RetryAfter) * time.Second
+			select {
+			case <-ctx.Done():
+				return nil, ctx.Err()
+			case <-time.After(sleepDur):
+			}
 			continue
 		}
 
@@ -162,8 +174,9 @@ func buildUploadEnvelope(chatID int64, filename string) (prefix, suffix []byte, 
 }
 
 // Upload sends a file to a Telegram channel via sendDocument.
+// S6: accepts context for cancellation propagation.
 // Automatically retries on 429 (Too Many Requests) using the retry_after value.
-func (c *Client) Upload(token string, chatID int64, data []byte, filename string) (*UploadResult, error) {
+func (c *Client) Upload(ctx context.Context, token string, chatID int64, data []byte, filename string) (*UploadResult, error) {
 	convertedChatID := convertChatID(chatID)
 	prefix, suffix, contentType, err := buildUploadEnvelope(convertedChatID, filename)
 	if err != nil {
@@ -172,9 +185,9 @@ func (c *Client) Upload(token string, chatID int64, data []byte, filename string
 
 	apiURL := fmt.Sprintf("%s/bot%s/sendDocument", c.baseURL, token)
 
-	resp, err := c.doWithRateLimitRetry(context.Background(), "sendDocument", func() (*http.Response, error) {
+	resp, err := c.doWithRateLimitRetry(ctx, "sendDocument", func() (*http.Response, error) {
 		body := io.MultiReader(bytes.NewReader(prefix), bytes.NewReader(data), bytes.NewReader(suffix))
-		req, err := http.NewRequest("POST", apiURL, body)
+		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, body)
 		if err != nil {
 			return nil, fmt.Errorf("creating request: %w", err)
 		}
