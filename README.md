@@ -152,7 +152,7 @@ From `.env`:
 | `DATABASE_NAME` | `pentaract` | postgres db |
 | `DATABASE_HOST` | `db` | db host in compose |
 | `DATABASE_PORT` | `5432` | db port |
-| `LOCAL_UPLOAD_BASE_PATH` | _(empty)_ | Base path for local filesystem uploads. When set, enables browsing/uploading files from the container's filesystem. |
+| `LOCAL_UPLOAD_BASE_PATH` | _(empty)_ | Host directory to expose for local filesystem uploads. Mounted read-only at `/mnt/data` inside the container. |
 
 ## Local Filesystem Upload
 
@@ -160,12 +160,11 @@ Pentaract can upload files directly from the container's filesystem to Telegram 
 
 ### Setup
 
-1. Set `LOCAL_UPLOAD_BASE_PATH` in `.env` (e.g., `/data`).
-2. The default `docker-compose.yml` bind-mounts `./local_uploads` on the host to `/data` in the container.
-3. Place files in `./local_uploads/` on the host.
-4. In the Web UI, navigate to **Local Upload** in the sidebar, select a storage, browse the filesystem, and upload.
+1. Set `LOCAL_UPLOAD_BASE_PATH` in `.env` to the host directory you want to expose (e.g., `/home/user/media`).
+2. Uncomment the volume mount in `docker-compose.yml` — it bind-mounts `LOCAL_UPLOAD_BASE_PATH` read-only at `/mnt/data` inside the container.
+3. In the Web UI, navigate to **Local Upload** in the sidebar, select a storage, browse the filesystem, and upload.
 
-Batch uploads (up to 100 items) are supported. Each upload gets its own SSE progress stream and can be cancelled individually. The feature is gated — if `LOCAL_UPLOAD_BASE_PATH` is not set, the browse endpoint returns an error. Path traversal outside the base path is blocked server-side.
+The feature is auto-detected: if `/mnt/data` exists inside the container, local uploads are enabled. Batch uploads (up to 100 items) are supported. Each upload gets its own SSE progress stream and can be cancelled individually. Path traversal outside `/mnt/data` is blocked server-side.
 
 ## Persistence and Data
 
@@ -175,7 +174,7 @@ Persistent data lives in `persistent_data/`:
 - `persistent_data/go-mod-cache` - Go module cache (dev)
 - `persistent_data/go-build-cache` - Go build cache (dev)
 
-Additionally, `local_uploads/` is bind-mounted to `/data` for local filesystem uploads.
+When `LOCAL_UPLOAD_BASE_PATH` is set, the host directory is bind-mounted read-only at `/mnt/data` inside the container for local uploads.
 
 Compose uses bind mounts to `./persistent_data/*` (not named Docker volumes).
 If you used older versions with named volumes, remove them once:
