@@ -151,24 +151,30 @@ func TestBuildUploadEnvelopeProducesMultipartPayload(t *testing.T) {
 	}
 }
 
-func TestNewHTTPClientConfiguresReusableTransport(t *testing.T) {
-	client := newHTTPClient()
-	if client.Timeout != 10*time.Minute {
-		t.Fatalf("timeout = %s, want 10m", client.Timeout)
+func TestHTTPClientsConfiguredCorrectly(t *testing.T) {
+	c := NewClient("http://localhost")
+
+	if c.httpClient.Timeout != 30*time.Second {
+		t.Fatalf("upload client timeout = %s, want 30s", c.httpClient.Timeout)
+	}
+	if c.downloadClient.Timeout != 2*time.Minute {
+		t.Fatalf("download client timeout = %s, want 2m", c.downloadClient.Timeout)
 	}
 
-	transport, ok := client.Transport.(*http.Transport)
-	if !ok {
-		t.Fatalf("expected *http.Transport, got %T", client.Transport)
-	}
-	if transport.MaxIdleConns != 30 {
-		t.Fatalf("MaxIdleConns = %d, want 30", transport.MaxIdleConns)
-	}
-	if transport.MaxIdleConnsPerHost != 20 {
-		t.Fatalf("MaxIdleConnsPerHost = %d, want 20", transport.MaxIdleConnsPerHost)
-	}
-	if !transport.ForceAttemptHTTP2 {
-		t.Fatalf("expected ForceAttemptHTTP2 to be enabled")
+	for name, client := range map[string]*http.Client{"upload": c.httpClient, "download": c.downloadClient} {
+		transport, ok := client.Transport.(*http.Transport)
+		if !ok {
+			t.Fatalf("%s: expected *http.Transport, got %T", name, client.Transport)
+		}
+		if transport.MaxIdleConns != 30 {
+			t.Fatalf("%s: MaxIdleConns = %d, want 30", name, transport.MaxIdleConns)
+		}
+		if transport.MaxIdleConnsPerHost != 20 {
+			t.Fatalf("%s: MaxIdleConnsPerHost = %d, want 20", name, transport.MaxIdleConnsPerHost)
+		}
+		if !transport.ForceAttemptHTTP2 {
+			t.Fatalf("%s: expected ForceAttemptHTTP2 to be enabled", name)
+		}
 	}
 }
 
