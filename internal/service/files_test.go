@@ -12,7 +12,6 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
-	"github.com/Dominux/Pentaract/internal/repository"
 )
 
 type fakeFilesRepo struct {
@@ -83,7 +82,7 @@ type fakeFilesManager struct {
 func (f *fakeFilesManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
 	return f.uploadFn(ctx, file, reader, progress)
 }
-func (f *fakeFilesManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, preferredWorkers []repository.WorkerToken) error {
+func (f *fakeFilesManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
 	return f.downloadFn(ctx, file, w, progress)
 }
 func (f *fakeFilesManager) StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {

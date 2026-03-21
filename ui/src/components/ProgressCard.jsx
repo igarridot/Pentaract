@@ -12,6 +12,7 @@ import { Close as CloseIcon } from '@mui/icons-material'
  * @param {boolean} [isError=false]
  * @param {boolean} [isWarning=false]  - Cancelled / warning styling
  * @param {React.ReactNode} children   - Caption row content
+ * @param {React.ReactNode} [secondaryBar] - Optional secondary progress bar rendered below the main bar
  * @param {React.ReactNode} [afterBar] - Extra content rendered after the caption row (e.g. error message)
  * @param {Function} [onCancel]        - If provided together with cancelLabel, renders a cancel control
  * @param {string}  [cancelLabel]      - Text for a Button-style cancel; omit for icon-style cancel
@@ -28,6 +29,7 @@ export default function ProgressCard({
   isError = false,
   isWarning = false,
   children,
+  secondaryBar,
   afterBar,
   onCancel,
   cancelLabel,
@@ -92,6 +94,9 @@ export default function ProgressCard({
         color={progressColor}
         sx={{ mb: 0.75, width: '100%' }}
       />
+
+      {/* Optional secondary bar (e.g. verification progress) */}
+      {secondaryBar}
 
       {/* Caption / detail row */}
       {children}

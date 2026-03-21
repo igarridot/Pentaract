@@ -20,7 +20,10 @@
       "Bash(find /Volumes/SUNEAST/workspace/pentaract -type f \\\\\\( -name \"*.go\" -o -name \"*.jsx\" -o -name \"*.js\" -o -name \"*.ts\" -o -name \"*.tsx\" \\\\\\) -exec wc -l {} +)",
       "Bash(find /Volumes/SUNEAST/workspace/pentaract -type f \\\\\\( -name \"*.go\" -o -name \"*.jsx\" -o -name \"*.js\" -o -name \"*.ts\" -o -name \"*.tsx\" \\\\\\) ! -path \"*/node_modules/*\" ! -path \"*/vendor/*\" ! -path \"*/dist/*\" ! -path \"*/persistent_data/*\" ! -path \"*/.vite/*\" -exec wc -l {} +)",
       "Bash(go vet:*)",
-      "Bash(npx pnpm:*)"
+      "Bash(npx pnpm:*)",
+      "Bash(gh pr:*)",
+      "Bash(git fetch:*)",
+      "Bash(git checkout:*)"
     ]
   }
 }

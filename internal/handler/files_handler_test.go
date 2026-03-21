@@ -641,6 +641,17 @@ func TestUploadProgressStatus(t *testing.T) {
 		t.Fatalf("expected uploading, got %q", got)
 	}
 
+	// Status stays "uploading" while chunks are still being uploaded,
+	// even if verification has started (pipeline verification).
+	progress.TotalChunks = 2
+	progress.UploadedChunks.Store(1)
+	progress.VerificationTotalChunks.Store(1)
+	if got := uploadProgressStatus(progress, false, nil, false); got != "uploading" {
+		t.Fatalf("expected uploading while chunks remain, got %q", got)
+	}
+
+	// Switches to "verifying" only after all chunks are uploaded.
+	progress.UploadedChunks.Store(2)
 	progress.VerificationTotalChunks.Store(2)
 	if got := uploadProgressStatus(progress, false, nil, false); got != "verifying" {
 		t.Fatalf("expected verifying, got %q", got)
