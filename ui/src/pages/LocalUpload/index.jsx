@@ -148,14 +148,19 @@ export default function LocalUpload() {
     return result
   }
 
-  // Build relative path from base, stripping the base prefix
+  // Strip leading/trailing slashes for consistent path comparison.
+  const normPath = (p) => p.replace(/^\/+/, '').replace(/\/+$/, '')
+
+  // Build relative path from base, stripping the base prefix.
   const relativePath = (filePath, basePath) => {
-    if (!basePath) return filePath
-    const base = basePath.endsWith('/') ? basePath : basePath + '/'
-    if (filePath.startsWith(base)) {
-      return filePath.slice(base.length)
+    const fp = normPath(filePath)
+    const bp = normPath(basePath)
+    if (!bp) return fp
+    const base = bp + '/'
+    if (fp.startsWith(base)) {
+      return fp.slice(base.length)
     }
-    return filePath
+    return fp
   }
 
   // Return the directory portion of a relative path (everything before the last /).
@@ -168,7 +173,7 @@ export default function LocalUpload() {
   // Compute the destination directory for a file given its relative path.
   const buildDestDir = (rel) => {
     const relDir = dirOf(rel)
-    const base = destPath ? destPath.replace(/\/+$/, '') : ''
+    const base = destPath ? normPath(destPath) : ''
     if (base && relDir) return base + '/' + relDir
     return base || relDir
   }
@@ -179,8 +184,12 @@ export default function LocalUpload() {
     setBatchUploading(true)
 
     try {
-      // Collect all files (recursing into directories)
+      // Collect all files (recursing into directories).
+      // For each selected directory, paths are relative to browsePath so the
+      // directory name itself is preserved (e.g. selecting "test" at
+      // "a/b/test" yields "test/file.txt", not "a/b/test/file.txt").
       const allFiles = []
+      const base = normPath(browsePath)
       for (const key of selected) {
         const entry = entries.find((e) => (e.path || e.name) === key)
         if (!entry) continue
@@ -188,11 +197,11 @@ export default function LocalUpload() {
         if (!entry.is_file) {
           const dirFiles = await collectFiles(entry.path)
           for (const f of dirFiles) {
-            const rel = relativePath(f.path, browsePath)
+            const rel = relativePath(f.path, base)
             allFiles.push({ local_path: f.path, dest_path: buildDestDir(rel) })
           }
         } else {
-          const rel = relativePath(entry.path, browsePath)
+          const rel = relativePath(entry.path, base)
           allFiles.push({ local_path: entry.path, dest_path: buildDestDir(rel) })
         }
       }
