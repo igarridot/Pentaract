@@ -6,11 +6,11 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log/slog"
 	"net/http"
 	"net/http/httptest"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"testing"
 	"time"
 
@@ -90,7 +90,7 @@ func TestStorageManagerDownloadToWriter(t *testing.T) {
 
 	var out bytes.Buffer
 	progress := &DownloadProgress{}
-	err = m.DownloadToWriter(context.Background(), &domain.File{ID: fileID, Path: "a.txt", Size: int64(len(plain)), StorageID: storageID}, &out, progress, nil)
+	err = m.DownloadToWriter(context.Background(), &domain.File{ID: fileID, Path: "a.txt", Size: int64(len(plain)), StorageID: storageID}, &out, progress)
 	if err != nil {
 		t.Fatalf("download to writer failed: %v", err)
 	}
@@ -194,12 +194,17 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 	}))
 	defer srv.Close()
 
+	var streamCallCount int32
 	m := &StorageManager{
 		filesRepo:    repository.NewFilesRepo(filesMock),
 		storagesRepo: repository.NewStoragesRepo(filesMock),
 		workersRepo:  repository.NewStorageWorkersRepo(workersMock),
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				n := atomic.AddInt32(&streamCallCount, 1)
+				if n%2 == 0 {
+					return &repository.WorkerToken{Token: "TOKEN2", Name: "w2"}, nil
+				}
 				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
 			},
 		}, 10),
@@ -324,12 +329,17 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 	}))
 	defer srv.Close()
 
+	var dlCallCount int32
 	m := &StorageManager{
 		filesRepo:    repository.NewFilesRepo(filesMock),
 		storagesRepo: repository.NewStoragesRepo(filesMock),
 		workersRepo:  repository.NewStorageWorkersRepo(workersMock),
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				n := atomic.AddInt32(&dlCallCount, 1)
+				if n%2 == 0 {
+					return &repository.WorkerToken{Token: "TOKEN2", Name: "w2"}, nil
+				}
 				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
 			},
 		}, 10),
@@ -347,7 +357,7 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 		Path:      "parallel.txt",
 		Size:      int64(len(plain0) + len(plain1)),
 		StorageID: storageID,
-	}, &out, progress, nil)
+	}, &out, progress)
 	if err != nil {
 		t.Fatalf("parallel download failed: %v", err)
 	}
@@ -362,7 +372,7 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 	}
 }
 
-func TestStorageManagerDownloadToWriterCyclesReservedWorkersAcrossAllChunks(t *testing.T) {
+func TestStorageManagerDownloadToWriterUsesSchedulerForWorkerSelection(t *testing.T) {
 	filesMock, err := pgxmock.NewPool()
 	if err != nil {
 		t.Fatalf("new files pgxmock pool: %v", err)
@@ -401,8 +411,6 @@ func TestStorageManagerDownloadToWriterCyclesReservedWorkersAcrossAllChunks(t *t
 		WithArgs(storageID).
 		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
 
-	var downloadPaths []string
-	var mu sync.Mutex
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch {
 		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE0"):
@@ -414,33 +422,29 @@ func TestStorageManagerDownloadToWriterCyclesReservedWorkersAcrossAllChunks(t *t
 		case strings.Contains(r.URL.Path, "/getFile") && strings.Contains(r.URL.RawQuery, "file_id=FILE2"):
 			w.WriteHeader(http.StatusOK)
 			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk2.bin"}}`))
-		case strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk0.bin"),
-			strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk1.bin"),
-			strings.Contains(r.URL.Path, "/file/botTOKEN/path/chunk2.bin"):
-			mu.Lock()
-			downloadPaths = append(downloadPaths, r.URL.Path)
-			mu.Unlock()
+		case strings.HasSuffix(r.URL.Path, "chunk0.bin"):
 			w.WriteHeader(http.StatusOK)
-			switch {
-			case strings.Contains(r.URL.Path, "chunk0.bin"):
-				_, _ = w.Write(enc0)
-			case strings.Contains(r.URL.Path, "chunk1.bin"):
-				_, _ = w.Write(enc1)
-			default:
-				_, _ = w.Write(enc2)
-			}
+			_, _ = w.Write(enc0)
+		case strings.HasSuffix(r.URL.Path, "chunk1.bin"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc1)
+		case strings.HasSuffix(r.URL.Path, "chunk2.bin"):
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write(enc2)
 		default:
 			w.WriteHeader(http.StatusNotFound)
 		}
 	}))
 	defer srv.Close()
 
+	var schedulerCalls int32
 	m := &StorageManager{
 		filesRepo:    repository.NewFilesRepo(filesMock),
 		storagesRepo: repository.NewStoragesRepo(filesMock),
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
-				return nil, errors.New("scheduler should not be used when reserved workers are provided")
+				atomic.AddInt32(&schedulerCalls, 1)
+				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
 			},
 		}, 10),
 		tgClient:    telegram.NewClient(srv.URL),
@@ -450,36 +454,18 @@ func TestStorageManagerDownloadToWriterCyclesReservedWorkersAcrossAllChunks(t *t
 	var out bytes.Buffer
 	err = m.DownloadToWriter(
 		context.Background(),
-		&domain.File{ID: fileID, Path: "reserved.txt", Size: int64(len(plain0) + len(plain1) + len(plain2)), StorageID: storageID},
+		&domain.File{ID: fileID, Path: "scheduled.txt", Size: int64(len(plain0) + len(plain1) + len(plain2)), StorageID: storageID},
 		&out,
 		&DownloadProgress{},
-		[]repository.WorkerToken{
-			{Token: "TOKEN", Name: "w1"},
-			{Token: "TOKEN2", Name: "w2"},
-		},
 	)
 	if err != nil {
-		t.Fatalf("reserved worker download failed: %v", err)
+		t.Fatalf("scheduled worker download failed: %v", err)
 	}
 	if out.String() != "hello world again" {
 		t.Fatalf("unexpected download content: %q", out.String())
 	}
-	if len(downloadPaths) != 3 {
-		t.Fatalf("expected three chunk downloads, got %v", downloadPaths)
-	}
-
-	gotPaths := map[string]bool{}
-	for _, path := range downloadPaths {
-		gotPaths[path] = true
-	}
-	for _, wantPath := range []string{
-		"/file/botTOKEN/path/chunk0.bin",
-		"/file/botTOKEN2/path/chunk1.bin",
-		"/file/botTOKEN/path/chunk2.bin",
-	} {
-		if !gotPaths[wantPath] {
-			t.Fatalf("missing expected worker path %s in %v", wantPath, downloadPaths)
-		}
+	if atomic.LoadInt32(&schedulerCalls) < 3 {
+		t.Fatalf("expected at least 3 scheduler calls (one per chunk), got %d", schedulerCalls)
 	}
 }
 
@@ -575,12 +561,17 @@ func TestStorageManagerDownloadRangeToWriterUsesAllWorkersForMultiChunkStream(t 
 	}))
 	defer srv.Close()
 
+	var rangeCallCount int32
 	m := &StorageManager{
 		filesRepo:    repository.NewFilesRepo(filesMock),
 		storagesRepo: repository.NewStoragesRepo(filesMock),
 		workersRepo:  repository.NewStorageWorkersRepo(workersMock),
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
+				n := atomic.AddInt32(&rangeCallCount, 1)
+				if n%2 == 0 {
+					return &repository.WorkerToken{Token: "TOKEN2", Name: "w2"}, nil
+				}
 				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
 			},
 		}, 10),
@@ -833,7 +824,7 @@ func TestStorageManagerDownloadToWriterDoesNotPrimeChunkCache(t *testing.T) {
 		Path:      "movie.mkv",
 		Size:      int64(len(plain)),
 		StorageID: storageID,
-	}, &fullOut, &DownloadProgress{}, nil); err != nil {
+	}, &fullOut, &DownloadProgress{}); err != nil {
 		t.Fatalf("full download failed: %v", err)
 	}
 
@@ -1581,68 +1572,7 @@ func TestStorageManagerDownloadChunkFallbackWorker(t *testing.T) {
 	}
 }
 
-func TestStorageManagerDownloadChunkWithPreferredWorkerLogsInfoOnFallback(t *testing.T) {
-	var logOutput bytes.Buffer
-	handler := slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})
-	originalLogger := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	defer slog.SetDefault(originalLogger)
-
-	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		switch {
-		case strings.Contains(r.URL.Path, "/botTOKEN/getFile"):
-			w.WriteHeader(http.StatusBadRequest)
-			_, _ = w.Write([]byte(`{"ok":false,"description":"Bad Request: wrong file identifier/HTTP URL specified"}`))
-		case strings.Contains(r.URL.Path, "/botTOKEN2/getFile"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte(`{"ok":true,"result":{"file_path":"path/chunk.bin"}}`))
-		case strings.Contains(r.URL.Path, "/file/botTOKEN2/path/chunk.bin"):
-			w.WriteHeader(http.StatusOK)
-			_, _ = w.Write([]byte("ok-from-fallback"))
-		default:
-			w.WriteHeader(http.StatusNotFound)
-		}
-	}))
-	defer srv.Close()
-
-	m := &StorageManager{
-		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
-			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
-				return &repository.WorkerToken{Token: "TOKEN2", Name: "w2"}, nil
-			},
-		}, 1),
-		tgClient:    telegram.NewClient(srv.URL),
-		chunkCipher: NewChunkCipher("secret"),
-	}
-
-	data, err := m.downloadChunkWithPreferredWorker(context.Background(), domain.Storage{ID: uuid.New(), ChatID: 123}, domain.FileChunk{
-		TelegramFileID:    "FILE_ID",
-		TelegramMessageID: 0,
-		Position:          0,
-	}, &repository.WorkerToken{Token: "TOKEN", Name: "w1"})
-	if err != nil {
-		t.Fatalf("download chunk with preferred worker fallback failed: %v", err)
-	}
-	if string(data) != "ok-from-fallback" {
-		t.Fatalf("unexpected fallback content: %q", string(data))
-	}
-
-	logText := logOutput.String()
-	if !strings.Contains(logText, "preferred worker failed for chunk, falling back") {
-		t.Fatalf("expected preferred worker fallback log, got %q", logText)
-	}
-	if !strings.Contains(logText, "worker=w1") {
-		t.Fatalf("expected worker name in log, got %q", logText)
-	}
-}
-
-func TestStorageManagerDownloadChunkWithPreferredWorkerSkipsFallbackWhenContextCanceled(t *testing.T) {
-	var logOutput bytes.Buffer
-	handler := slog.NewTextHandler(&logOutput, &slog.HandlerOptions{Level: slog.LevelDebug})
-	originalLogger := slog.Default()
-	slog.SetDefault(slog.New(handler))
-	defer slog.SetDefault(originalLogger)
-
+func TestStorageManagerDownloadChunkSkipsSchedulerWhenContextCanceled(t *testing.T) {
 	var schedulerCalls int
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		t.Fatalf("unexpected HTTP request after context cancellation: %s", r.URL.String())
@@ -1663,19 +1593,13 @@ func TestStorageManagerDownloadChunkWithPreferredWorkerSkipsFallbackWhenContextC
 	ctx, cancel := context.WithCancel(context.Background())
 	cancel()
 
-	_, err := m.downloadChunkWithPreferredWorker(ctx, domain.Storage{ID: uuid.New(), ChatID: 123}, domain.FileChunk{
+	_, err := m.downloadChunk(ctx, domain.Storage{ID: uuid.New(), ChatID: 123}, domain.FileChunk{
 		TelegramFileID:    "FILE_ID",
 		TelegramMessageID: 0,
 		Position:          0,
-	}, &repository.WorkerToken{Token: "TOKEN", Name: "w1"})
-	if err != context.Canceled {
+	})
+	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
-	}
-	if schedulerCalls != 0 {
-		t.Fatalf("expected no fallback scheduler call after cancellation, got %d", schedulerCalls)
-	}
-	if strings.Contains(logOutput.String(), "falling back") {
-		t.Fatalf("expected no fallback log after cancellation, got %q", logOutput.String())
 	}
 }
 
@@ -1716,7 +1640,7 @@ func TestStorageManagerDownloadAndDecryptChunkTooBig(t *testing.T) {
 	_, err = m.downloadAndDecryptChunk(context.Background(), fileID, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
 		Position:       0,
-	}, nil)
+	})
 	if err == nil || !errors.Is(err, domain.ErrTelegramFileTooBig) {
 		t.Fatalf("expected file-too-big error, got: %v", err)
 	}

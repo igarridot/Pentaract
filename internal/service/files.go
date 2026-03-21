@@ -11,7 +11,6 @@ import (
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/Dominux/Pentaract/internal/pathutil"
-	"github.com/Dominux/Pentaract/internal/repository"
 )
 
 type FilesService struct {
@@ -47,7 +46,7 @@ type filesAccessRepository interface {
 
 type filesManager interface {
 	Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error
-	DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, preferredWorkers []repository.WorkerToken) error
+	DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
 	StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error
 	ExactFileSize(ctx context.Context, file *domain.File) (int64, error)
 	DownloadRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error
@@ -129,7 +128,7 @@ func (s *FilesService) GetFileForDownload(ctx context.Context, userID, storageID
 }
 
 func (s *FilesService) DownloadFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
-	return s.manager.DownloadToWriter(ctx, file, w, progress, nil)
+	return s.manager.DownloadToWriter(ctx, file, w, progress)
 }
 
 func (s *FilesService) StreamFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
@@ -249,7 +248,7 @@ func (s *FilesService) downloadDirFilesToZip(ctx context.Context, files []domain
 			return fmt.Errorf("creating zip entry for %s: %w", relPath, err)
 		}
 
-		if err := s.manager.DownloadToWriter(ctx, &file, entry, progress, nil); err != nil {
+		if err := s.manager.DownloadToWriter(ctx, &file, entry, progress); err != nil {
 			return fmt.Errorf("downloading %s into zip: %w", relPath, err)
 		}
 	}

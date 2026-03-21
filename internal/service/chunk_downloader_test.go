@@ -244,7 +244,7 @@ func TestDownloadAndDecryptChunkRoundTrip(t *testing.T) {
 	data, err := m.downloadAndDecryptChunk(context.Background(), fileID, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
 		Position:       0,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("downloadAndDecryptChunk failed: %v", err)
 	}
@@ -287,7 +287,7 @@ func TestDownloadAndDecryptChunkDecryptionFailure(t *testing.T) {
 	_, err = m.downloadAndDecryptChunk(context.Background(), fileID, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
 		Position:       0,
-	}, nil)
+	})
 	if err == nil {
 		t.Fatalf("expected decryption failure")
 	}
@@ -335,7 +335,7 @@ func TestDownloadChunkWithRetrySucceedsAfterTransientFailure(t *testing.T) {
 	data, err := m.downloadChunkWithRetry(context.Background(), domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
 		Position:       0,
-	}, nil)
+	})
 	if err != nil {
 		t.Fatalf("expected retry to succeed, got: %v", err)
 	}
@@ -376,7 +376,7 @@ func TestDownloadChunkWithRetryExhaustsAttempts(t *testing.T) {
 	_, err := m.downloadChunkWithRetry(context.Background(), domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
 		Position:       0,
-	}, nil)
+	})
 	if err == nil {
 		t.Fatal("expected error after exhausting all attempts")
 	}
@@ -415,7 +415,7 @@ func TestDownloadChunkWithRetryContextCancellation(t *testing.T) {
 	_, err := m.downloadChunkWithRetry(ctx, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
 		Position:       0,
-	}, nil)
+	})
 	if err == nil {
 		t.Fatal("expected error after context cancellation")
 	}
