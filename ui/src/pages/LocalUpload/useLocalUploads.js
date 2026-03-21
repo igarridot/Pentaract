@@ -2,11 +2,21 @@ import { useState, useEffect, useCallback, useRef } from 'react'
 import API from '../../api'
 import { createOperationId } from '../../common/operation_id'
 import { isActiveUploadStatus, isTerminalTransferStatus } from '../../common/progress'
+import { normalizeUploadPath, resolveUploadEntries } from '../Files/upload_conflicts'
 
 export function useLocalUploads(addAlert) {
   const [uploadStates, setUploadStates] = useState([])
   const progressCancelsRef = useRef(new Map())
   const mountedRef = useRef(true)
+
+  // Conflict dialog state
+  const [conflictDialog, setConflictDialog] = useState({
+    open: false, filename: '', targetPath: '', applyForAll: false,
+  })
+  const conflictResolverRef = useRef(null)
+
+  // Cache for remote directory listings (targetPath → Set of filenames)
+  const dirFileNamesCacheRef = useRef(new Map())
 
   useEffect(() => {
     mountedRef.current = true
@@ -73,6 +83,80 @@ export function useLocalUploads(addAlert) {
     })
     progressCancelsRef.current.set(uploadId, cancel)
   }, [updateUploadState, handleTerminalState])
+
+  // -- Conflict resolution (same pattern as useUploads) --
+
+  const getDirFileNames = useCallback(async (storageId, targetPath) => {
+    const normalizedPath = normalizeUploadPath(targetPath)
+    const cacheKey = `${storageId}::${normalizedPath}`
+    if (dirFileNamesCacheRef.current.has(cacheKey)) {
+      return dirFileNamesCacheRef.current.get(cacheKey)
+    }
+    const data = await API.files.tree(storageId, normalizedPath)
+    const fileNames = new Set((data || []).filter((item) => item.is_file).map((item) => item.name))
+    dirFileNamesCacheRef.current.set(cacheKey, fileNames)
+    return fileNames
+  }, [])
+
+  const hasConflict = useCallback(async (storageId, targetPath, filename) => {
+    const fileNames = await getDirFileNames(storageId, targetPath)
+    return fileNames.has(filename)
+  }, [getDirFileNames])
+
+  const askConflictDecision = useCallback((filename, targetPath) => (
+    new Promise((resolve) => {
+      conflictResolverRef.current = resolve
+      setConflictDialog({
+        open: true,
+        filename,
+        targetPath: normalizeUploadPath(targetPath),
+        applyForAll: false,
+      })
+    })
+  ), [])
+
+  const handleConflictDecision = useCallback((action, applyForAll) => {
+    const resolve = conflictResolverRef.current
+    conflictResolverRef.current = null
+    setConflictDialog((prev) => ({ ...prev, open: false, applyForAll: false }))
+    if (resolve) {
+      resolve({ action, applyForAll })
+    }
+  }, [])
+
+  // Resolve conflicts for local upload items.
+  // items: [{ local_path, dest_path }]
+  // Returns items that should be uploaded, with onConflict set.
+  const resolveLocalConflicts = useCallback(async (storageId, items) => {
+    // Build entries compatible with resolveUploadEntries
+    const entries = items.map((item) => {
+      const filename = item.local_path.split('/').pop() || item.local_path
+      return { ...item, filename, targetPath: item.dest_path }
+    })
+
+    const resolved = await resolveUploadEntries(
+      entries,
+      (targetPath, filename) => hasConflict(storageId, targetPath, filename),
+      askConflictDecision,
+    )
+
+    // Report skipped files
+    const resolvedKeys = new Set(resolved.map((e) => `${e.targetPath}::${e.filename}`))
+    entries.forEach((entry) => {
+      const key = `${entry.targetPath}::${entry.filename}`
+      if (!resolvedKeys.has(key)) {
+        addAlert(`Skipped "${entry.filename}"`, 'info', { persistent: false })
+      }
+    })
+
+    // Invalidate cache for affected directories
+    resolved.forEach((entry) => {
+      const normalizedPath = normalizeUploadPath(entry.targetPath)
+      dirFileNamesCacheRef.current.delete(`${storageId}::${normalizedPath}`)
+    })
+
+    return resolved
+  }, [addAlert, askConflictDecision, hasConflict])
 
   const launchLocalUpload = useCallback(async (storageId, localPath, destPath, onConflict) => {
     const uploadId = createOperationId()
@@ -161,5 +245,9 @@ export function useLocalUploads(addAlert) {
     launchLocalUpload,
     launchLocalBatch,
     cancelUpload,
+    resolveLocalConflicts,
+    conflictDialog,
+    setConflictDialog,
+    handleConflictDecision,
   }
 }

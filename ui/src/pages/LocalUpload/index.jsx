@@ -18,6 +18,7 @@ import UploadProgress from '../../components/UploadProgress'
 import BulkOperationProgress from '../../components/BulkOperationProgress'
 import FolderBrowserDialog from '../../components/FolderBrowserDialog'
 import NavigationBlockDialog from '../../components/NavigationBlockDialog'
+import UploadConflictDialog from '../../components/UploadConflictDialog'
 import { useNavigationBlock } from '../Files/useNavigationBlock'
 import { useLocalUploads } from './useLocalUploads'
 
@@ -39,9 +40,12 @@ export default function LocalUpload() {
   const [selected, setSelected] = useState(new Set())
 
   // Uploads
-  const { uploadStates, isUploading, launchLocalBatch, cancelUpload } = useLocalUploads(addAlert)
+  const {
+    uploadStates, isUploading, launchLocalBatch, cancelUpload,
+    resolveLocalConflicts,
+    conflictDialog, setConflictDialog, handleConflictDecision,
+  } = useLocalUploads(addAlert)
   const [batchUploading, setBatchUploading] = useState(false)
-  const [onConflict, setOnConflict] = useState('keep_both')
 
   // Destination folder picker
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
@@ -213,14 +217,27 @@ export default function LocalUpload() {
         return
       }
 
-      if (allFiles.length > 1) {
-        setBulkProgress({ operation: 'upload', status: 'running', total: allFiles.length, completed: 0 })
+      // Check for conflicts before uploading (same UX as browser uploads)
+      const resolved = await resolveLocalConflicts(storageId, allFiles)
+      if (resolved.length === 0) {
+        setBatchUploading(false)
+        return
       }
 
-      await launchLocalBatch(storageId, allFiles, onConflict)
+      // Map resolved entries back to batch items
+      const itemsToUpload = resolved.map((e) => ({
+        local_path: e.local_path,
+        dest_path: e.dest_path,
+      }))
 
-      if (allFiles.length > 1) {
-        setBulkProgress((prev) => prev ? { ...prev, status: 'done', completed: allFiles.length } : prev)
+      if (itemsToUpload.length > 1) {
+        setBulkProgress({ operation: 'upload', status: 'running', total: itemsToUpload.length, completed: 0 })
+      }
+
+      await launchLocalBatch(storageId, itemsToUpload, 'keep_both')
+
+      if (itemsToUpload.length > 1) {
+        setBulkProgress((prev) => prev ? { ...prev, status: 'done', completed: itemsToUpload.length } : prev)
         setTimeout(() => setBulkProgress(null), 3000)
       }
     } catch (err) {
@@ -362,17 +379,6 @@ export default function LocalUpload() {
             </Typography>
           )}
           <Box sx={{ flexGrow: 1 }} />
-          <FormControl size="small" sx={{ minWidth: 140 }}>
-            <InputLabel>If exists</InputLabel>
-            <Select
-              value={onConflict}
-              label="If exists"
-              onChange={(e) => setOnConflict(e.target.value)}
-            >
-              <MenuItem value="keep_both">Keep both</MenuItem>
-              <MenuItem value="skip">Skip</MenuItem>
-            </Select>
-          </FormControl>
           <Button
             variant="contained"
             startIcon={<CloudUploadIcon />}
@@ -448,6 +454,15 @@ export default function LocalUpload() {
           </List>
         </Box>
       )}
+
+      <UploadConflictDialog
+        open={conflictDialog.open}
+        filename={conflictDialog.filename}
+        targetPath={conflictDialog.targetPath}
+        applyForAll={conflictDialog.applyForAll}
+        onApplyForAllChange={(checked) => setConflictDialog((prev) => ({ ...prev, applyForAll: checked }))}
+        onDecision={handleConflictDecision}
+      />
 
       <NavigationBlockDialog
         blocker={blocker}
