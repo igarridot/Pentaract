@@ -326,6 +326,9 @@ func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.
 	}
 
 	parallelism := m.downloadParallelism(ctx, storage.ID, len(results))
+	if parallelism > VerifyChunkParallelism {
+		parallelism = VerifyChunkParallelism
+	}
 	startedAt := time.Now()
 	slog.Info("verifying upload", "file", file.Path, "chunks", len(results), "parallelism", parallelism, "storage", storage.Name)
 
