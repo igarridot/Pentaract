@@ -31,8 +31,8 @@ type Client struct {
 
 func newHTTPClient() *http.Client {
 	transport := http.DefaultTransport.(*http.Transport).Clone()
-	transport.MaxIdleConns = 100
-	transport.MaxIdleConnsPerHost = 100
+	transport.MaxIdleConns = 30
+	transport.MaxIdleConnsPerHost = 20
 	transport.IdleConnTimeout = 90 * time.Second
 	transport.ExpectContinueTimeout = time.Second
 	transport.ForceAttemptHTTP2 = true
@@ -40,6 +40,15 @@ func newHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout:   10 * time.Minute, // 20MB chunks can be slow on limited connections
 		Transport: transport,
+	}
+}
+
+// retryBackoff sleeps with exponential backoff before a retry attempt.
+func retryBackoff(ctx context.Context, attempt int) {
+	backoff := time.Duration(attempt+1) * 500 * time.Millisecond
+	select {
+	case <-ctx.Done():
+	case <-time.After(backoff):
 	}
 }
 
@@ -290,6 +299,11 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		}
 		resp, err := c.httpClient.Do(req)
 		if err != nil {
+			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
+				slog.Warn("transient getFile error, retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
+				retryBackoff(ctx, attempt)
+				continue
+			}
 			return nil, fmt.Errorf("getting file info: %w", err)
 		}
 
@@ -339,6 +353,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
 				slog.Warn("transient file download error, retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
+				retryBackoff(ctx, attempt)
 				continue
 			}
 			return nil, fmt.Errorf("%w: %v", domain.ErrDownloadInterrupted, err)
@@ -365,6 +380,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
 				slog.Warn("transient file read error, retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
+				retryBackoff(ctx, attempt)
 				continue
 			}
 			return nil, fmt.Errorf("%w: %v", domain.ErrDownloadInterrupted, err)

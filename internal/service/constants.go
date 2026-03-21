@@ -14,6 +14,7 @@ const (
 
 	// Download tuning
 	DownloadChunkMaxAttempts = 3
+	VerifyChunkParallelism  = 10
 
 	// Delete tuning
 	DeleteParallelism = 5
