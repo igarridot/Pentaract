@@ -41,11 +41,11 @@ func newTransport() *http.Transport {
 }
 
 // newUploadClient returns an HTTP client for uploads (large body sends).
-// 30s is enough for 20MB at 300 Mbps (~0.5s) with generous margin for
-// Telegram processing, TLS negotiation and rate-limit waits.
+// 2 minutes accommodates ~20MB chunks on slow connections (e.g. 2 Mbps ~80s)
+// plus Telegram processing, TLS negotiation and rate-limit waits.
 func newUploadClient() *http.Client {
 	return &http.Client{
-		Timeout:   30 * time.Second,
+		Timeout:   2 * time.Minute,
 		Transport: newTransport(),
 	}
 }
