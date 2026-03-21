@@ -17,6 +17,8 @@ import { convertSize } from '../../common/size_converter'
 import UploadProgress from '../../components/UploadProgress'
 import BulkOperationProgress from '../../components/BulkOperationProgress'
 import FolderBrowserDialog from '../../components/FolderBrowserDialog'
+import NavigationBlockDialog from '../../components/NavigationBlockDialog'
+import { useNavigationBlock } from '../Files/useNavigationBlock'
 import { useLocalUploads } from './useLocalUploads'
 
 export default function LocalUpload() {
@@ -43,6 +45,13 @@ export default function LocalUpload() {
   // Destination folder picker
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
 
+  // Navigation blocking while uploads are active
+  const { blocker } = useNavigationBlock({
+    hasActiveFileOperation: isUploading || batchUploading,
+    isDeleting: false,
+    isBulkDelete: false,
+  })
+
   // Bulk progress
   const [bulkProgress, setBulkProgress] = useState(null)
 
@@ -65,7 +74,11 @@ export default function LocalUpload() {
     setNotConfigured(false)
     try {
       const data = await API.localFs.browse(path)
-      setEntries(data || [])
+      const sorted = (data || []).slice().sort((a, b) => {
+        if (a.is_file !== b.is_file) return a.is_file ? 1 : -1
+        return a.name.localeCompare(b.name)
+      })
+      setEntries(sorted)
       setBrowsePath(path)
       setSelected(new Set())
     } catch (err) {
@@ -122,7 +135,7 @@ export default function LocalUpload() {
     try {
       const items = await API.localFs.browse(dirPath)
       for (const item of (items || [])) {
-        if (item.is_dir) {
+        if (!item.is_file) {
           const subFiles = await collectFiles(item.path)
           result.push(...subFiles)
         } else {
@@ -135,7 +148,7 @@ export default function LocalUpload() {
     return result
   }
 
-  // Build relative path from base
+  // Build relative path from base, stripping the base prefix
   const relativePath = (filePath, basePath) => {
     if (!basePath) return filePath
     const base = basePath.endsWith('/') ? basePath : basePath + '/'
@@ -143,6 +156,21 @@ export default function LocalUpload() {
       return filePath.slice(base.length)
     }
     return filePath
+  }
+
+  // Return the directory portion of a relative path (everything before the last /).
+  // The backend appends the filename itself, so dest_path must be a directory.
+  const dirOf = (rel) => {
+    const idx = rel.lastIndexOf('/')
+    return idx === -1 ? '' : rel.substring(0, idx)
+  }
+
+  // Compute the destination directory for a file given its relative path.
+  const buildDestDir = (rel) => {
+    const relDir = dirOf(rel)
+    const base = destPath ? destPath.replace(/\/+$/, '') : ''
+    if (base && relDir) return base + '/' + relDir
+    return base || relDir
   }
 
   // Upload selected items
@@ -157,17 +185,15 @@ export default function LocalUpload() {
         const entry = entries.find((e) => (e.path || e.name) === key)
         if (!entry) continue
 
-        if (entry.is_dir) {
+        if (!entry.is_file) {
           const dirFiles = await collectFiles(entry.path)
           for (const f of dirFiles) {
             const rel = relativePath(f.path, browsePath)
-            const dp = destPath ? (destPath.replace(/\/+$/, '') + '/' + rel) : rel
-            allFiles.push({ local_path: f.path, dest_path: dp })
+            allFiles.push({ local_path: f.path, dest_path: buildDestDir(rel) })
           }
         } else {
           const rel = relativePath(entry.path, browsePath)
-          const dp = destPath ? (destPath.replace(/\/+$/, '') + '/' + rel) : rel
-          allFiles.push({ local_path: entry.path, dest_path: dp })
+          allFiles.push({ local_path: entry.path, dest_path: buildDestDir(rel) })
         }
       }
 
@@ -352,7 +378,7 @@ export default function LocalUpload() {
           <List disablePadding>
             {entries.map((entry) => {
               const key = entry.path || entry.name
-              const isDir = entry.is_dir
+              const isDir = !entry.is_file
               return (
                 <ListItem
                   key={key}
@@ -401,6 +427,11 @@ export default function LocalUpload() {
           </List>
         </Box>
       )}
+
+      <NavigationBlockDialog
+        blocker={blocker}
+        isUploading={isUploading || batchUploading}
+      />
     </Box>
   )
 }
