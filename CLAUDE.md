@@ -72,6 +72,8 @@ All via environment variables (see `.env.example`). Key ones:
 
 ## Testing patterns
 
+**All new features and bug fixes must include tests.** Backend changes need Go tests; frontend changes need JS tests. Do not submit code without corresponding test coverage.
+
 **Go handlers**: Mock service interfaces with function fields (`mockFilesService`), use `httptest`. See `internal/handler/files_handler_test.go`.
 
 **Go services**: Fake repository interfaces. See `internal/service/files_test.go`.

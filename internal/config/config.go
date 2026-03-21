@@ -20,6 +20,7 @@ type Config struct {
 	DatabaseName           string
 	DatabaseHost           string
 	DatabasePort           int
+	LocalUploadBasePath    string
 }
 
 func (c *Config) DatabaseURL() string {
@@ -47,6 +48,7 @@ func Load() *Config {
 		DatabaseName:           mustGetEnv("DATABASE_NAME"),
 		DatabaseHost:           getEnv("DATABASE_HOST", "db"),
 		DatabasePort:           getEnvInt("DATABASE_PORT", 5432),
+		LocalUploadBasePath:    getEnv("LOCAL_UPLOAD_BASE_PATH", ""),
 	}
 }
 

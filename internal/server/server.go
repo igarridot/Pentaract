@@ -49,7 +49,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	storagesH := handler.NewStoragesHandler(storagesSvc)
 	accessH := handler.NewAccessHandler(accessSvc)
 	workersH := handler.NewStorageWorkersHandler(workersSvc)
-	filesH := handler.NewFilesHandler(filesSvc)
+	filesH := handler.NewFilesHandler(filesSvc, cfg.LocalUploadBasePath)
 
 	// Router
 	r := chi.NewRouter()
@@ -96,6 +96,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Post("/storages/{storageID}/files/create_folder", filesH.CreateFolder)
 			r.Post("/storages/{storageID}/files/move", filesH.Move)
 			r.Post("/storages/{storageID}/files/upload", filesH.Upload)
+			r.Post("/storages/{storageID}/files/upload_local", filesH.UploadLocal)
+			r.Post("/storages/{storageID}/files/upload_local_batch", filesH.UploadLocalBatch)
+			r.Get("/local_fs/browse", filesH.BrowseLocalFS)
 			r.Get("/storages/{storageID}/files/tree/*", filesH.Tree)
 			r.Get("/storages/{storageID}/files/download/*", filesH.Download)
 			r.Get("/storages/{storageID}/files/download_dir/*", filesH.DownloadDir)

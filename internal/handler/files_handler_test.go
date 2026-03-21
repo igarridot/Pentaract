@@ -133,14 +133,14 @@ func makeFilesReq(method, target, body, storageID, wildcard string) *http.Reques
 }
 
 func TestNewFilesHandler(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{}, "")
 	if h == nil || h.svc == nil || h.uploads == nil || h.downloads == nil {
 		t.Fatalf("expected initialized files handler")
 	}
 }
 
 func TestFilesHandlerTreeAndSearchNilBecomeEmpty(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{}, "")
 	storageID := uuid.New().String()
 
 	w := httptest.NewRecorder()
@@ -165,7 +165,7 @@ func TestFilesHandlerDeleteFileValidationAndSuccess(t *testing.T) {
 			gotForce = forceDelete
 			return nil
 		},
-	})
+	}, "")
 	storageID := uuid.New().String()
 
 	w := httptest.NewRecorder()
@@ -198,7 +198,7 @@ func TestFilesHandlerDownloadAttachment(t *testing.T) {
 			_, _ = io.WriteString(w, "abc")
 			return nil
 		},
-	})
+	}, "")
 
 	w := httptest.NewRecorder()
 	h.Download(w, makeFilesReq(http.MethodGet, "/", "", storageID, "folder/a.txt"))
@@ -223,7 +223,7 @@ func TestFilesHandlerDownloadAttachmentWithTrackingCompletesWithoutCancellation(
 			_, _ = io.WriteString(w, "abc")
 			return nil
 		},
-	})
+	}, "")
 
 	w := httptest.NewRecorder()
 	h.Download(w, makeFilesReq(http.MethodGet, "/?download_id=ui-download-1", "", storageID, "folder/a.txt"))
@@ -262,7 +262,7 @@ func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
 			_, _ = io.WriteString(w, "abc")
 			return nil
 		},
-	})
+	}, "")
 
 	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
 	req.Header.Set("Range", "bytes=0-2")
@@ -292,7 +292,7 @@ func TestFilesHandlerDownloadInlineVideoRangeUsesStoredFileSize(t *testing.T) {
 			_, _ = io.WriteString(w, "abc")
 			return nil
 		},
-	})
+	}, "")
 
 	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
 	req.Header.Set("Range", "bytes=0-2")
@@ -334,7 +334,7 @@ func TestFilesHandlerDownloadInlineVideoUsesStreamingPathWithoutRange(t *testing
 			_, _ = io.WriteString(w, "stream")
 			return nil
 		},
-	})
+	}, "")
 
 	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
 	w := httptest.NewRecorder()
@@ -375,7 +375,7 @@ func TestFilesHandlerDownloadInlineVideoWithoutRangeAndUnknownSizeSkipsExactLook
 			_, _ = io.WriteString(w, "stream")
 			return nil
 		},
-	})
+	}, "")
 
 	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
 	w := httptest.NewRecorder()
@@ -415,7 +415,7 @@ func TestFilesHandlerDownloadInlineVideoOpenRangeExtendsToEOF(t *testing.T) {
 			_, _ = io.WriteString(w, "bcdefghijk")
 			return nil
 		},
-	})
+	}, "")
 
 	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
 	req.Header.Set("Range", "bytes=1-")
@@ -452,7 +452,7 @@ func TestFilesHandlerDownloadInlineMKVRange(t *testing.T) {
 			_, _ = io.WriteString(w, "abc")
 			return nil
 		},
-	})
+	}, "")
 
 	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mkv")
 	req.Header.Set("Range", "bytes=0-2")
@@ -476,7 +476,7 @@ func TestFilesHandlerDownloadInlineInvalidRange(t *testing.T) {
 		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
 			return 11, nil
 		},
-	})
+	}, "")
 
 	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
 	req.Header.Set("Range", "bytes=10-5")
@@ -488,7 +488,7 @@ func TestFilesHandlerDownloadInlineInvalidRange(t *testing.T) {
 }
 
 func TestFilesHandlerDownloadAndUploadValidation(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{}, "")
 	storageID := uuid.New().String()
 
 	w := httptest.NewRecorder()
@@ -518,7 +518,7 @@ func TestFilesHandlerUploadSuccess(t *testing.T) {
 			}
 			return &domain.File{ID: uuid.New(), Path: path}, false, nil
 		},
-	})
+	}, "")
 
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -558,7 +558,7 @@ func TestFilesHandlerUploadSkipOnConflict(t *testing.T) {
 			_, _ = io.Copy(io.Discard, reader)
 			return nil, true, nil
 		},
-	})
+	}, "")
 
 	var body bytes.Buffer
 	mw := multipart.NewWriter(&body)
@@ -658,7 +658,7 @@ func TestUploadProgressStatus(t *testing.T) {
 }
 
 func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{}, "")
 	storageID := uuid.New()
 
 	w := httptest.NewRecorder()
@@ -706,7 +706,7 @@ func TestFilesHandlerCancelUpload(t *testing.T) {
 			deleted = true
 			return nil
 		},
-	})
+	}, "")
 
 	uploadID := "up-1"
 	storageID := uuid.New()
@@ -734,7 +734,7 @@ func TestFilesHandlerCancelUpload(t *testing.T) {
 }
 
 func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{}, "")
 	storageID := uuid.New()
 
 	h.uploads["u1"] = &uploadTracker{
@@ -790,7 +790,7 @@ func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
 }
 
 func TestFilesHandlerUploadProgressVerifying(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{}, "")
 	storageID := uuid.New()
 	progress := &service.UploadProgress{
 		TotalBytes:              10,
@@ -839,7 +839,7 @@ func TestFilesHandlerMoveAndCreateFolder(t *testing.T) {
 			folderName = name
 			return nil
 		},
-	})
+	}, "")
 	storageID := uuid.New().String()
 
 	w := httptest.NewRecorder()
@@ -873,7 +873,7 @@ func TestFilesHandlerDownloadDir(t *testing.T) {
 			_, _ = io.Copy(w, bytes.NewBufferString("zipdata"))
 			return "docs", nil
 		},
-	})
+	}, "")
 	storageID := uuid.New().String()
 	w := httptest.NewRecorder()
 	h.DownloadDir(w, makeFilesReq(http.MethodGet, "/", "", storageID, "root/docs"))
@@ -894,7 +894,7 @@ func TestFilesHandlerDownloadDirWithTrackingCompletesWithoutCancellation(t *test
 			_, _ = io.Copy(w, bytes.NewBufferString("zipdata"))
 			return "docs", nil
 		},
-	})
+	}, "")
 	storageID := uuid.New().String()
 
 	w := httptest.NewRecorder()
@@ -921,7 +921,7 @@ func TestFilesHandlerDownloadDirUsesFilesZipForRoot(t *testing.T) {
 			_, _ = io.Copy(w, bytes.NewBufferString("zipdata"))
 			return "files", nil
 		},
-	})
+	}, "")
 
 	w := httptest.NewRecorder()
 	h.DownloadDir(w, makeFilesReq(http.MethodGet, "/", "", uuid.New().String(), ""))
@@ -941,7 +941,7 @@ func TestFilesHandlerDownloadInlineNonVideo(t *testing.T) {
 			_, _ = io.WriteString(w, "hello")
 			return nil
 		},
-	})
+	}, "")
 
 	w := httptest.NewRecorder()
 	h.Download(w, makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "doc.txt"))

@@ -33,6 +33,7 @@ The API and UI provide file management, access control, progress tracking, and w
   - update non-admin passwords
   - delete non-admin users
 - Safer delete model with progress and optional `force delete` mode
+- **Local filesystem upload**: browse and upload files from the container's local filesystem to Telegram storage via the Web UI
 
 ## Quick Start (Production-like)
 
@@ -151,6 +152,20 @@ From `.env`:
 | `DATABASE_NAME` | `pentaract` | postgres db |
 | `DATABASE_HOST` | `db` | db host in compose |
 | `DATABASE_PORT` | `5432` | db port |
+| `LOCAL_UPLOAD_BASE_PATH` | _(empty)_ | Base path for local filesystem uploads. When set, enables browsing/uploading files from the container's filesystem. |
+
+## Local Filesystem Upload
+
+Pentaract can upload files directly from the container's filesystem to Telegram storage, useful for migrating large datasets without streaming them through the browser.
+
+### Setup
+
+1. Set `LOCAL_UPLOAD_BASE_PATH` in `.env` (e.g., `/data`).
+2. The default `docker-compose.yml` bind-mounts `./local_uploads` on the host to `/data` in the container.
+3. Place files in `./local_uploads/` on the host.
+4. In the Web UI, navigate to **Local Upload** in the sidebar, select a storage, browse the filesystem, and upload.
+
+Batch uploads (up to 100 items) are supported. Each upload gets its own SSE progress stream and can be cancelled individually. The feature is gated — if `LOCAL_UPLOAD_BASE_PATH` is not set, the browse endpoint returns an error. Path traversal outside the base path is blocked server-side.
 
 ## Persistence and Data
 
@@ -159,6 +174,8 @@ Persistent data lives in `persistent_data/`:
 - `persistent_data/db` - PostgreSQL data
 - `persistent_data/go-mod-cache` - Go module cache (dev)
 - `persistent_data/go-build-cache` - Go build cache (dev)
+
+Additionally, `local_uploads/` is bind-mounted to `/data` for local filesystem uploads.
 
 Compose uses bind mounts to `./persistent_data/*` (not named Docker volumes).
 If you used older versions with named volumes, remove them once:
@@ -185,6 +202,7 @@ Main route groups:
 - `/api/storages/{storageID}/access*`
 - `/api/storage_workers/*`
 - `/api/storages/{storageID}/files/*`
+- `/api/local_fs/*` (local filesystem browsing)
 - `/api/*_progress` and cancel endpoints
 
 See `internal/server/server.go` for exact route list.
@@ -208,7 +226,7 @@ ui/
   src/api/              frontend API + SSE clients
   src/common/           shared frontend utilities
   src/components/       reusable UI components
-  src/pages/            route screens
+  src/pages/            route screens (Files, LocalUpload, etc.)
 ```
 
 ## Known Operational Constraints

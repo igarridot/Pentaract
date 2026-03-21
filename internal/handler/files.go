@@ -24,7 +24,8 @@ type FilesHandler struct {
 	uploads   map[string]*uploadTracker
 	downloads map[string]*downloadTracker
 
-	fileSizes *fileSizeCache
+	fileSizes     *fileSizeCache
+	localBasePath string
 }
 
 type filesService interface {
@@ -43,12 +44,13 @@ type filesService interface {
 	Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
 }
 
-func NewFilesHandler(svc filesService) *FilesHandler {
+func NewFilesHandler(svc filesService, localBasePath string) *FilesHandler {
 	return &FilesHandler{
-		svc:       svc,
-		uploads:   make(map[string]*uploadTracker),
-		downloads: make(map[string]*downloadTracker),
-		fileSizes: newFileSizeCache(),
+		svc:           svc,
+		uploads:       make(map[string]*uploadTracker),
+		downloads:     make(map[string]*downloadTracker),
+		fileSizes:     newFileSizeCache(),
+		localBasePath: localBasePath,
 	}
 }
 
