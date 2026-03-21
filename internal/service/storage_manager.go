@@ -74,11 +74,12 @@ func validateEncryptedChunkSize(chunk []byte) error {
 	return nil
 }
 
+// contextAborted returns true only when the parent context has been cancelled
+// or has expired. HTTP client timeouts wrap context.DeadlineExceeded internally,
+// but those are transient errors that should be retried — so we only check the
+// parent context, not the error chain.
 func contextAborted(ctx context.Context, err error) bool {
-	if ctx != nil && ctx.Err() != nil {
-		return true
-	}
-	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
+	return ctx != nil && ctx.Err() != nil
 }
 
 func contextAbortError(ctx context.Context, err error) error {
