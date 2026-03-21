@@ -154,8 +154,8 @@ func TestBuildUploadEnvelopeProducesMultipartPayload(t *testing.T) {
 func TestHTTPClientsConfiguredCorrectly(t *testing.T) {
 	c := NewClient("http://localhost")
 
-	if c.httpClient.Timeout != 30*time.Second {
-		t.Fatalf("upload client timeout = %s, want 30s", c.httpClient.Timeout)
+	if c.httpClient.Timeout != 2*time.Minute {
+		t.Fatalf("upload client timeout = %s, want 2m", c.httpClient.Timeout)
 	}
 	if c.downloadClient.Timeout != 2*time.Minute {
 		t.Fatalf("download client timeout = %s, want 2m", c.downloadClient.Timeout)

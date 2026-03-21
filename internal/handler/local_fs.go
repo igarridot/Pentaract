@@ -297,11 +297,18 @@ func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) 
 	}
 	results := make([]uploadResult, 0, len(resolved))
 
+	// Pre-create all trackers so every upload_id is immediately available for
+	// SSE progress subscriptions.
+	type trackerEntry struct {
+		uploadID string
+		tracker  *uploadTracker
+		progress *service.UploadProgress
+		cancel   context.CancelFunc
+	}
+	trackers := make([]trackerEntry, len(resolved))
 	for i, ri := range resolved {
 		uploadID := uuid.New().String()
-		fileSize := ri.info.Size()
-
-		progress := &service.UploadProgress{TotalBytes: fileSize}
+		progress := &service.UploadProgress{TotalBytes: ri.info.Size()}
 		uploadCtx, cancel := context.WithCancel(context.Background())
 		tracker := &uploadTracker{
 			progress:  progress,
@@ -314,22 +321,30 @@ func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) 
 		h.uploads[uploadID] = tracker
 		h.mu.Unlock()
 
-		capturedPath := ri.resolvedPath
-		capturedFullPath := ri.fullPath
-		capturedSize := fileSize
-		capturedUploadID := uploadID
+		trackers[i] = trackerEntry{uploadID: uploadID, tracker: tracker, progress: progress, cancel: cancel}
+		results = append(results, uploadResult{
+			LocalPath: req.Items[i].LocalPath,
+			UploadID:  uploadID,
+		})
+		_ = uploadCtx // used by cancel
+	}
 
-		go func() {
-			defer h.scheduleUploadTrackerCleanup(capturedUploadID)
+	// Process files sequentially in a single goroutine, matching browser upload
+	// behavior. This prevents multiple files from competing for Telegram API
+	// bandwidth and avoids upload timeouts.
+	go func() {
+		for i, ri := range resolved {
+			te := trackers[i]
 
-			f, err := os.Open(capturedPath)
+			f, err := os.Open(ri.resolvedPath)
 			if err != nil {
-				slog.Error("local batch upload: failed to open file", "file", capturedPath, "err", err)
+				slog.Error("local batch upload: failed to open file", "file", ri.resolvedPath, "err", err)
 				h.mu.Lock()
-				tracker.done = true
-				tracker.err = err
+				te.tracker.done = true
+				te.tracker.err = err
 				h.mu.Unlock()
-				return
+				h.scheduleUploadTrackerCleanup(te.uploadID)
+				continue
 			}
 
 			pr, pw := io.Pipe()
@@ -339,25 +354,25 @@ func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) 
 				pw.CloseWithError(copyErr)
 			}()
 
-			_, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, capturedFullPath, capturedSize, pr, progress, onConflict)
+			uploadCtx, cancel := context.WithCancel(context.Background())
+			te.tracker.cancel = cancel
+
+			_, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, ri.fullPath, ri.info.Size(), pr, te.progress, onConflict)
 
 			h.mu.Lock()
-			tracker.done = true
-			tracker.err = uploadErr
-			tracker.skipped = skipped
+			te.tracker.done = true
+			te.tracker.err = uploadErr
+			te.tracker.skipped = skipped
 			h.mu.Unlock()
 
 			if uploadErr != nil {
-				slog.Error("local batch upload failed", "file", capturedFullPath, "err", uploadErr)
+				slog.Error("local batch upload failed", "file", ri.fullPath, "err", uploadErr)
 				pr.Close()
 			}
-		}()
 
-		results = append(results, uploadResult{
-			LocalPath: req.Items[i].LocalPath,
-			UploadID:  uploadID,
-		})
-	}
+			h.scheduleUploadTrackerCleanup(te.uploadID)
+		}
+	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]any{"uploads": results})
 }
