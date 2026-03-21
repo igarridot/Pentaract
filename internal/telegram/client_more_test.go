@@ -161,11 +161,11 @@ func TestNewHTTPClientConfiguresReusableTransport(t *testing.T) {
 	if !ok {
 		t.Fatalf("expected *http.Transport, got %T", client.Transport)
 	}
-	if transport.MaxIdleConns != 100 {
-		t.Fatalf("MaxIdleConns = %d, want 100", transport.MaxIdleConns)
+	if transport.MaxIdleConns != 30 {
+		t.Fatalf("MaxIdleConns = %d, want 30", transport.MaxIdleConns)
 	}
-	if transport.MaxIdleConnsPerHost != 100 {
-		t.Fatalf("MaxIdleConnsPerHost = %d, want 100", transport.MaxIdleConnsPerHost)
+	if transport.MaxIdleConnsPerHost != 20 {
+		t.Fatalf("MaxIdleConnsPerHost = %d, want 20", transport.MaxIdleConnsPerHost)
 	}
 	if !transport.ForceAttemptHTTP2 {
 		t.Fatalf("expected ForceAttemptHTTP2 to be enabled")
