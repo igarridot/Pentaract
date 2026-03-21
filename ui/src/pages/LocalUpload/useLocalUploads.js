@@ -108,10 +108,12 @@ export function useLocalUploads(addAlert) {
   const launchLocalBatch = useCallback(async (storageId, items, onConflict) => {
     try {
       const result = await API.files.uploadLocalBatch(storageId, items, onConflict)
-      const uploadIds = result?.upload_ids || result || []
+      // Backend returns { uploads: [{ local_path, upload_id }, ...] }
+      const uploads = result?.uploads || []
 
-      if (Array.isArray(uploadIds)) {
-        uploadIds.forEach((uploadId, idx) => {
+      if (Array.isArray(uploads)) {
+        uploads.forEach((entry, idx) => {
+          const uploadId = entry.upload_id || entry
           const item = items[idx] || {}
           const filename = (item.local_path || '').split('/').pop() || `file-${idx}`
 
@@ -132,7 +134,7 @@ export function useLocalUploads(addAlert) {
         })
       }
 
-      return uploadIds
+      return uploads.map((e) => e.upload_id || e)
     } catch (err) {
       addAlert(`Batch upload failed: ${err.message}`, 'error', { persistent: true })
       return []
