@@ -6,6 +6,10 @@ services:
       - "${PORT:-8000}:8000"
     env_file: .env
     restart: unless-stopped
+    volumes:
+      - type: bind
+        source: ./local_uploads
+        target: /data
     depends_on:
       db:
         condition: service_healthy

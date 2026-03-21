@@ -81,6 +81,10 @@ function filesDownloadAuthUrl(storageId, mode, path, params = {}) {
 }
 
 const API = {
+  localFs: {
+    browse: (path) => apiRequest(`/local_fs/browse?path=${encodeURIComponent(path || '')}`),
+  },
+
   auth: {
     login: (email, password) => apiRequest('/auth/login', 'POST', { email, password }, false),
   },
@@ -158,6 +162,20 @@ const API = {
       const query = params.toString()
       return apiRequest(`${filesPath(storageId, `/${path}`)}${query ? `?${query}` : ''}`, 'DELETE')
     },
+
+    uploadLocal: (storageId, localPath, destPath, uploadId, onConflict) =>
+      apiRequest(filesPath(storageId, '/upload_local'), 'POST', {
+        local_path: localPath,
+        dest_path: destPath,
+        upload_id: uploadId,
+        on_conflict: onConflict || 'keep_both',
+      }),
+
+    uploadLocalBatch: (storageId, items, onConflict) =>
+      apiRequest(filesPath(storageId, '/upload_local_batch'), 'POST', {
+        items,
+        on_conflict: onConflict || 'keep_both',
+      }),
 
     cancelUpload: (uploadId) => cancelTransfer('upload_cancel', uploadId),
 

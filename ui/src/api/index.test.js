@@ -173,6 +173,125 @@ test('subscribeDeleteProgress retries after transient error and then completes',
   assert.equal(attempts, 2)
 })
 
+test('localFs.browse sends path as query parameter', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  globalThis.fetch = async (url, opts) => {
+    assert.equal(url, '/api/local_fs/browse?path=%2Fdata%2Fmydir')
+    assert.equal(opts.method, 'GET')
+    assert.equal(opts.headers.Authorization, 'Bearer tok')
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      async text() {
+        return '[{"name":"a.txt","path":"a.txt","is_file":true,"size":5}]'
+      },
+    }
+  }
+
+  const res = await API.localFs.browse('/data/mydir')
+  assert.equal(res.length, 1)
+  assert.equal(res[0].name, 'a.txt')
+})
+
+test('localFs.browse sends empty path when omitted', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  globalThis.fetch = async (url) => {
+    assert.equal(url, '/api/local_fs/browse?path=')
+    return {
+      ok: true,
+      status: 200,
+      headers: { get: () => null },
+      async text() { return '[]' },
+    }
+  }
+
+  const res = await API.localFs.browse()
+  assert.deepEqual(res, [])
+})
+
+test('files.uploadLocal sends correct JSON body', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  globalThis.fetch = async (url, opts) => {
+    assert.equal(url, '/api/storages/s1/files/upload_local')
+    assert.equal(opts.method, 'POST')
+    const body = JSON.parse(opts.body)
+    assert.equal(body.local_path, 'photos/a.jpg')
+    assert.equal(body.dest_path, 'backup')
+    assert.equal(body.upload_id, 'up-local-1')
+    assert.equal(body.on_conflict, 'keep_both')
+    return {
+      ok: true,
+      status: 202,
+      headers: { get: () => null },
+      async text() { return '{"upload_id":"up-local-1"}' },
+    }
+  }
+
+  const res = await API.files.uploadLocal('s1', 'photos/a.jpg', 'backup', 'up-local-1')
+  assert.equal(res.upload_id, 'up-local-1')
+})
+
+test('files.uploadLocal uses custom on_conflict policy', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  globalThis.fetch = async (url, opts) => {
+    const body = JSON.parse(opts.body)
+    assert.equal(body.on_conflict, 'skip')
+    return {
+      ok: true,
+      status: 202,
+      headers: { get: () => null },
+      async text() { return '{"upload_id":"up-2"}' },
+    }
+  }
+
+  await API.files.uploadLocal('s1', 'a.txt', '', 'up-2', 'skip')
+})
+
+test('files.uploadLocalBatch sends items and on_conflict', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  globalThis.fetch = async (url, opts) => {
+    assert.equal(url, '/api/storages/s1/files/upload_local_batch')
+    assert.equal(opts.method, 'POST')
+    const body = JSON.parse(opts.body)
+    assert.equal(body.items.length, 2)
+    assert.equal(body.items[0].local_path, 'a.txt')
+    assert.equal(body.items[1].local_path, 'b.txt')
+    assert.equal(body.on_conflict, 'overwrite')
+    return {
+      ok: true,
+      status: 202,
+      headers: { get: () => null },
+      async text() {
+        return '{"uploads":[{"local_path":"a.txt","upload_id":"u1"},{"local_path":"b.txt","upload_id":"u2"}]}'
+      },
+    }
+  }
+
+  const items = [
+    { local_path: 'a.txt', dest_path: '' },
+    { local_path: 'b.txt', dest_path: 'docs' },
+  ]
+  const res = await API.files.uploadLocalBatch('s1', items, 'overwrite')
+  assert.equal(res.uploads.length, 2)
+})
+
+test('files.uploadLocalBatch defaults on_conflict to keep_both', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  globalThis.fetch = async (url, opts) => {
+    const body = JSON.parse(opts.body)
+    assert.equal(body.on_conflict, 'keep_both')
+    return {
+      ok: true,
+      status: 202,
+      headers: { get: () => null },
+      async text() { return '{"uploads":[]}' },
+    }
+  }
+
+  await API.files.uploadLocalBatch('s1', [{ local_path: 'a.txt', dest_path: '' }])
+})
+
 test('files.delete builds query params for delete_id and force_delete', async () => {
   globalThis.localStorage = makeStorage('tok')
   globalThis.fetch = async (url, opts) => {

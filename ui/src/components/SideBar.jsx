@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react'
 import { Drawer, List, Toolbar, Box, ListItem, ListItemButton, ListItemIcon, ListItemText } from '@mui/material'
-import { Storage as StorageIcon, SmartToy as WorkerIcon, ManageAccounts as UsersIcon } from '@mui/icons-material'
+import { Storage as StorageIcon, SmartToy as WorkerIcon, ManageAccounts as UsersIcon, DriveFolderUpload as LocalUploadIcon } from '@mui/icons-material'
 import { Link, useLocation } from 'react-router-dom'
 import API from '../api'
 
@@ -87,6 +87,7 @@ export default function SideBar({ open }) {
         <List disablePadding>
           <SideBarItem to="/storages" icon={<StorageIcon />} label="Storages" showLabel={open} />
           <SideBarItem to="/storage_workers" icon={<WorkerIcon />} label="Workers" showLabel={open} />
+          <SideBarItem to="/local-upload" icon={<LocalUploadIcon />} label="Local Upload" showLabel={open} />
           {isAdmin && <SideBarItem to="/users" icon={<UsersIcon />} label="Users" showLabel={open} />}
         </List>
       </Box>
