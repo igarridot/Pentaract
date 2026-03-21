@@ -1,0 +1,15 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(wc:*)",
+      "Bash(grep:*)",
+      "Bash(go build:*)",
+      "Bash(go test:*)",
+      "Bash(npx vite:*)",
+      "Bash(npm install:*)",
+      "Bash(pnpm test:*)",
+      "Bash(npm test:*)",
+      "Bash(npx vitest:*)"
+    ]
+  }
+}

@@ -7,17 +7,12 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 type UsersRepo struct {
 	pool usersDB
-}
-
-func NewUsersRepo(pool *pgxpool.Pool) *UsersRepo {
-	return NewUsersRepoWithDB(pool)
 }
 
 type usersDB interface {
@@ -27,7 +22,7 @@ type usersDB interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-func NewUsersRepoWithDB(pool usersDB) *UsersRepo {
+func NewUsersRepo(pool usersDB) *UsersRepo {
 	return &UsersRepo{pool: pool}
 }
 
@@ -163,4 +158,9 @@ func (r *UsersRepo) ListGrantCandidates(ctx context.Context, storageID, callerID
 		users = append(users, u)
 	}
 	return users, rows.Err()
+}
+
+func isUniqueViolation(err error) bool {
+	var pgErr *pgconn.PgError
+	return errors.As(err, &pgErr) && pgErr.Code == "23505"
 }

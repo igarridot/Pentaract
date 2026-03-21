@@ -7,7 +7,6 @@ import (
 	"github.com/Dominux/Pentaract/internal/domain"
 	appjwt "github.com/Dominux/Pentaract/internal/jwt"
 	"github.com/Dominux/Pentaract/internal/password"
-	"github.com/Dominux/Pentaract/internal/repository"
 	"github.com/google/uuid"
 )
 
@@ -24,11 +23,7 @@ type usersRepository interface {
 	DeleteManaged(ctx context.Context, id uuid.UUID) error
 }
 
-func NewUsersService(usersRepo *repository.UsersRepo, superuserEmail string) *UsersService {
-	return NewUsersServiceWithRepo(usersRepo, superuserEmail)
-}
-
-func NewUsersServiceWithRepo(usersRepo usersRepository, superuserEmail string) *UsersService {
+func NewUsersService(usersRepo usersRepository, superuserEmail string) *UsersService {
 	return &UsersService{
 		usersRepo:      usersRepo,
 		superuserEmail: superuserEmail,
@@ -53,10 +48,6 @@ func (s *UsersService) IsAdmin(user *appjwt.AuthUser) bool {
 		return false
 	}
 	return strings.EqualFold(strings.TrimSpace(user.Email), strings.TrimSpace(s.superuserEmail))
-}
-
-func (s *UsersService) AdminStatus(user *appjwt.AuthUser) bool {
-	return s.IsAdmin(user)
 }
 
 func (s *UsersService) requireAdmin(caller *appjwt.AuthUser) error {

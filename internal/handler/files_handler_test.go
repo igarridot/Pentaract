@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"errors"
+	"fmt"
 	"io"
 	"mime/multipart"
 	"net/http"
@@ -131,15 +132,15 @@ func makeFilesReq(method, target, body, storageID, wildcard string) *http.Reques
 	return req
 }
 
-func TestNewFilesHandlerWithService(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{})
+func TestNewFilesHandler(t *testing.T) {
+	h := NewFilesHandler(&mockFilesService{})
 	if h == nil || h.svc == nil || h.uploads == nil || h.downloads == nil {
 		t.Fatalf("expected initialized files handler")
 	}
 }
 
 func TestFilesHandlerTreeAndSearchNilBecomeEmpty(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{})
 	storageID := uuid.New().String()
 
 	w := httptest.NewRecorder()
@@ -158,7 +159,7 @@ func TestFilesHandlerTreeAndSearchNilBecomeEmpty(t *testing.T) {
 func TestFilesHandlerDeleteFileValidationAndSuccess(t *testing.T) {
 	var gotPath string
 	var gotForce bool
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		deleteFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error {
 			gotPath = path
 			gotForce = forceDelete
@@ -189,7 +190,7 @@ func TestFilesHandlerDeleteFileValidationAndSuccess(t *testing.T) {
 func TestFilesHandlerDownloadAttachment(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "folder/a.txt", Size: 3}, nil
 		},
@@ -213,7 +214,7 @@ func TestFilesHandlerDownloadAttachmentWithTrackingCompletesWithoutCancellation(
 	fileID := uuid.New()
 	storageID := uuid.New().String()
 	progressWasProvided := false
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "folder/a.txt", Size: 3}, nil
 		},
@@ -249,7 +250,7 @@ func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
 	rangeCalled := false
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -278,7 +279,7 @@ func TestFilesHandlerDownloadInlineVideoRangeUsesStoredFileSize(t *testing.T) {
 	exactCalled := false
 	var gotTotal int64
 
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -315,7 +316,7 @@ func TestFilesHandlerDownloadInlineVideoUsesStreamingPathWithoutRange(t *testing
 	streamCalled := false
 	downloadCalled := false
 	exactCalled := false
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -361,7 +362,7 @@ func TestFilesHandlerDownloadInlineVideoWithoutRangeAndUnknownSizeSkipsExactLook
 	storageID := uuid.New().String()
 	streamCalled := false
 	exactCalled := false
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 0}, nil
 		},
@@ -399,7 +400,7 @@ func TestFilesHandlerDownloadInlineVideoOpenRangeExtendsToEOF(t *testing.T) {
 	storageID := uuid.New().String()
 	rangeCalled := false
 	var gotStart, gotEnd, gotTotal int64
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -439,7 +440,7 @@ func TestFilesHandlerDownloadInlineMKVRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
 	rangeCalled := false
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mkv", Size: 11}, nil
 		},
@@ -468,7 +469,7 @@ func TestFilesHandlerDownloadInlineMKVRange(t *testing.T) {
 func TestFilesHandlerDownloadInlineInvalidRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -487,7 +488,7 @@ func TestFilesHandlerDownloadInlineInvalidRange(t *testing.T) {
 }
 
 func TestFilesHandlerDownloadAndUploadValidation(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{})
 	storageID := uuid.New().String()
 
 	w := httptest.NewRecorder()
@@ -505,7 +506,7 @@ func TestFilesHandlerDownloadAndUploadValidation(t *testing.T) {
 
 func TestFilesHandlerUploadSuccess(t *testing.T) {
 	uploadDone := make(chan struct{})
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
 			defer close(uploadDone)
 			b, _ := io.ReadAll(reader)
@@ -549,7 +550,7 @@ func TestFilesHandlerUploadSuccess(t *testing.T) {
 }
 
 func TestFilesHandlerUploadSkipOnConflict(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
 			if onConflict != service.UploadConflictSkip {
 				t.Fatalf("expected skip policy, got %q", onConflict)
@@ -598,27 +599,27 @@ func TestDownloadErrorMessage(t *testing.T) {
 	}{
 		{
 			name: "legacy 20mb chunk",
-			err:  errors.New("downloading chunk 0: telegram chunk exceeds Bot API download limit (20MB). re-upload file with smaller chunk size"),
+			err:  fmt.Errorf("downloading chunk 0: %w (status 400): file is too big", domain.ErrTelegramFileTooBig),
 			want: "older 20 MB chunk size",
 		},
 		{
 			name: "secret key mismatch",
-			err:  errors.New("decrypting chunk 2: decrypting payload: cipher: message authentication failed"),
+			err:  fmt.Errorf("decrypting chunk 2: %w: cipher: message authentication failed", domain.ErrDecryptionFailed),
 			want: "current SECRET_KEY",
 		},
 		{
 			name: "worker resolution failure",
-			err:  errors.New("downloading chunk 1: telegram getFile failed (status 400): wrong file identifier/HTTP URL specified"),
+			err:  fmt.Errorf("downloading chunk 1: %w (status 400): wrong file identifier", domain.ErrTelegramGetFileFailed),
 			want: "currently available workers",
 		},
 		{
 			name: "transient telegram stream failure",
-			err:  errors.New("downloading chunk 409: reading file data: unexpected EOF"),
+			err:  fmt.Errorf("downloading chunk 409: %w: unexpected EOF", domain.ErrDownloadInterrupted),
 			want: "interrupted the download stream",
 		},
 		{
 			name: "fallback generic",
-			err:  errors.New("writing chunk 0: broken pipe"),
+			err:  fmt.Errorf("writing chunk 0: broken pipe"),
 			want: "Download failed unexpectedly",
 		},
 	}
@@ -657,7 +658,7 @@ func TestUploadProgressStatus(t *testing.T) {
 }
 
 func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 
 	w := httptest.NewRecorder()
@@ -700,7 +701,7 @@ func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
 func TestFilesHandlerCancelUpload(t *testing.T) {
 	cancelled := false
 	deleted := false
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		deleteFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error {
 			deleted = true
 			return nil
@@ -733,7 +734,7 @@ func TestFilesHandlerCancelUpload(t *testing.T) {
 }
 
 func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 
 	h.uploads["u1"] = &uploadTracker{
@@ -763,7 +764,7 @@ func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
 		progress:  &service.DownloadProgress{TotalBytes: 10, TotalChunks: 1},
 		storageID: storageID,
 		done:      true,
-		err:       errors.New("downloading chunk 0: telegram chunk exceeds Bot API download limit (20MB). re-upload file with smaller chunk size"),
+		err:       fmt.Errorf("downloading chunk 0: %w (status 400): file is too big", domain.ErrTelegramFileTooBig),
 	}
 	w = httptest.NewRecorder()
 	h.DownloadProgress(w, makeFilesReq(http.MethodGet, "/?download_id=d3", "", "", ""))
@@ -789,7 +790,7 @@ func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
 }
 
 func TestFilesHandlerUploadProgressVerifying(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 	progress := &service.UploadProgress{
 		TotalBytes:              10,
@@ -827,7 +828,7 @@ func TestFilesHandlerUploadProgressVerifying(t *testing.T) {
 
 func TestFilesHandlerMoveAndCreateFolder(t *testing.T) {
 	var movedOld, movedNew, folderPath, folderName string
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		moveFn: func(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error {
 			movedOld = oldPath
 			movedNew = newPath
@@ -867,7 +868,7 @@ func TestFilesHandlerMoveAndCreateFolder(t *testing.T) {
 }
 
 func TestFilesHandlerDownloadDir(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
 			_, _ = io.Copy(w, bytes.NewBufferString("zipdata"))
 			return "docs", nil
@@ -885,7 +886,7 @@ func TestFilesHandlerDownloadDir(t *testing.T) {
 }
 
 func TestFilesHandlerDownloadDirWithTrackingCompletesWithoutCancellation(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
 			if progress == nil {
 				t.Fatalf("expected tracked directory download to receive progress object")
@@ -915,7 +916,7 @@ func TestFilesHandlerDownloadDirWithTrackingCompletesWithoutCancellation(t *test
 }
 
 func TestFilesHandlerDownloadDirUsesFilesZipForRoot(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
 			_, _ = io.Copy(w, bytes.NewBufferString("zipdata"))
 			return "files", nil
@@ -932,7 +933,7 @@ func TestFilesHandlerDownloadDirUsesFilesZipForRoot(t *testing.T) {
 func TestFilesHandlerDownloadInlineNonVideo(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
-	h := NewFilesHandlerWithService(&mockFilesService{
+	h := NewFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "doc.txt", Size: 5}, nil
 		},

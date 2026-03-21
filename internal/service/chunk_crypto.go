@@ -9,6 +9,7 @@ import (
 	"encoding/binary"
 	"fmt"
 
+	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/google/uuid"
 	"golang.org/x/crypto/pbkdf2"
 )
@@ -78,7 +79,7 @@ func (c *ChunkCipher) DecryptChunk(fileID uuid.UUID, position int16, payload []b
 
 	nonceSize := c.aead.NonceSize()
 	if len(payload) < len(chunkCipherMagic)+nonceSize {
-		return nil, fmt.Errorf("invalid encrypted payload size")
+		return nil, fmt.Errorf("%w: invalid encrypted payload size", domain.ErrDecryptionFailed)
 	}
 
 	nonceOffset := len(chunkCipherMagic)
@@ -87,7 +88,7 @@ func (c *ChunkCipher) DecryptChunk(fileID uuid.UUID, position int16, payload []b
 
 	plain, err := c.aead.Open(nil, nonce, ciphertext, c.aad(fileID, position))
 	if err != nil {
-		return nil, fmt.Errorf("decrypting payload: %w", err)
+		return nil, fmt.Errorf("%w: %v", domain.ErrDecryptionFailed, err)
 	}
 	return plain, nil
 }

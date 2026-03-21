@@ -8,7 +8,6 @@ import (
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	appjwt "github.com/Dominux/Pentaract/internal/jwt"
-	"github.com/Dominux/Pentaract/internal/service"
 )
 
 type UsersHandler struct {
@@ -17,17 +16,13 @@ type UsersHandler struct {
 
 type usersService interface {
 	Register(ctx context.Context, email, pass string) (*domain.User, error)
-	AdminStatus(user *appjwt.AuthUser) bool
+	IsAdmin(user *appjwt.AuthUser) bool
 	ListManaged(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error)
 	UpdatePassword(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error
 	DeleteManaged(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID) error
 }
 
-func NewUsersHandler(svc *service.UsersService) *UsersHandler {
-	return NewUsersHandlerWithService(svc)
-}
-
-func NewUsersHandlerWithService(svc usersService) *UsersHandler {
+func NewUsersHandler(svc usersService) *UsersHandler {
 	return &UsersHandler{svc: svc}
 }
 
@@ -54,7 +49,7 @@ func (h *UsersHandler) Register(w http.ResponseWriter, r *http.Request) {
 
 func (h *UsersHandler) AdminStatus(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
-	writeJSON(w, http.StatusOK, map[string]bool{"is_admin": h.svc.AdminStatus(user)})
+	writeJSON(w, http.StatusOK, map[string]bool{"is_admin": h.svc.IsAdmin(user)})
 }
 
 func (h *UsersHandler) ListManaged(w http.ResponseWriter, r *http.Request) {

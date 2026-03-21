@@ -47,7 +47,7 @@ func makeStorageReq(method, body string, storageID string) *http.Request {
 
 func TestStoragesHandlerFlows(t *testing.T) {
 	id := uuid.New()
-	h := NewStoragesHandlerWithService(&mockStoragesService{
+	h := NewStoragesHandler(&mockStoragesService{
 		createFn: func(ctx context.Context, userID uuid.UUID, name string, chatID int64) (*domain.Storage, error) {
 			return &domain.Storage{ID: id, Name: name}, nil
 		},
@@ -85,7 +85,7 @@ func TestStoragesHandlerFlows(t *testing.T) {
 }
 
 func TestStoragesHandlerValidationErrors(t *testing.T) {
-	h := NewStoragesHandlerWithService(&mockStoragesService{
+	h := NewStoragesHandler(&mockStoragesService{
 		createFn: func(ctx context.Context, userID uuid.UUID, name string, chatID int64) (*domain.Storage, error) {
 			return nil, nil
 		},
@@ -119,7 +119,7 @@ func TestStoragesHandlerValidationErrors(t *testing.T) {
 
 func TestStoragesHandlerServiceErrors(t *testing.T) {
 	id := uuid.New()
-	h := NewStoragesHandlerWithService(&mockStoragesService{
+	h := NewStoragesHandler(&mockStoragesService{
 		createFn: func(ctx context.Context, userID uuid.UUID, name string, chatID int64) (*domain.Storage, error) {
 			return nil, domain.ErrForbidden()
 		},

@@ -16,7 +16,7 @@ func TestStoragesRepoCRUD(t *testing.T) {
 		t.Fatalf("new pgxmock pool: %v", err)
 	}
 	defer mock.Close()
-	repo := NewStoragesRepoWithDB(mock)
+	repo := NewStoragesRepo(mock)
 
 	sid := uuid.New()
 	uid := uuid.New()
@@ -54,7 +54,7 @@ func TestStoragesRepoErrors(t *testing.T) {
 		t.Fatalf("new pgxmock pool: %v", err)
 	}
 	defer mock.Close()
-	repo := NewStoragesRepoWithDB(mock)
+	repo := NewStoragesRepo(mock)
 
 	sid := uuid.New()
 

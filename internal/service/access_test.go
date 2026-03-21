@@ -66,7 +66,7 @@ func TestAccessServiceFlows(t *testing.T) {
 			return []domain.User{{Email: "candidate@example.com"}}, nil
 		},
 	}
-	svc := NewAccessServiceWithRepos(accessRepo, usersRepo)
+	svc := NewAccessService(accessRepo, usersRepo)
 
 	if err := svc.Grant(context.Background(), caller, storage, "target@example.com", domain.AccessRead); err != nil {
 		t.Fatalf("grant failed: %v", err)
@@ -100,7 +100,7 @@ func TestAccessServiceForbiddenAndSelf(t *testing.T) {
 		},
 		listGrantCandidatesFn: func(ctx context.Context, storageID, callerID uuid.UUID) ([]domain.User, error) { return nil, nil },
 	}
-	svc := NewAccessServiceWithRepos(accessRepo, usersRepo)
+	svc := NewAccessService(accessRepo, usersRepo)
 	if err := svc.Grant(context.Background(), id, uuid.New(), "x@example.com", domain.AccessRead); err == nil {
 		t.Fatalf("expected forbidden grant")
 	}
@@ -139,7 +139,7 @@ func TestAccessServiceErrorBranches(t *testing.T) {
 			return nil, errors.New("users error")
 		},
 	}
-	svc := NewAccessServiceWithRepos(accessRepo, usersRepo)
+	svc := NewAccessService(accessRepo, usersRepo)
 
 	if err := svc.Grant(context.Background(), caller, storage, "a@example.com", domain.AccessRead); err == nil {
 		t.Fatalf("expected grant access check error")

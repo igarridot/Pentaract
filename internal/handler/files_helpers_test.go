@@ -101,7 +101,7 @@ func TestExtractWildcardPath(t *testing.T) {
 }
 
 func TestSetupDownloadTrackerAndFinish(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 	req := httptest.NewRequest(http.MethodGet, "/?download_id=d1", nil)
 
@@ -130,7 +130,7 @@ func TestSetupDownloadTrackerAndFinish(t *testing.T) {
 }
 
 func TestSetupDownloadTrackerReplacesExistingTracker(t *testing.T) {
-	h := NewFilesHandlerWithService(&mockFilesService{})
+	h := NewFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 
 	req1 := httptest.NewRequest(http.MethodGet, "/?download_id=d1", nil)

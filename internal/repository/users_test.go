@@ -17,7 +17,7 @@ func TestUsersRepoCreateAndGet(t *testing.T) {
 	}
 	defer mock.Close()
 
-	repo := NewUsersRepoWithDB(mock)
+	repo := NewUsersRepo(mock)
 	uid := uuid.New()
 
 	mock.ExpectQuery("INSERT INTO users").
@@ -53,7 +53,7 @@ func TestUsersRepoListAndMutations(t *testing.T) {
 	}
 	defer mock.Close()
 
-	repo := NewUsersRepoWithDB(mock)
+	repo := NewUsersRepo(mock)
 	uid := uuid.New()
 
 	mock.ExpectQuery("SELECT id, email FROM users WHERE LOWER\\(email\\) <> LOWER\\(\\$1\\) ORDER BY email").
@@ -79,7 +79,7 @@ func TestUsersRepoDeleteManagedAndCandidates(t *testing.T) {
 	}
 	defer mock.Close()
 
-	repo := NewUsersRepoWithDB(mock)
+	repo := NewUsersRepo(mock)
 	uid := uuid.New()
 	sid := uuid.New()
 
@@ -107,7 +107,7 @@ func TestUsersRepoErrorBranches(t *testing.T) {
 		t.Fatalf("new pgxmock pool: %v", err)
 	}
 	defer mock.Close()
-	repo := NewUsersRepoWithDB(mock)
+	repo := NewUsersRepo(mock)
 	uid := uuid.New()
 
 	mock.ExpectQuery("INSERT INTO users").

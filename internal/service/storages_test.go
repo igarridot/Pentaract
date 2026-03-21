@@ -89,7 +89,7 @@ func TestStoragesService(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewStoragesServiceWithDeps(stRepo, accRepo, filesRepo, manager)
+	svc := NewStoragesService(stRepo, accRepo, filesRepo, manager)
 
 	if _, err := svc.Create(context.Background(), caller, "", 1); err == nil {
 		t.Fatalf("expected bad request on empty storage name")
@@ -109,7 +109,7 @@ func TestStoragesService(t *testing.T) {
 }
 
 func TestStoragesServiceForbidden(t *testing.T) {
-	svc := NewStoragesServiceWithDeps(
+	svc := NewStoragesService(
 		&fakeStoragesRepo{
 			createFn: func(ctx context.Context, name string, chatID int64) (*domain.Storage, error) { return nil, nil },
 			listFn:   func(ctx context.Context, userID uuid.UUID) ([]domain.StorageWithInfo, error) { return nil, nil },
@@ -140,7 +140,7 @@ func TestStoragesServiceErrorBranches(t *testing.T) {
 	caller := uuid.New()
 	storageID := uuid.New()
 
-	svc := NewStoragesServiceWithDeps(
+	svc := NewStoragesService(
 		&fakeStoragesRepo{
 			createFn: func(ctx context.Context, name string, chatID int64) (*domain.Storage, error) {
 				return &domain.Storage{ID: storageID, Name: name}, nil

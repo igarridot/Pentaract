@@ -45,7 +45,7 @@ func withStorageReq(method, body string, storageID uuid.UUID) *http.Request {
 func TestAccessHandlerFlows(t *testing.T) {
 	storageID := uuid.New()
 	target := uuid.New()
-	h := NewAccessHandlerWithService(&mockAccessService{
+	h := NewAccessHandler(&mockAccessService{
 		grantFn: func(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID, email string, accessType domain.AccessType) error {
 			return nil
 		},
@@ -90,7 +90,7 @@ func TestAccessHandlerFlows(t *testing.T) {
 
 func TestAccessHandlerErrors(t *testing.T) {
 	storageID := uuid.New()
-	h := NewAccessHandlerWithService(&mockAccessService{
+	h := NewAccessHandler(&mockAccessService{
 		grantFn: func(ctx context.Context, callerID uuid.UUID, storageID uuid.UUID, email string, accessType domain.AccessType) error {
 			return domain.ErrForbidden()
 		},

@@ -17,7 +17,7 @@ func TestStorageWorkersRepoBasic(t *testing.T) {
 		t.Fatalf("new pgxmock pool: %v", err)
 	}
 	defer mock.Close()
-	repo := NewStorageWorkersRepoWithDB(mock)
+	repo := NewStorageWorkersRepo(mock)
 
 	userID := uuid.New()
 	storageID := uuid.New()
@@ -58,7 +58,7 @@ func TestStorageWorkersRepoMutationsAndScheduling(t *testing.T) {
 		t.Fatalf("new pgxmock pool: %v", err)
 	}
 	defer mock.Close()
-	repo := NewStorageWorkersRepoWithDB(mock)
+	repo := NewStorageWorkersRepo(mock)
 
 	userID := uuid.New()
 	storageID := uuid.New()
@@ -101,7 +101,7 @@ func TestStorageWorkersRepoErrorBranches(t *testing.T) {
 		t.Fatalf("new pgxmock pool: %v", err)
 	}
 	defer mock.Close()
-	repo := NewStorageWorkersRepoWithDB(mock)
+	repo := NewStorageWorkersRepo(mock)
 
 	userID := uuid.New()
 	storageID := uuid.New()

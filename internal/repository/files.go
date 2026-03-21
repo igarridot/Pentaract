@@ -9,7 +9,6 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/Dominux/Pentaract/internal/pathutil"
@@ -19,10 +18,6 @@ type FilesRepo struct {
 	pool filesDB
 }
 
-func NewFilesRepo(pool *pgxpool.Pool) *FilesRepo {
-	return NewFilesRepoWithDB(pool)
-}
-
 type filesDB interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -30,7 +25,7 @@ type filesDB interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-func NewFilesRepoWithDB(pool filesDB) *FilesRepo {
+func NewFilesRepo(pool filesDB) *FilesRepo {
 	return &FilesRepo{pool: pool}
 }
 

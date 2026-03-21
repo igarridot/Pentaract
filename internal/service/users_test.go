@@ -36,15 +36,15 @@ func (f *fakeUsersRepo) DeleteManaged(ctx context.Context, id uuid.UUID) error {
 	return f.deleteManagedFn(ctx, id)
 }
 
-func TestUsersServiceIsAdminAndAdminStatus(t *testing.T) {
-	svc := NewUsersServiceWithRepo(&fakeUsersRepo{}, "admin@example.com")
+func TestUsersServiceIsAdmin(t *testing.T) {
+	svc := NewUsersService(&fakeUsersRepo{}, "admin@example.com")
 	if !svc.IsAdmin(&appjwt.AuthUser{Email: "ADMIN@example.com"}) {
 		t.Fatalf("expected admin to be recognized case-insensitively")
 	}
 	if svc.IsAdmin(nil) {
 		t.Fatalf("nil user must not be admin")
 	}
-	if svc.AdminStatus(&appjwt.AuthUser{Email: "user@example.com"}) {
+	if svc.IsAdmin(&appjwt.AuthUser{Email: "user@example.com"}) {
 		t.Fatalf("unexpected admin status for regular user")
 	}
 }
@@ -63,7 +63,7 @@ func TestUsersServiceRegister(t *testing.T) {
 			return &domain.User{Email: email}, nil
 		},
 	}
-	svc := NewUsersServiceWithRepo(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com")
 
 	if _, err := svc.Register(context.Background(), "", "x"); err == nil {
 		t.Fatalf("expected bad request for empty email")
@@ -84,7 +84,7 @@ func TestUsersServiceListManaged(t *testing.T) {
 			return []domain.User{{Email: "u@example.com"}}, nil
 		},
 	}
-	svc := NewUsersServiceWithRepo(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com")
 
 	if _, err := svc.ListManaged(context.Background(), &appjwt.AuthUser{Email: "u@example.com"}); err == nil {
 		t.Fatalf("expected forbidden for non-admin")
@@ -107,7 +107,7 @@ func TestUsersServiceUpdatePassword(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewUsersServiceWithRepo(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com")
 
 	if err := svc.UpdatePassword(context.Background(), &appjwt.AuthUser{Email: "u@example.com"}, targetID, "x"); err == nil {
 		t.Fatalf("expected forbidden for non-admin")
@@ -135,7 +135,7 @@ func TestUsersServiceDeleteManaged(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewUsersServiceWithRepo(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com")
 
 	if err := svc.DeleteManaged(context.Background(), &appjwt.AuthUser{Email: "u@example.com"}, targetID); err == nil {
 		t.Fatalf("expected forbidden for non-admin")
@@ -163,7 +163,7 @@ func TestUsersServiceAdminTargetForbiddenAndRepoErrors(t *testing.T) {
 			return nil, errors.New("list fail")
 		},
 	}
-	svc := NewUsersServiceWithRepo(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com")
 
 	if _, err := svc.Register(context.Background(), "u@example.com", "x"); err == nil {
 		t.Fatalf("expected register repo error")

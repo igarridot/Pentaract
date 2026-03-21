@@ -20,7 +20,7 @@ func (m *mockAuthService) Login(ctx context.Context, email, pass string) (*servi
 }
 
 func TestAuthHandlerLogin(t *testing.T) {
-	h := NewAuthHandlerWithService(&mockAuthService{
+	h := NewAuthHandler(&mockAuthService{
 		loginFn: func(ctx context.Context, email, pass string) (*service.LoginResponse, error) {
 			return &service.LoginResponse{AccessToken: "token", TokenType: "bearer", ExpiresIn: 1}, nil
 		},
@@ -34,7 +34,7 @@ func TestAuthHandlerLogin(t *testing.T) {
 }
 
 func TestAuthHandlerLoginErrors(t *testing.T) {
-	h := NewAuthHandlerWithService(&mockAuthService{
+	h := NewAuthHandler(&mockAuthService{
 		loginFn: func(ctx context.Context, email, pass string) (*service.LoginResponse, error) {
 			return nil, domain.ErrUnauthorized("not authenticated")
 		},

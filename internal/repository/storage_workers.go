@@ -3,14 +3,13 @@ package repository
 import (
 	"context"
 	"errors"
-	"log"
+	"log/slog"
 	"sync"
 	"time"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	"github.com/jackc/pgx/v5/pgxpool"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
@@ -27,10 +26,6 @@ const (
 	storageWorkerUsageCleanupInterval = 5 * time.Minute
 )
 
-func NewStorageWorkersRepo(pool *pgxpool.Pool) *StorageWorkersRepo {
-	return NewStorageWorkersRepoWithDB(pool)
-}
-
 type storageWorkersDB interface {
 	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
 	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
@@ -38,7 +33,7 @@ type storageWorkersDB interface {
 	Begin(ctx context.Context) (pgx.Tx, error)
 }
 
-func NewStorageWorkersRepoWithDB(pool storageWorkersDB) *StorageWorkersRepo {
+func NewStorageWorkersRepo(pool storageWorkersDB) *StorageWorkersRepo {
 	return &StorageWorkersRepo{
 		pool:             pool,
 		lastUsageCleanup: time.Now(),
@@ -170,7 +165,7 @@ func (r *StorageWorkersRepo) scheduleUsageCleanup() {
 		if _, err := r.pool.Exec(ctx,
 			`DELETE FROM storage_workers_usages WHERE created_at < now() - interval '1 minute'`,
 		); err != nil {
-			log.Printf("[workers] warning: cleanup of expired worker usages failed: %v", err)
+			slog.Warn("cleanup of expired worker usages failed", "err", err)
 		}
 
 		r.usageCleanupMu.Lock()

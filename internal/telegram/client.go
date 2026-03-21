@@ -7,14 +7,16 @@ import (
 	"errors"
 	"fmt"
 	"io"
-	"log"
+	"log/slog"
 	"mime/multipart"
 	"net"
 	"net/http"
 	"net/url"
 	"strconv"
+	"strings"
 	"time"
 
+	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/google/uuid"
 )
 
@@ -136,7 +138,7 @@ func (c *Client) Upload(token string, chatID int64, data []byte, filename string
 			if attempt == maxRetries {
 				return nil, rlErr
 			}
-			log.Printf("[telegram] 429 rate limited, waiting %ds before retry (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
+			slog.Warn("telegram rate limited", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
 			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
@@ -185,7 +187,7 @@ func (c *Client) DeleteMessage(token string, chatID int64, messageID int64) erro
 			if attempt == maxRetries {
 				return rlErr
 			}
-			log.Printf("[telegram] 429 rate limited on deleteMessage, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
+			slog.Warn("telegram rate limited on deleteMessage", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
 			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
@@ -223,7 +225,7 @@ func (c *Client) ResolveFileIDByMessage(ctx context.Context, token string, chatI
 			if attempt == maxRetries {
 				return "", rlErr
 			}
-			log.Printf("[telegram] 429 rate limited on forwardMessage, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
+			slog.Warn("telegram rate limited on forwardMessage", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
 			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
@@ -240,14 +242,14 @@ func (c *Client) ResolveFileIDByMessage(ctx context.Context, token string, chatI
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return "", fmt.Errorf("telegram forwardMessage failed (status %d): %s", resp.StatusCode, string(body))
+			return "", fmt.Errorf("%w: forwardMessage failed (status %d): %s", domain.ErrTelegramResolveFailed, resp.StatusCode, string(body))
 		}
 		if !forwardResp.OK || forwardResp.Result.Document.FileID == "" {
-			return "", fmt.Errorf("telegram forwardMessage missing document file_id: %s", string(body))
+			return "", fmt.Errorf("%w: forwardMessage missing document file_id: %s", domain.ErrTelegramResolveFailed, string(body))
 		}
 
 		if err := c.DeleteMessage(token, chatID, forwardResp.Result.MessageID); err != nil {
-			log.Printf("[telegram] warning: failed to delete forwarded message %d: %v", forwardResp.Result.MessageID, err)
+			slog.Warn("failed to delete forwarded message", "message_id", forwardResp.Result.MessageID, "err", err)
 		}
 
 		return forwardResp.Result.Document.FileID, nil
@@ -296,7 +298,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 			if attempt == maxRetries {
 				return nil, rlErr
 			}
-			log.Printf("[telegram] 429 rate limited on getFile, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
+			slog.Warn("telegram rate limited on getFile", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
 			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
@@ -313,10 +315,14 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		}
 
 		if resp.StatusCode != http.StatusOK {
-			return nil, fmt.Errorf("telegram getFile failed (status %d): %s", resp.StatusCode, string(body))
+			errMsg := string(body)
+			if strings.Contains(strings.ToLower(errMsg), "file is too big") {
+				return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramFileTooBig, resp.StatusCode, errMsg)
+			}
+			return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramGetFileFailed, resp.StatusCode, errMsg)
 		}
 		if !fileResp.OK || fileResp.Result.FilePath == "" {
-			return nil, fmt.Errorf("telegram getFile failed: %s", string(body))
+			return nil, fmt.Errorf("%w: %s", domain.ErrTelegramGetFileFailed, string(body))
 		}
 		filePath = fileResp.Result.FilePath
 		break
@@ -332,10 +338,10 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		dlResp, err := c.httpClient.Do(req)
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
-				log.Printf("[telegram] transient file download error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				slog.Warn("transient file download error, retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
 				continue
 			}
-			return nil, fmt.Errorf("downloading file: %w", err)
+			return nil, fmt.Errorf("%w: %v", domain.ErrDownloadInterrupted, err)
 		}
 
 		if rlErr := parseRateLimitError(dlResp); rlErr != nil {
@@ -343,7 +349,7 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 			if attempt == maxRetries {
 				return nil, rlErr
 			}
-			log.Printf("[telegram] 429 rate limited on file download, waiting %ds (attempt %d/%d)", rlErr.RetryAfter, attempt+1, maxRetries)
+			slog.Warn("telegram rate limited on file download", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
 			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
 			continue
 		}
@@ -358,10 +364,10 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		dlResp.Body.Close()
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
-				log.Printf("[telegram] transient file read error, retrying (attempt %d/%d): %v", attempt+1, maxRetries, err)
+				slog.Warn("transient file read error, retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
 				continue
 			}
-			return nil, fmt.Errorf("reading file data: %w", err)
+			return nil, fmt.Errorf("%w: %v", domain.ErrDownloadInterrupted, err)
 		}
 
 		return data, nil

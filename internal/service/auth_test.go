@@ -29,7 +29,7 @@ func TestAuthServiceLogin(t *testing.T) {
 			return &domain.User{ID: userID, Email: "u@example.com", PasswordHash: hash}, nil
 		},
 	}
-	svc := NewAuthServiceWithRepo(repo, "secret-key", 3600)
+	svc := NewAuthService(repo, "secret-key", 3600)
 
 	if _, err := svc.Login(context.Background(), "missing@example.com", "secret"); err == nil {
 		t.Fatalf("expected unauthorized when user is missing")
