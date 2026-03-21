@@ -5,6 +5,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"os"
 	"strconv"
 	"strings"
 	"sync"
@@ -44,13 +45,23 @@ type filesService interface {
 	Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
 }
 
-func NewFilesHandler(svc filesService, localBasePath string) *FilesHandler {
+// LocalUploadMountPath is the fixed mount point inside the container where
+// the host directory specified by LOCAL_UPLOAD_BASE_PATH is mounted.
+const LocalUploadMountPath = "/mnt/data"
+
+func NewFilesHandler(svc filesService) *FilesHandler {
+	// Auto-detect local upload support: enabled when the mount point exists.
+	basePath := ""
+	if info, err := os.Stat(LocalUploadMountPath); err == nil && info.IsDir() {
+		basePath = LocalUploadMountPath
+	}
+
 	return &FilesHandler{
 		svc:           svc,
 		uploads:       make(map[string]*uploadTracker),
 		downloads:     make(map[string]*downloadTracker),
 		fileSizes:     newFileSizeCache(),
-		localBasePath: localBasePath,
+		localBasePath: basePath,
 	}
 }
 

@@ -49,7 +49,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	storagesH := handler.NewStoragesHandler(storagesSvc)
 	accessH := handler.NewAccessHandler(accessSvc)
 	workersH := handler.NewStorageWorkersHandler(workersSvc)
-	filesH := handler.NewFilesHandler(filesSvc, cfg.LocalUploadBasePath)
+	filesH := handler.NewFilesHandler(filesSvc)
 
 	// Router
 	r := chi.NewRouter()
