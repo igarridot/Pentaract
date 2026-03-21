@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"strconv"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -38,7 +39,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var path, filename, uploadID, onConflict string
+	var path, filename, uploadID, onConflict, fileSizeStr string
 	var fileSize int64
 	var filePart io.ReadCloser
 
@@ -57,16 +58,27 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		case "on_conflict":
 			b, _ := io.ReadAll(part)
 			onConflict = string(b)
+		case "file_size":
+			b, _ := io.ReadAll(part)
+			fileSizeStr = string(b)
 		case "file":
 			filename = part.FileName()
 			filePart = part
-			fileSize = r.ContentLength
-			if fileSize < 0 {
-				fileSize = 0
-			}
 		}
 		if filePart != nil {
 			break
+		}
+	}
+
+	if fileSizeStr != "" {
+		if parsed, err := strconv.ParseInt(fileSizeStr, 10, 64); err == nil && parsed > 0 {
+			fileSize = parsed
+		}
+	}
+	if fileSize <= 0 {
+		fileSize = r.ContentLength
+		if fileSize < 0 {
+			fileSize = 0
 		}
 	}
 

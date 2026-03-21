@@ -23,7 +23,8 @@
       "Bash(npx pnpm:*)",
       "Bash(gh pr:*)",
       "Bash(git fetch:*)",
-      "Bash(git checkout:*)"
+      "Bash(git checkout:*)",
+      "Bash(npx --yes vite build)"
     ]
   }
 }

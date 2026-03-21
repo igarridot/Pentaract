@@ -41,6 +41,7 @@ export default function LocalUpload() {
   // Uploads
   const { uploadStates, isUploading, launchLocalBatch, cancelUpload } = useLocalUploads(addAlert)
   const [batchUploading, setBatchUploading] = useState(false)
+  const [onConflict, setOnConflict] = useState('keep_both')
 
   // Destination folder picker
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
@@ -216,7 +217,7 @@ export default function LocalUpload() {
         setBulkProgress({ operation: 'upload', status: 'running', total: allFiles.length, completed: 0 })
       }
 
-      await launchLocalBatch(storageId, allFiles, 'keep_both')
+      await launchLocalBatch(storageId, allFiles, onConflict)
 
       if (allFiles.length > 1) {
         setBulkProgress((prev) => prev ? { ...prev, status: 'done', completed: allFiles.length } : prev)
@@ -361,6 +362,17 @@ export default function LocalUpload() {
             </Typography>
           )}
           <Box sx={{ flexGrow: 1 }} />
+          <FormControl size="small" sx={{ minWidth: 140 }}>
+            <InputLabel>If exists</InputLabel>
+            <Select
+              value={onConflict}
+              label="If exists"
+              onChange={(e) => setOnConflict(e.target.value)}
+            >
+              <MenuItem value="keep_both">Keep both</MenuItem>
+              <MenuItem value="skip">Skip</MenuItem>
+            </Select>
+          </FormControl>
           <Button
             variant="contained"
             startIcon={<CloudUploadIcon />}
