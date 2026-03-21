@@ -14,22 +14,10 @@ import (
 )
 
 func (m *StorageManager) downloadParallelism(ctx context.Context, storageID uuid.UUID, chunksCount int) int {
-	if chunksCount <= 1 || m.workersRepo == nil {
-		return 1
+	if workers := m.preferredDownloadWorkers(ctx, storageID, chunksCount); len(workers) > 0 {
+		return len(workers)
 	}
-
-	workers, err := m.workersRepo.ListTokensByStorage(ctx, storageID)
-	if err != nil {
-		slog.Warn("failed listing workers for download, falling back to sequential", "storage_id", storageID, "err", err)
-		return 1
-	}
-	if len(workers) <= 1 {
-		return 1
-	}
-	if len(workers) > chunksCount {
-		return chunksCount
-	}
-	return len(workers)
+	return 1
 }
 
 func (m *StorageManager) downloadChunkWithWorker(ctx context.Context, storage domain.Storage, chunk domain.FileChunk, wt repository.WorkerToken) ([]byte, error) {
@@ -103,10 +91,6 @@ func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Stora
 	}
 	if !isGetFileFailure(err) {
 		return nil, err
-	}
-
-	if contextAborted(ctx, err) {
-		return nil, contextAbortError(ctx, err)
 	}
 
 	workers, listErr := m.workersRepo.ListTokensByStorage(ctx, storage.ID)

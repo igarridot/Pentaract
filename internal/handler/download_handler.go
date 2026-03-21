@@ -318,139 +318,88 @@ func (h *FilesHandler) CancelDownload(w http.ResponseWriter, r *http.Request) {
 // DownloadProgress returns an SSE stream with directory download progress updates.
 func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) {
 	downloadID := r.URL.Query().Get("download_id")
-	if downloadID == "" {
-		writeError(w, domain.ErrBadRequest("download_id is required"))
-		return
-	}
 
-	flusher, ok := setupSSE(w)
-	if !ok {
-		writeError(w, domain.ErrInternal("streaming not supported"))
-		return
-	}
-
-	ticker := time.NewTicker(service.SSEPollingInterval)
-	defer ticker.Stop()
-	waitStart := time.Now()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-		}
-
-		h.mu.RLock()
-		tracker, exists := h.downloads[downloadID]
-		h.mu.RUnlock()
-
-		if !exists {
-			if time.Since(waitStart) < service.DownloadProgressWaitTime {
-				writeSSE(w, flusher, map[string]any{
-					"total": 0, "downloaded": 0, "total_bytes": 0, "downloaded_bytes": 0, "status": "downloading",
-				})
-				continue
+	pollSSE(w, r, "download_id",
+		map[string]any{
+			"total": 0, "downloaded": 0, "total_bytes": 0, "downloaded_bytes": 0, "status": "downloading",
+		},
+		map[string]any{
+			"status":        "error",
+			"error_message": "Download did not start on the server. Please try again.",
+		},
+		func() (map[string]any, bool, bool) {
+			h.mu.RLock()
+			tracker, exists := h.downloads[downloadID]
+			h.mu.RUnlock()
+			if !exists {
+				return nil, false, false
 			}
-			writeSSE(w, flusher, map[string]any{
-				"status":        "error",
-				"error_message": "Download did not start on the server. Please try again.",
-			})
-			return
-		}
 
-		p := tracker.progress
-		status := "downloading"
+			p := tracker.progress
+			status := "downloading"
 
-		h.mu.RLock()
-		isDone := tracker.done
-		downloadErr := tracker.err
-		isCanceled := tracker.canceled
-		h.mu.RUnlock()
+			h.mu.RLock()
+			isDone := tracker.done
+			downloadErr := tracker.err
+			isCanceled := tracker.canceled
+			h.mu.RUnlock()
 
-		if isDone && isCanceled {
-			status = "cancelled"
-		} else if isDone && downloadErr != nil {
-			status = "error"
-		} else if isDone {
-			status = "done"
-		}
+			if isDone && isCanceled {
+				status = "cancelled"
+			} else if isDone && downloadErr != nil {
+				status = "error"
+			} else if isDone {
+				status = "done"
+			}
 
-		writeSSE(w, flusher, map[string]any{
-			"total":            p.TotalChunks,
-			"downloaded":       p.DownloadedChunks.Load(),
-			"total_bytes":      p.TotalBytes,
-			"downloaded_bytes": p.DownloadedBytes.Load(),
-			"status":           status,
-			"workers_status":   h.svc.WorkersStatus(tracker.storageID),
-			"error_message":    downloadErrorMessage(downloadErr),
-		})
-
-		if isDone {
-			return
-		}
-	}
+			return map[string]any{
+				"total":            p.TotalChunks,
+				"downloaded":       p.DownloadedChunks.Load(),
+				"total_bytes":      p.TotalBytes,
+				"downloaded_bytes": p.DownloadedBytes.Load(),
+				"status":           status,
+				"workers_status":   h.svc.WorkersStatus(tracker.storageID),
+				"error_message":    downloadErrorMessage(downloadErr),
+			}, isDone, true
+		},
+	)
 }
 
 // DeleteProgress returns an SSE stream with delete progress updates.
 func (h *FilesHandler) DeleteProgress(w http.ResponseWriter, r *http.Request) {
 	deleteID := r.URL.Query().Get("delete_id")
-	if deleteID == "" {
-		writeError(w, domain.ErrBadRequest("delete_id is required"))
-		return
-	}
 
-	flusher, ok := setupSSE(w)
-	if !ok {
-		writeError(w, domain.ErrInternal("streaming not supported"))
-		return
-	}
-
-	ticker := time.NewTicker(service.SSEPollingInterval)
-	defer ticker.Stop()
-	waitStart := time.Now()
-
-	for {
-		select {
-		case <-r.Context().Done():
-			return
-		case <-ticker.C:
-		}
-
-		tracker, exists := getDeleteTracker(deleteID)
-		if !exists {
-			if time.Since(waitStart) < service.DownloadProgressWaitTime {
-				writeSSE(w, flusher, map[string]any{
-					"total": 0, "deleted": 0, "pending": 0, "status": "deleting",
-				})
-				continue
+	pollSSE(w, r, "delete_id",
+		map[string]any{
+			"total": 0, "deleted": 0, "pending": 0, "status": "deleting",
+		},
+		map[string]any{"status": "error"},
+		func() (map[string]any, bool, bool) {
+			tracker, exists := getDeleteTracker(deleteID)
+			if !exists {
+				return nil, false, false
 			}
-			writeSSE(w, flusher, map[string]any{"status": "error"})
-			return
-		}
 
-		done, trackerErr, total, deleted := getDeleteTrackerStatus(tracker)
-		status := "deleting"
-		if done && trackerErr != nil {
-			status = "error"
-		} else if done {
-			status = "done"
-		}
+			done, trackerErr, total, deleted := getDeleteTrackerStatus(tracker)
+			status := "deleting"
+			if done && trackerErr != nil {
+				status = "error"
+			} else if done {
+				status = "done"
+			}
 
-		pending := total - deleted
-		if pending < 0 {
-			pending = 0
-		}
+			pending := total - deleted
+			if pending < 0 {
+				pending = 0
+			}
 
-		writeSSE(w, flusher, map[string]any{
-			"total":          total,
-			"deleted":        deleted,
-			"pending":        pending,
-			"status":         status,
-			"workers_status": h.svc.WorkersStatus(tracker.storageID),
-		})
-
-		if done {
-			return
-		}
-	}
+			return map[string]any{
+				"total":          total,
+				"deleted":        deleted,
+				"pending":        pending,
+				"status":         status,
+				"workers_status": h.svc.WorkersStatus(tracker.storageID),
+			}, done, true
+		},
+	)
 }

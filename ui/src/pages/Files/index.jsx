@@ -23,7 +23,6 @@ import DownloadProgress from '../../components/DownloadProgress'
 import DeleteProgress from '../../components/DeleteProgress'
 import BulkOperationProgress from '../../components/BulkOperationProgress'
 import MoveDialog from '../../components/MoveDialog'
-import BulkMoveDialog from '../../components/BulkMoveDialog'
 import MediaPreviewDialog from '../../components/MediaPreviewDialog'
 import RenameFolderDialog from '../../components/RenameFolderDialog'
 import UploadConflictDialog from '../../components/UploadConflictDialog'
@@ -496,7 +495,7 @@ export default function Files() {
         onClose={() => setMoveTarget(null)}
       />
 
-      <BulkMoveDialog
+      <MoveDialog
         open={bulkMoveOpen}
         count={selectedFiles.length}
         storageId={storageId}

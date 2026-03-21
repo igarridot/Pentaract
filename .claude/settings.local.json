@@ -16,7 +16,9 @@
       "Bash(md5)",
       "Bash(md5 /Volumes/SUNEAST/workspace/pentaract/internal/telegram/client.go)",
       "Bash(ls:*)",
-      "Bash(gh run:*)"
+      "Bash(gh run:*)",
+      "Bash(find /Volumes/SUNEAST/workspace/pentaract -type f \\\\\\( -name \"*.go\" -o -name \"*.jsx\" -o -name \"*.js\" -o -name \"*.ts\" -o -name \"*.tsx\" \\\\\\) -exec wc -l {} +)",
+      "Bash(find /Volumes/SUNEAST/workspace/pentaract -type f \\\\\\( -name \"*.go\" -o -name \"*.jsx\" -o -name \"*.js\" -o -name \"*.ts\" -o -name \"*.tsx\" \\\\\\) ! -path \"*/node_modules/*\" ! -path \"*/vendor/*\" ! -path \"*/dist/*\" ! -path \"*/persistent_data/*\" ! -path \"*/.vite/*\" -exec wc -l {} +)"
     ]
   }
 }

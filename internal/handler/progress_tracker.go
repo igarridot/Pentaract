@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"sync"
+	"time"
 
 	"github.com/google/uuid"
 
@@ -144,6 +145,56 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, data any) {
 	}
 	fmt.Fprintf(w, "data: %s\n\n", b)
 	flusher.Flush()
+}
+
+// pollSSE is a generic SSE polling loop for progress tracking endpoints.
+// It reads the ID from the query parameter idParam, sets up SSE headers, and
+// enters a ticker loop. Each tick it calls poll() which returns:
+//   - data: the map to marshal as SSE JSON
+//   - done: whether to stop after sending this event
+//   - exists: whether the tracker was found
+//
+// While the tracker has not appeared and the wait time has not elapsed,
+// placeholder is sent instead. After the wait time, an error event is sent.
+func pollSSE(w http.ResponseWriter, r *http.Request, idParam string, placeholder map[string]any, errorData map[string]any, poll func() (data map[string]any, done bool, exists bool)) {
+	id := r.URL.Query().Get(idParam)
+	if id == "" {
+		writeError(w, domain.ErrBadRequest(idParam+" is required"))
+		return
+	}
+
+	flusher, ok := setupSSE(w)
+	if !ok {
+		writeError(w, domain.ErrInternal("streaming not supported"))
+		return
+	}
+
+	ticker := time.NewTicker(service.SSEPollingInterval)
+	defer ticker.Stop()
+	waitStart := time.Now()
+
+	for {
+		select {
+		case <-r.Context().Done():
+			return
+		case <-ticker.C:
+		}
+
+		data, done, exists := poll()
+		if !exists {
+			if time.Since(waitStart) < service.DownloadProgressWaitTime {
+				writeSSE(w, flusher, placeholder)
+				continue
+			}
+			writeSSE(w, flusher, errorData)
+			return
+		}
+
+		writeSSE(w, flusher, data)
+		if done {
+			return
+		}
+	}
 }
 
 // sanitizeFilename returns a safe Content-Disposition filename value.

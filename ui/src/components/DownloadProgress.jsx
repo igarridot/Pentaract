@@ -1,7 +1,8 @@
-import { Box, LinearProgress, Typography, Button } from '@mui/material'
+import { Box, Typography } from '@mui/material'
 import { convertSize } from '../common/size_converter'
 import { calculatePercent } from '../common/progress'
 import { useTransferSpeed } from '../common/use_transfer_speed'
+import ProgressCard from './ProgressCard'
 
 export default function DownloadProgress({ filename, totalBytes, downloadedBytes, totalChunks, downloadedChunks, status, workersStatus, errorMessage, onCancel }) {
   const percent = calculatePercent(downloadedBytes, totalBytes)
@@ -20,40 +21,28 @@ export default function DownloadProgress({ filename, totalBytes, downloadedBytes
     ? `${convertSize(downloadedBytes)} / ${convertSize(totalBytes)}`
     : convertSize(downloadedBytes)
 
+  const title = isError ? 'Download failed' : isCancelled ? 'Download cancelled' : isActive ? 'Downloading' : 'Download complete'
+
   return (
-    <Box
-      sx={{
-        width: '100%',
-        maxWidth: '100%',
-        boxSizing: 'border-box',
-        mb: 2,
-        p: 2,
-        bgcolor: isError ? 'rgba(255,59,48,0.06)' : isCancelled ? 'rgba(255,152,0,0.08)' : 'background.paper',
-        borderRadius: 3,
-        border: '1px solid',
-        borderColor: isError ? 'rgba(255,59,48,0.15)' : isCancelled ? 'rgba(255,152,0,0.2)' : 'divider',
-        overflow: 'hidden',
-      }}
+    <ProgressCard
+      title={title}
+      subtitle={filename}
+      percent={percent}
+      variant={totalBytes > 0 ? 'determinate' : 'indeterminate'}
+      progressColor={isError ? 'error' : isCancelled ? 'warning' : isActive ? 'primary' : 'success'}
+      isError={isError}
+      isWarning={isCancelled}
+      showCancel={isActive}
+      onCancel={onCancel}
+      cancelLabel="Cancel download"
+      afterBar={
+        isError && errorMessage ? (
+          <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 1 }}>
+            {errorMessage}
+          </Typography>
+        ) : null
+      }
     >
-      <Typography variant="body2" noWrap sx={{ fontWeight: 500, minWidth: 0, mb: 1 }}>
-        {isError ? 'Download failed' : isCancelled ? 'Download cancelled' : isActive ? 'Downloading' : 'Download complete'}
-        <Typography
-          component="span"
-          variant="body2"
-          color="text.secondary"
-          sx={{ ml: 0.5, maxWidth: '100%', overflow: 'hidden', textOverflow: 'ellipsis' }}
-        >
-          {filename}
-        </Typography>
-      </Typography>
-
-      <LinearProgress
-        variant={totalBytes > 0 ? 'determinate' : 'indeterminate'}
-        value={percent}
-        color={isError ? 'error' : isCancelled ? 'warning' : isActive ? 'primary' : 'success'}
-        sx={{ mb: 0.75, width: '100%' }}
-      />
-
       <Box sx={{ display: 'flex', justifyContent: 'space-between', gap: 0.75, flexDirection: { xs: 'column', sm: 'row' }, alignItems: { xs: 'flex-start', sm: 'center' } }}>
         <Typography variant="caption" color="text.secondary">
           {progressText}
@@ -62,16 +51,6 @@ export default function DownloadProgress({ filename, totalBytes, downloadedBytes
           {[workersText, chunkText, speedText].filter(Boolean).join(' \u00b7 ')}
         </Typography>
       </Box>
-      {isError && errorMessage && (
-        <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 1 }}>
-          {errorMessage}
-        </Typography>
-      )}
-      {isActive && onCancel && (
-        <Button size="small" color="warning" onClick={onCancel} sx={{ mt: 1 }}>
-          Cancel download
-        </Button>
-      )}
-    </Box>
+    </ProgressCard>
   )
 }
