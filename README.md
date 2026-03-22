@@ -13,6 +13,11 @@ The API and UI provide file management, access control, progress tracking, and w
 - Frontend: React 19 + Vite + MUI 7
 - Database: PostgreSQL
 
+## Related projects
+
+- [CLI](https://github.com/igarridot/pentaract-cli)
+- [Kodi streaming addon](https://github.com/igarridot/Pentaract-kodi)
+
 ## What You Get
 
 - Chunked upload/download to Telegram (20 MB-safe encrypted chunks)
