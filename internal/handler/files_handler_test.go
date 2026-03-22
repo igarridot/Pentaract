@@ -34,7 +34,8 @@ type mockFilesService struct {
 	streamFileToWriterFn      func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
 	downloadDirFn             func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error)
 	listDirFn                 func(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error)
-	searchFn                  func(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
+	searchFn                      func(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
+	cleanupCancelledUploadFn      func(ctx context.Context, userID, storageID uuid.UUID, path string) error
 }
 
 func (m *mockFilesService) Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error {
@@ -60,6 +61,12 @@ func (m *mockFilesService) Delete(ctx context.Context, userID, storageID uuid.UU
 		return nil
 	}
 	return m.deleteFn(ctx, userID, storageID, path, progress, forceDelete)
+}
+func (m *mockFilesService) CleanupCancelledUpload(ctx context.Context, userID, storageID uuid.UUID, path string) error {
+	if m.cleanupCancelledUploadFn == nil {
+		return nil
+	}
+	return m.cleanupCancelledUploadFn(ctx, userID, storageID, path)
 }
 func (m *mockFilesService) WorkersStatus(storageID uuid.UUID) string {
 	if m.workersStatusFn == nil {
@@ -711,13 +718,13 @@ func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
 
 func TestFilesHandlerCancelUpload(t *testing.T) {
 	cancelled := false
-	deleted := false
-	h := NewFilesHandler(&mockFilesService{
-		deleteFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error {
-			deleted = true
-			return nil
-		},
-	})
+	cleaned := false
+	mock := &mockFilesService{}
+	mock.cleanupCancelledUploadFn = func(ctx context.Context, userID, storageID uuid.UUID, path string) error {
+		cleaned = true
+		return nil
+	}
+	h := NewFilesHandler(mock)
 
 	uploadID := "up-1"
 	storageID := uuid.New()
@@ -737,10 +744,10 @@ func TestFilesHandlerCancelUpload(t *testing.T) {
 		t.Fatalf("cancel upload expected 204 and cancel callback, got %d cancelled=%v", w.Code, cancelled)
 	}
 
-	// Background cleanup sleeps for 1 second before deleting.
+	// Background cleanup sleeps for 1 second before cleaning up.
 	time.Sleep(1100 * time.Millisecond)
-	if !deleted {
-		t.Fatalf("expected cleanup delete call after cancellation")
+	if !cleaned {
+		t.Fatalf("expected cleanup call after cancellation")
 	}
 }
 

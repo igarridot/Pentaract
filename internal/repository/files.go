@@ -71,10 +71,14 @@ func (r *FilesRepo) CreateFileAnyway(ctx context.Context, path string, size int6
 func (r *FilesRepo) CreateFileIfNotExists(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error) {
 	f := &domain.File{}
 	err := r.pool.QueryRow(ctx,
-		`INSERT INTO files (path, size, storage_id, is_uploaded)
+		`WITH stale AS (
+			DELETE FROM files
+			WHERE storage_id = $3 AND path = $1 AND is_uploaded = false
+		)
+		INSERT INTO files (path, size, storage_id, is_uploaded)
 		SELECT $1, $2, $3, false
 		WHERE NOT EXISTS (
-			SELECT 1 FROM files WHERE storage_id = $3 AND path = $1
+			SELECT 1 FROM files WHERE storage_id = $3 AND path = $1 AND is_uploaded = true
 		)
 		RETURNING id, path, size, storage_id, is_uploaded`,
 		path, size, storageID,

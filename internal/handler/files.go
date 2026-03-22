@@ -34,6 +34,7 @@ type filesService interface {
 	CreateFolder(ctx context.Context, userID, storageID uuid.UUID, path, folderName string) error
 	Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error)
 	Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error
+	CleanupCancelledUpload(ctx context.Context, userID, storageID uuid.UUID, path string) error
 	WorkersStatus(storageID uuid.UUID) string
 	GetFileForDownload(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error)
 	ExactFileSize(ctx context.Context, file *domain.File) (int64, error)

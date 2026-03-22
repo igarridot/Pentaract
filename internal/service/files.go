@@ -159,6 +159,19 @@ func (s *FilesService) Search(ctx context.Context, userID, storageID uuid.UUID, 
 	return s.filesRepo.Search(ctx, storageID, basePath, searchPath)
 }
 
+// CleanupCancelledUpload removes a partially uploaded file record.
+// It requires only write access because the caller already proved write
+// permission by initiating the upload. Chunks uploaded to Telegram during
+// the cancelled upload have no DB records (they are created atomically on
+// completion), so only the file row needs to be removed.
+func (s *FilesService) CleanupCancelledUpload(ctx context.Context, userID, storageID uuid.UUID, path string) error {
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessWrite); err != nil {
+		return err
+	}
+
+	return s.filesRepo.Delete(ctx, storageID, path)
+}
+
 func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *DeleteProgress, forceDelete bool) error {
 	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessAdmin); err != nil {
 		return err
