@@ -52,7 +52,7 @@ func NewStorageManager(
 }
 
 func isGetFileFailure(err error) bool {
-	return errors.Is(err, domain.ErrTelegramGetFileFailed)
+	return errors.Is(err, domain.ErrTelegramGetFileFailed) || errors.Is(err, domain.ErrTelegramResolveFailed)
 }
 
 func appendUniqueWorker(workers []repository.WorkerToken, worker repository.WorkerToken) []repository.WorkerToken {
