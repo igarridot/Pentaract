@@ -34,8 +34,6 @@ services:
   db-backup:
     image: public.ecr.aws/docker/library/postgres:latest
     entrypoint: ["/usr/local/bin/db-backup-cron.sh"]
-    mem_limit: 256m
-    memswap_limit: 256m
     environment:
       DATABASE_HOST: db
       DATABASE_PORT: ${DATABASE_PORT:-5432}
