@@ -28,6 +28,11 @@ go test -run TestName ./internal/service/
 make build               # Go binary in container
 cd ui && pnpm run build  # Frontend build
 
+# Backup
+make backup-now          # Run a one-off DB backup immediately
+make backup-list         # List available backups
+make backup-restore BACKUP=<file>  # Restore from a backup
+
 # Other
 make check               # go vet
 make dev-shell           # Shell in dev container
