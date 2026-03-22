@@ -126,6 +126,11 @@ func (c *Client) doWithRateLimitRetry(ctx context.Context, name string, do func(
 
 		resp, err := do()
 		if err != nil {
+			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
+				slog.Warn("telegram transient error on "+name+", retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
+				retryBackoff(ctx, attempt)
+				continue
+			}
 			return nil, err
 		}
 

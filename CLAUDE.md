@@ -93,7 +93,11 @@ All via environment variables (see `.env.example`). Key ones:
 | `UploadChunkParallelism` | 10 | Concurrent chunk uploads per file |
 | `UploadChunkMaxAttempts` | 5 | Retries per chunk upload |
 | `DownloadChunkMaxAttempts` | 3 | Retries per chunk download |
-| `VerifyChunkParallelism` | 10 | Max parallel verification downloads |
+| `VerifyChunkParallelism` | 10 | Max parallel verification downloads (standalone) |
+| `PipelineVerifyParallelism` | 5 | Concurrent verifications during upload pipeline |
+| `VerifyCBFailureThreshold` | 3 | Consecutive transient failures to trip circuit breaker |
+| `VerifyCBCooldownDuration` | 30s | Pause before retrying after circuit breaker trips |
+| `VerifyCBMaxRetryRounds` | 3 | Max cooldown+retry rounds for failed verifications |
 | `DeleteParallelism` | 5 | Concurrent Telegram message deletions |
 | `SSEPollingInterval` | 500ms | Progress event frequency |
 

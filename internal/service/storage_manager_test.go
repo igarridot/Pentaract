@@ -1205,7 +1205,7 @@ func TestStorageManagerUploadVerifiesRoundTripAndCleansUpOnMismatch(t *testing.T
 	}
 
 	err = m.Upload(context.Background(), &domain.File{ID: fileID, Path: "broken.txt", Size: 3, StorageID: storageID}, strings.NewReader("abc"), &UploadProgress{TotalBytes: 3})
-	if err == nil || !strings.Contains(err.Error(), "verification failed") {
+	if err == nil || !strings.Contains(err.Error(), "verification") {
 		t.Fatalf("expected verification failure error, got: %v", err)
 	}
 
