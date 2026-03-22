@@ -52,6 +52,10 @@ services:
         target: /usr/local/bin/db-backup-cron.sh
         read_only: true
       - type: bind
+        source: ./scripts/db-restore.sh
+        target: /usr/local/bin/db-restore.sh
+        read_only: true
+      - type: bind
         source: ./persistent_data/backups
         target: /backups
     restart: unless-stopped

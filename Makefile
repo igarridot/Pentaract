@@ -1,4 +1,4 @@
-.PHONY: up down build check test ui-install ui-build dev-shell dev-up backup-now
+.PHONY: up down build check test ui-install ui-build dev-shell dev-up backup-now backup-restore backup-list
 
 COMPOSE := docker compose --project-name pentaract
 
@@ -42,3 +42,17 @@ mod-tidy:
 # Backup: run a one-off database backup immediately
 backup-now:
 	$(COMPOSE) run --rm db-backup /usr/local/bin/db-backup.sh
+
+# Backup: list available backups
+backup-list:
+	$(COMPOSE) run --rm db-backup /usr/local/bin/db-restore.sh
+
+# Backup: restore from a backup file (usage: make backup-restore BACKUP=pentaract_YYYYMMDD_HHMMSS.sql.gz)
+backup-restore:
+	@if [ -z "$(BACKUP)" ]; then echo "Usage: make backup-restore BACKUP=<filename>"; echo "Run 'make backup-list' to see available backups."; exit 1; fi
+	@echo "WARNING: This will stop pentaract and replace the current database with $(BACKUP)."
+	@echo "Press Ctrl+C to cancel, or Enter to continue..." && read _
+	$(COMPOSE) stop pentaract
+	$(COMPOSE) run --rm db-backup /usr/local/bin/db-restore.sh $(BACKUP)
+	$(COMPOSE) start pentaract
+	@echo "Restore complete. Pentaract restarted."

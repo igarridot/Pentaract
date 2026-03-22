@@ -116,6 +116,8 @@ Useful targets:
 - `make ui-build`
 - `make mod-tidy`
 - `make backup-now`
+- `make backup-list`
+- `make backup-restore BACKUP=<file>`
 
 ## Testing and CI
 
@@ -203,11 +205,24 @@ make backup-now
 
 ### Restore
 
+List available backups:
+
 ```bash
-gunzip -c persistent_data/backups/pentaract_YYYYMMDD_HHMMSS.sql.gz \
-  | docker exec -i $(docker ps -qf name=pentaract-db) \
-    psql -U pentaract -d pentaract
+make backup-list
 ```
+
+Restore a specific backup (stops the application, replaces the database, and restarts):
+
+```bash
+make backup-restore BACKUP=pentaract_20260322_030000.sql.gz
+```
+
+The restore procedure:
+1. Stops the `pentaract` service to prevent writes during restore.
+2. Terminates active database connections.
+3. Drops and recreates the database for a clean state.
+4. Loads the backup inside a single transaction — if any error occurs the restore is rolled back and the database is left empty rather than partially restored.
+5. Restarts the `pentaract` service.
 
 ## Persistence and Data
 
