@@ -128,6 +128,10 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		defer func() {
+			// Always close the pipe reader so the body-copy goroutine
+			// unblocks and copyDone fires, even when the upload was
+			// skipped or succeeded without consuming the full stream.
+			pr.Close()
 			h.scheduleUploadTrackerCleanup(uploadID)
 		}()
 
@@ -141,7 +145,6 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 
 		if uploadErr != nil {
 			slog.Error("upload failed", "file", fullPath, "err", uploadErr)
-			pr.Close()
 		}
 	}()
 
@@ -174,7 +177,7 @@ func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		time.Sleep(1 * time.Second)
-		if err := h.svc.Delete(context.Background(), user.ID, tracker.storageID, tracker.filePath, nil, false); err != nil {
+		if err := h.svc.CleanupCancelledUpload(context.Background(), user.ID, tracker.storageID, tracker.filePath); err != nil {
 			slog.Warn("upload cancel cleanup failed", "file", tracker.filePath, "err", err)
 		} else {
 			slog.Info("upload cancel cleanup done", "file", tracker.filePath)
