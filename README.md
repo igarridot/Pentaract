@@ -115,6 +115,7 @@ Useful targets:
 - `make ui-install`
 - `make ui-build`
 - `make mod-tidy`
+- `make backup-now`
 
 ## Testing and CI
 
@@ -158,6 +159,8 @@ From `.env`:
 | `DATABASE_HOST` | `db` | db host in compose |
 | `DATABASE_PORT` | `5432` | db port |
 | `LOCAL_UPLOAD_BASE_PATH` | _(empty)_ | Host directory to expose for local filesystem uploads. Mounted read-only at `/mnt/data` inside the container. |
+| `BACKUP_RETENTION_DAYS` | `7` | Days to keep old database backups |
+| `BACKUP_INTERVAL_SECONDS` | `86400` | Seconds between automatic backups |
 
 ## Local Filesystem Upload
 
@@ -171,11 +174,47 @@ Pentaract can upload files directly from the container's filesystem to Telegram 
 
 The feature is auto-detected: if `/mnt/data` exists inside the container, local uploads are enabled. Batch uploads (up to 100 items) are supported. Each upload gets its own SSE progress stream and can be cancelled individually. Path traversal outside `/mnt/data` is blocked server-side.
 
+## Database Backup
+
+An automated daily backup of the PostgreSQL database is included. Backups run inside a dedicated container, are compressed with gzip, and saved to a bind volume on the host.
+
+### How it works
+
+- The `db-backup` service starts with `make up` alongside the rest of the stack.
+- It runs a backup immediately on startup and then every 24 hours.
+- Each backup is saved as `pentaract_YYYYMMDD_HHMMSS.sql.gz` in `persistent_data/backups/`.
+- Backups older than the retention period (default 7 days) are automatically deleted.
+- The container is memory-limited (256 MB) to prevent OOM issues on the host.
+
+### Configuration
+
+| Variable | Default | Notes |
+|---|---|---|
+| `BACKUP_RETENTION_DAYS` | `7` | Number of days to keep old backups |
+| `BACKUP_INTERVAL_SECONDS` | `86400` | Interval between backups (24h) |
+
+### Manual backup
+
+Run a one-off backup at any time:
+
+```bash
+make backup-now
+```
+
+### Restore
+
+```bash
+gunzip -c persistent_data/backups/pentaract_YYYYMMDD_HHMMSS.sql.gz \
+  | docker exec -i $(docker ps -qf name=pentaract-db) \
+    psql -U pentaract -d pentaract
+```
+
 ## Persistence and Data
 
 Persistent data lives in `persistent_data/`:
 
 - `persistent_data/db` - PostgreSQL data
+- `persistent_data/backups` - Database backups (`.sql.gz`)
 - `persistent_data/go-mod-cache` - Go module cache (dev)
 - `persistent_data/go-build-cache` - Go build cache (dev)
 

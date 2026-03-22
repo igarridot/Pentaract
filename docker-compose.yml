@@ -31,6 +31,36 @@ services:
         source: ./persistent_data/db
         target: /var/lib/postgresql/data
 
+  db-backup:
+    image: public.ecr.aws/docker/library/postgres:latest
+    entrypoint: ["/usr/local/bin/db-backup-cron.sh"]
+    mem_limit: 256m
+    memswap_limit: 256m
+    environment:
+      DATABASE_HOST: db
+      DATABASE_PORT: ${DATABASE_PORT:-5432}
+      DATABASE_USER: ${DATABASE_USER:-pentaract}
+      DATABASE_NAME: ${DATABASE_NAME:-pentaract}
+      PGPASSWORD: ${DATABASE_PASSWORD:-pentaract}
+      BACKUP_RETENTION_DAYS: ${BACKUP_RETENTION_DAYS:-7}
+      BACKUP_INTERVAL_SECONDS: ${BACKUP_INTERVAL_SECONDS:-86400}
+    volumes:
+      - type: bind
+        source: ./scripts/db-backup.sh
+        target: /usr/local/bin/db-backup.sh
+        read_only: true
+      - type: bind
+        source: ./scripts/db-backup-cron.sh
+        target: /usr/local/bin/db-backup-cron.sh
+        read_only: true
+      - type: bind
+        source: ./persistent_data/backups
+        target: /backups
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+
   # Development service: compile and test inside containers
   dev:
     build:

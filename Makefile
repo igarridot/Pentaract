@@ -1,4 +1,4 @@
-.PHONY: up down build check test ui-install ui-build dev-shell dev-up
+.PHONY: up down build check test ui-install ui-build dev-shell dev-up backup-now
 
 COMPOSE := docker compose --project-name pentaract
 
@@ -38,3 +38,7 @@ dev-up:
 # Dev: download Go modules inside container
 mod-tidy:
 	$(COMPOSE) run --rm dev go mod tidy
+
+# Backup: run a one-off database backup immediately
+backup-now:
+	$(COMPOSE) run --rm db-backup /usr/local/bin/db-backup.sh
