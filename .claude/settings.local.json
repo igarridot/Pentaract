@@ -28,7 +28,8 @@
       "Bash(pushd /Volumes/SUNEAST/workspace/pentaract-cli)",
       "Bash(popd)",
       "Bash(chmod:*)",
-      "Bash(git log:*)"
+      "Bash(git log:*)",
+      "WebSearch"
     ]
   }
 }

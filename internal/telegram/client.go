@@ -234,12 +234,12 @@ func (c *Client) Upload(ctx context.Context, token string, chatID int64, data []
 
 // DeleteMessage deletes a message from a Telegram channel.
 // Automatically retries on 429 (Too Many Requests).
-func (c *Client) DeleteMessage(token string, chatID int64, messageID int64) error {
+func (c *Client) DeleteMessage(ctx context.Context, token string, chatID int64, messageID int64) error {
 	convertedChatID := convertChatID(chatID)
 	apiURL := fmt.Sprintf("%s/bot%s/deleteMessage?chat_id=%d&message_id=%d",
 		c.baseURL, token, convertedChatID, messageID)
 
-	resp, err := c.doWithRateLimitRetry(context.Background(), "deleteMessage", func() (*http.Response, error) {
+	resp, err := c.doWithRateLimitRetry(ctx, "deleteMessage", func() (*http.Response, error) {
 		resp, err := c.httpClient.Get(apiURL)
 		if err != nil {
 			return nil, fmt.Errorf("deleting message: %w", err)
@@ -299,7 +299,7 @@ func (c *Client) ResolveFileIDByMessage(ctx context.Context, token string, chatI
 		return "", fmt.Errorf("%w: forwardMessage missing document file_id: %s", domain.ErrTelegramResolveFailed, string(body))
 	}
 
-	if err := c.DeleteMessage(token, chatID, forwardResp.Result.MessageID); err != nil {
+	if err := c.DeleteMessage(ctx, token, chatID, forwardResp.Result.MessageID); err != nil {
 		slog.Warn("failed to delete forwarded message", "message_id", forwardResp.Result.MessageID, "err", err)
 	}
 
