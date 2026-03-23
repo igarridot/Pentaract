@@ -42,7 +42,7 @@ func TestDeleteMessageHTTPError(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	err := c.DeleteMessage("TOKEN", 1, 1)
+	err := c.DeleteMessage(context.Background(), "TOKEN", 1, 1)
 	if err == nil || !strings.Contains(err.Error(), "telegram deleteMessage error") {
 		t.Fatalf("expected delete message error, got: %v", err)
 	}

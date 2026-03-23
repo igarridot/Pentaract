@@ -62,7 +62,7 @@ func TestDeleteMessageRetriesOn429(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	if err := c.DeleteMessage("TOKEN", 1, 1); err != nil || attempt < 2 {
+	if err := c.DeleteMessage(context.Background(), "TOKEN", 1, 1); err != nil || attempt < 2 {
 		t.Fatalf("expected retry success, err=%v attempts=%d", err, attempt)
 	}
 }

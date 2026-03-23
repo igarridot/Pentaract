@@ -109,7 +109,7 @@ func TestDeleteMessageSendsConvertedChatIDAndMessageID(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	if err := c.DeleteMessage(token, chatID, messageID); err != nil {
+	if err := c.DeleteMessage(context.Background(), token, chatID, messageID); err != nil {
 		t.Fatalf("delete message failed: %v", err)
 	}
 }

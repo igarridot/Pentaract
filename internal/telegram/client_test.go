@@ -299,7 +299,7 @@ func TestDeleteMessageSuccessWithHTTPRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	err := c.DeleteMessage("TOKEN", 999, 42)
+	err := c.DeleteMessage(context.Background(), "TOKEN", 999, 42)
 	if err != nil {
 		t.Fatalf("deleteMessage failed: %v", err)
 	}
@@ -334,7 +334,7 @@ func TestDeleteMessageRetryOn429(t *testing.T) {
 	defer srv.Close()
 
 	c := NewClient(srv.URL)
-	err := c.DeleteMessage("TOKEN", 999, 42)
+	err := c.DeleteMessage(context.Background(), "TOKEN", 999, 42)
 	if err != nil {
 		t.Fatalf("deleteMessage retry failed: %v", err)
 	}
