@@ -67,15 +67,16 @@ func (r *FilesRepo) CreateFileAnyway(ctx context.Context, path string, size int6
 }
 
 // CreateFileIfNotExists creates a file record only when the exact path does not
-// exist yet. Returns (nil, true, nil) when the file already exists.
+// already exist as a completed upload. Returns (nil, true, nil) when the file
+// already exists with is_uploaded=true.
+//
+// Note: this intentionally does NOT delete existing is_uploaded=false records.
+// Those belong to uploads that may still be in progress. Stale records are
+// cleaned up atomically in CreateChunksAndMarkUploaded when an upload succeeds.
 func (r *FilesRepo) CreateFileIfNotExists(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error) {
 	f := &domain.File{}
 	err := r.pool.QueryRow(ctx,
-		`WITH stale AS (
-			DELETE FROM files
-			WHERE storage_id = $3 AND path = $1 AND is_uploaded = false
-		)
-		INSERT INTO files (path, size, storage_id, is_uploaded)
+		`INSERT INTO files (path, size, storage_id, is_uploaded)
 		SELECT $1, $2, $3, false
 		WHERE NOT EXISTS (
 			SELECT 1 FROM files WHERE storage_id = $3 AND path = $1 AND is_uploaded = true
@@ -260,6 +261,23 @@ func (r *FilesRepo) ListChunksByStorage(ctx context.Context, storageID uuid.UUID
 	return scanChunks(rows)
 }
 
+// DeleteByID removes a single file record by its primary key.
+// Unlike Delete (which matches by path), this cannot accidentally remove
+// records belonging to other concurrent uploads of the same path.
+func (r *FilesRepo) DeleteByID(ctx context.Context, fileID uuid.UUID) error {
+	ct, err := r.pool.Exec(ctx,
+		`DELETE FROM files WHERE id = $1`,
+		fileID,
+	)
+	if err != nil {
+		return err
+	}
+	if ct.RowsAffected() == 0 {
+		return domain.ErrNotFound("file")
+	}
+	return nil
+}
+
 func (r *FilesRepo) Delete(ctx context.Context, storageID uuid.UUID, path string) error {
 	// Delete exact file or all files under folder path
 	ct, err := r.pool.Exec(ctx,
@@ -312,6 +330,19 @@ func (r *FilesRepo) CreateChunksAndMarkUploaded(ctx context.Context, fileID uuid
 
 	if _, err := tx.Exec(ctx,
 		`UPDATE files SET is_uploaded = true WHERE id = $1`,
+		fileID,
+	); err != nil {
+		return err
+	}
+
+	// Clean up stale is_uploaded=false records for the same path/storage.
+	// These are leftover from previous failed or superseded upload attempts.
+	if _, err := tx.Exec(ctx,
+		`DELETE FROM files
+		WHERE id != $1
+			AND is_uploaded = false
+			AND storage_id = (SELECT storage_id FROM files WHERE id = $1)
+			AND path = (SELECT path FROM files WHERE id = $1)`,
 		fileID,
 	); err != nil {
 		return err

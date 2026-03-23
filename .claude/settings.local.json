@@ -27,7 +27,8 @@
       "Bash(npx --yes vite build)",
       "Bash(pushd /Volumes/SUNEAST/workspace/pentaract-cli)",
       "Bash(popd)",
-      "Bash(chmod:*)"
+      "Bash(chmod:*)",
+      "Bash(git log:*)"
     ]
   }
 }

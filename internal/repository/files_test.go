@@ -214,6 +214,9 @@ func TestFilesRepoCreateChunksAndMarkUploaded(t *testing.T) {
 	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
 		WithArgs(fileID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("DELETE FROM files").
+		WithArgs(fileID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectCommit()
 
 	err := repo.CreateChunksAndMarkUploaded(ctx, fileID, []domain.FileChunk{

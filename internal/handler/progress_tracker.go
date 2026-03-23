@@ -46,6 +46,7 @@ type uploadTracker struct {
 	cancel    context.CancelFunc
 	storageID uuid.UUID
 	filePath  string
+	fileID    uuid.UUID // set once svc.Upload creates the DB record
 	err       error
 	skipped   bool
 	done      bool

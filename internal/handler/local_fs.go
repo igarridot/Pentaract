@@ -200,12 +200,15 @@ func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
 			pw.CloseWithError(copyErr)
 		}()
 
-		_, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress, onConflict)
+		file, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress, onConflict)
 
 		h.mu.Lock()
 		tracker.done = true
 		tracker.err = uploadErr
 		tracker.skipped = skipped
+		if file != nil {
+			tracker.fileID = file.ID
+		}
 		h.mu.Unlock()
 
 		if uploadErr != nil {
@@ -364,12 +367,15 @@ func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) 
 			uploadCtx, cancel := context.WithCancel(context.Background())
 			te.tracker.cancel = cancel
 
-			_, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, ri.fullPath, ri.info.Size(), pr, te.progress, onConflict)
+			file, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, ri.fullPath, ri.info.Size(), pr, te.progress, onConflict)
 
 			h.mu.Lock()
 			te.tracker.done = true
 			te.tracker.err = uploadErr
 			te.tracker.skipped = skipped
+			if file != nil {
+				te.tracker.fileID = file.ID
+			}
 			h.mu.Unlock()
 
 			if uploadErr != nil {

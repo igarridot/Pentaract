@@ -135,12 +135,15 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 			h.scheduleUploadTrackerCleanup(uploadID)
 		}()
 
-		_, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress, onConflict)
+		file, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress, onConflict)
 
 		h.mu.Lock()
 		tracker.done = true
 		tracker.err = uploadErr
 		tracker.skipped = skipped
+		if file != nil {
+			tracker.fileID = file.ID
+		}
 		h.mu.Unlock()
 
 		if uploadErr != nil {
@@ -176,8 +179,20 @@ func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 	slog.Info("cancelling upload", "upload_id", uploadID, "file", tracker.filePath)
 
 	go func() {
+		// Wait for the upload goroutine to finish so tracker.fileID is set.
 		time.Sleep(1 * time.Second)
-		if err := h.svc.CleanupCancelledUpload(context.Background(), user.ID, tracker.storageID, tracker.filePath); err != nil {
+
+		h.mu.RLock()
+		fileID := tracker.fileID
+		h.mu.RUnlock()
+
+		if fileID == uuid.Nil {
+			// File record was never created (cancelled before DB insert).
+			slog.Info("upload cancel: no file record to clean up", "file", tracker.filePath)
+			return
+		}
+
+		if err := h.svc.CleanupCancelledUpload(context.Background(), user.ID, tracker.storageID, fileID); err != nil {
 			slog.Warn("upload cancel cleanup failed", "file", tracker.filePath, "err", err)
 		} else {
 			slog.Info("upload cancel cleanup done", "file", tracker.filePath)

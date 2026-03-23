@@ -29,6 +29,7 @@ type filesRepository interface {
 	ListDir(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FSElement, error)
 	Search(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
 	ListChunksByPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FileChunk, error)
+	DeleteByID(ctx context.Context, fileID uuid.UUID) error
 	Delete(ctx context.Context, storageID uuid.UUID, path string) error
 	DirStats(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error)
 	ListFilesUnderPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error)
@@ -159,17 +160,20 @@ func (s *FilesService) Search(ctx context.Context, userID, storageID uuid.UUID, 
 	return s.filesRepo.Search(ctx, storageID, basePath, searchPath)
 }
 
-// CleanupCancelledUpload removes a partially uploaded file record.
+// CleanupCancelledUpload removes a single partially uploaded file record by ID.
 // It requires only write access because the caller already proved write
 // permission by initiating the upload. Chunks uploaded to Telegram during
 // the cancelled upload have no DB records (they are created atomically on
 // completion), so only the file row needs to be removed.
-func (s *FilesService) CleanupCancelledUpload(ctx context.Context, userID, storageID uuid.UUID, path string) error {
+//
+// Using the file ID (not path) ensures that only this specific upload's
+// record is removed, without affecting concurrent uploads of the same path.
+func (s *FilesService) CleanupCancelledUpload(ctx context.Context, userID, storageID uuid.UUID, fileID uuid.UUID) error {
 	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessWrite); err != nil {
 		return err
 	}
 
-	return s.filesRepo.Delete(ctx, storageID, path)
+	return s.filesRepo.DeleteByID(ctx, fileID)
 }
 
 func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *DeleteProgress, forceDelete bool) error {

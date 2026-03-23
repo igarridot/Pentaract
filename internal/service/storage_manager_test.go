@@ -915,6 +915,9 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
 		WithArgs(fileID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("DELETE FROM files").
+		WithArgs(fileID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectCommit()
 
 	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -1030,6 +1033,9 @@ func TestStorageManagerUploadRetriesOnlyFailedChunk(t *testing.T) {
 	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
 		WithArgs(fileID).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
+	mock.ExpectExec("DELETE FROM files").
+		WithArgs(fileID).
+		WillReturnResult(pgxmock.NewResult("DELETE", 0))
 	mock.ExpectCommit()
 
 	var (
