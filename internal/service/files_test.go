@@ -26,6 +26,7 @@ type fakeFilesRepo struct {
 	dirStatsFn              func(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error)
 	listFilesUnderPathFn    func(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error)
 	moveFn                  func(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error
+	deleteByIDFn            func(ctx context.Context, fileID uuid.UUID) error
 }
 
 func (f *fakeFilesRepo) CreateFolder(ctx context.Context, storageID uuid.UUID, path string) error {
@@ -60,6 +61,12 @@ func (f *fakeFilesRepo) ListFilesUnderPath(ctx context.Context, storageID uuid.U
 }
 func (f *fakeFilesRepo) Move(ctx context.Context, storageID uuid.UUID, oldPath, newPath string) error {
 	return f.moveFn(ctx, storageID, oldPath, newPath)
+}
+func (f *fakeFilesRepo) DeleteByID(ctx context.Context, fileID uuid.UUID) error {
+	if f.deleteByIDFn != nil {
+		return f.deleteByIDFn(ctx, fileID)
+	}
+	return nil
 }
 
 type fakeFilesAccessRepo struct {

@@ -35,7 +35,7 @@ type mockFilesService struct {
 	downloadDirFn             func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error)
 	listDirFn                 func(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error)
 	searchFn                      func(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
-	cleanupCancelledUploadFn      func(ctx context.Context, userID, storageID uuid.UUID, path string) error
+	cleanupCancelledUploadFn      func(ctx context.Context, userID, storageID uuid.UUID, fileID uuid.UUID) error
 }
 
 func (m *mockFilesService) Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error {
@@ -62,11 +62,11 @@ func (m *mockFilesService) Delete(ctx context.Context, userID, storageID uuid.UU
 	}
 	return m.deleteFn(ctx, userID, storageID, path, progress, forceDelete)
 }
-func (m *mockFilesService) CleanupCancelledUpload(ctx context.Context, userID, storageID uuid.UUID, path string) error {
+func (m *mockFilesService) CleanupCancelledUpload(ctx context.Context, userID, storageID uuid.UUID, fileID uuid.UUID) error {
 	if m.cleanupCancelledUploadFn == nil {
 		return nil
 	}
-	return m.cleanupCancelledUploadFn(ctx, userID, storageID, path)
+	return m.cleanupCancelledUploadFn(ctx, userID, storageID, fileID)
 }
 func (m *mockFilesService) WorkersStatus(storageID uuid.UUID) string {
 	if m.workersStatusFn == nil {
@@ -719,8 +719,12 @@ func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
 func TestFilesHandlerCancelUpload(t *testing.T) {
 	cancelled := false
 	cleaned := false
+	fileID := uuid.New()
 	mock := &mockFilesService{}
-	mock.cleanupCancelledUploadFn = func(ctx context.Context, userID, storageID uuid.UUID, path string) error {
+	mock.cleanupCancelledUploadFn = func(ctx context.Context, userID, storageID uuid.UUID, fID uuid.UUID) error {
+		if fID != fileID {
+			t.Fatalf("cleanup got fileID=%v, want %v", fID, fileID)
+		}
 		cleaned = true
 		return nil
 	}
@@ -733,6 +737,7 @@ func TestFilesHandlerCancelUpload(t *testing.T) {
 		cancel:    func() { cancelled = true },
 		storageID: storageID,
 		filePath:  "a.txt",
+		fileID:    fileID,
 	}
 
 	req := makeFilesReq(http.MethodPost, "/", "", "", "")
