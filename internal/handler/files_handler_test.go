@@ -34,8 +34,8 @@ type mockFilesService struct {
 	streamFileToWriterFn      func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
 	downloadDirFn             func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error)
 	listDirFn                 func(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error)
-	searchFn                      func(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
-	cleanupCancelledUploadFn      func(ctx context.Context, userID, storageID uuid.UUID, fileID uuid.UUID) error
+	searchFn                  func(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
+	cleanupCancelledUploadFn  func(ctx context.Context, userID, storageID uuid.UUID, fileID uuid.UUID) error
 }
 
 func (m *mockFilesService) Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error {
@@ -250,6 +250,44 @@ func TestFilesHandlerDownloadAttachmentWithTrackingCompletesWithoutCancellation(
 	}
 	if !tracker.done || tracker.canceled || tracker.err != nil {
 		t.Fatalf("unexpected tracker state: done=%v canceled=%v err=%v", tracker.done, tracker.canceled, tracker.err)
+	}
+}
+
+func TestFilesHandlerDownloadInlineVideoWithDownloadIDSkipsTracking(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New().String()
+	progressWasProvided := false
+	h := NewFilesHandler(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: fileID, Path: "movie.mkv", Size: 11}, nil
+		},
+		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			return 11, nil
+		},
+		downloadFileRangeToWriter: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error {
+			progressWasProvided = progress != nil
+			_, _ = io.WriteString(w, "abc")
+			return nil
+		},
+	})
+
+	req := makeFilesReq(http.MethodGet, "/?inline=1&download_id=kodi-stream-1", "", storageID, "movie.mkv")
+	req.Header.Set("Range", "bytes=0-2")
+	w := httptest.NewRecorder()
+	h.Download(w, req)
+
+	if w.Code != http.StatusPartialContent || w.Body.String() != "abc" {
+		t.Fatalf("inline range download failed: code=%d body=%q", w.Code, w.Body.String())
+	}
+	if progressWasProvided {
+		t.Fatalf("expected inline video stream to skip download progress tracking")
+	}
+
+	h.mu.RLock()
+	tracker := h.downloads["kodi-stream-1"]
+	h.mu.RUnlock()
+	if tracker != nil {
+		t.Fatalf("expected inline video stream not to register a download tracker")
 	}
 }
 
