@@ -45,11 +45,11 @@ backup-now:
 
 # Backup: list available backups
 backup-list:
-	$(COMPOSE) run --rm db-backup /usr/local/bin/db-restore.sh
+	$(COMPOSE) run --rm db-backup /usr/local/bin/db-restore.sh --list
 
-# Backup: restore from a backup file (usage: make backup-restore BACKUP=pentaract_YYYYMMDD_HHMMSS.sql.gz)
+# Backup: restore from a backup file (usage: make backup-restore BACKUP=<filename-or-path>)
 backup-restore:
-	@if [ -z "$(BACKUP)" ]; then echo "Usage: make backup-restore BACKUP=<filename>"; echo "Run 'make backup-list' to see available backups."; exit 1; fi
+	@if [ -z "$(BACKUP)" ]; then echo "Usage: make backup-restore BACKUP=<filename-or-path>"; echo "Run 'make backup-list' to see available backups."; exit 1; fi
 	@echo "WARNING: This will stop pentaract and replace the current database with $(BACKUP)."
 	@echo "Press Ctrl+C to cancel, or Enter to continue..." && read _
 	$(COMPOSE) stop pentaract

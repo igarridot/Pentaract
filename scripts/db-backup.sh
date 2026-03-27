@@ -5,7 +5,7 @@ set -eu
 # Runs pg_dump and saves a timestamped compressed backup.
 # Old backups beyond BACKUP_RETENTION_DAYS are automatically removed.
 
-BACKUP_DIR="/backups"
+BACKUP_DIR="${BACKUP_DIR:-/backups}"
 RETENTION_DAYS="${BACKUP_RETENTION_DAYS:-7}"
 TIMESTAMP="$(date +%Y%m%d_%H%M%S)"
 FILENAME="pentaract_${TIMESTAMP}.sql.gz"
