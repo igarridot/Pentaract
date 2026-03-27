@@ -111,9 +111,6 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	downloadCtx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
-	defer cleanup()
-
 	filename := filepath.Base(file.Path)
 	contentType := contentTypeForFilename(filename)
 	disposition := "attachment"
@@ -121,10 +118,22 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		disposition = "inline"
 	}
 
+	// Inline video playback can fan out into multiple concurrent range requests
+	// that share the same download_id. Tracking those requests like regular UI
+	// downloads causes newer range requests to cancel older ones.
+	trackDownload := !(disposition == "inline" && isInlineVideo(contentType, filename))
+
+	downloadCtx := r.Context()
+	var tracker *downloadTracker
+	cleanup := func() {}
 	var progress *service.DownloadProgress
-	if tracker != nil {
-		progress = tracker.progress
+	if trackDownload {
+		downloadCtx, tracker, cleanup = h.setupDownloadTracker(r, storageID)
+		if tracker != nil {
+			progress = tracker.progress
+		}
 	}
+	defer cleanup()
 
 	w.Header().Set("Content-Type", contentType)
 	w.Header().Set("Content-Disposition", disposition+`; filename="`+sanitizeFilename(filename)+`"`)
