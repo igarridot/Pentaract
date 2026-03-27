@@ -117,7 +117,7 @@ Useful targets:
 - `make mod-tidy`
 - `make backup-now`
 - `make backup-list`
-- `make backup-restore BACKUP=<file>`
+- `make backup-restore BACKUP=<file-or-path>`
 
 ## Testing and CI
 
@@ -211,7 +211,7 @@ List available backups:
 make backup-list
 ```
 
-Restore a specific backup (stops the application, replaces the database, and restarts):
+Restore a specific backup by filename or path (stops the application, replaces the database, and restarts):
 
 ```bash
 make backup-restore BACKUP=pentaract_20260322_030000.sql.gz
