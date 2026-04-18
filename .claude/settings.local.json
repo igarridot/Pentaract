@@ -29,7 +29,23 @@
       "Bash(popd)",
       "Bash(chmod:*)",
       "Bash(git log:*)",
-      "WebSearch"
+      "WebSearch",
+      "mcp__github__pull_request_read",
+      "Bash(gh api:*)",
+      "Bash(pnpm approve-builds:*)",
+      "Bash(pnpm install:*)",
+      "Bash(wait)",
+      "Bash(cat /private/tmp/claude-502/-Users-ivan-garrido-learning-workspace-Pentaract/06da4089-120d-4275-be77-96738b593a18/tasks/b8g573jju.output)",
+      "Bash(echo \"EXIT: $?\")",
+      "Bash(python3 -m json.tool)",
+      "WebFetch(domain:pnpm.io)",
+      "WebFetch(domain:medium.com)",
+      "WebFetch(domain:socket.dev)",
+      "Bash(git add:*)",
+      "Bash(git commit:*)",
+      "Bash(git push:*)",
+      "Bash(node -e \"const r = require\\('/Users/ivan.garrido/learning-workspace/Pentaract/ui/node_modules/react/package.json'\\); const rd = require\\('/Users/ivan.garrido/learning-workspace/Pentaract/ui/node_modules/react-dom/package.json'\\); console.log\\('react:', r.version, 'react-dom:', rd.version\\)\")",
+      "Bash(pnpm run:*)"
     ]
   }
 }
