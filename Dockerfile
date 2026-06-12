@@ -17,8 +17,8 @@ RUN CGO_ENABLED=0 GOOS=${TARGETOS} GOARCH=${TARGETARCH} go build -o pentaract ./
 FROM public.ecr.aws/docker/library/node:latest AS ui
 
 WORKDIR /app
-COPY ui/package.json ui/pnpm-lock.yaml* ./
-RUN npm install -g pnpm && pnpm install
+COPY ui/package.json ui/pnpm-lock.yaml ui/pnpm-workspace.yaml ./
+RUN npm install -g pnpm@10 && pnpm install --frozen-lockfile
 
 COPY ui/ .
 ENV VITE_API_BASE=/api
