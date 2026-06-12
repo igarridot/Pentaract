@@ -1,0 +1,27 @@
+# UI build artifacts
+ui/node_modules
+ui/dist
+ui/.pnpm-store
+
+# Go build artifacts
+pentaract
+vendor
+
+# Local state never needed in the image
+.env
+persistent_data
+.pnpm-store
+
+# VCS / editor / OS noise
+.git
+.github
+.gitignore
+.gitattributes
+.vscode
+.idea
+.DS_Store
+*.swp
+*.swo
+
+# Tooling that ships with the repo but never runs in the image
+.claude
