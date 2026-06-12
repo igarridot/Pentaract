@@ -45,7 +45,17 @@
       "Bash(git commit:*)",
       "Bash(git push:*)",
       "Bash(node -e \"const r = require\\('/Users/ivan.garrido/learning-workspace/Pentaract/ui/node_modules/react/package.json'\\); const rd = require\\('/Users/ivan.garrido/learning-workspace/Pentaract/ui/node_modules/react-dom/package.json'\\); console.log\\('react:', r.version, 'react-dom:', rd.version\\)\")",
-      "Bash(pnpm run:*)"
+      "Bash(pnpm run:*)",
+      "Bash(docker --version)",
+      "Bash(docker info *)",
+      "Bash(docker build *)",
+      "Bash(gh release *)",
+      "Bash(npx -y pnpm@11 --version)",
+      "Bash(npx -y pnpm@11 install --frozen-lockfile)",
+      "Bash(npx -y pnpm@11 test)",
+      "Bash(npx -y pnpm@11 run build)",
+      "Bash(git pull *)",
+      "Bash(git stash *)"
     ]
   }
 }
