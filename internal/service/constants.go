@@ -9,14 +9,13 @@ const (
 	UploadChunkSize         = MaxTelegramGetFileBytes - UploadChunkSafetyMargin
 
 	// Upload tuning
-	UploadChunkMaxAttempts    = 5
-	UploadChunkParallelism    = 10
-	TokenBatchSize            = 5 // S2: pre-fetch multiple worker tokens per DB query
+	UploadChunkMaxAttempts = 5
+	UploadChunkParallelism = 10
+	TokenBatchSize         = 5 // S2: pre-fetch multiple worker tokens per DB query
 
 	// Download tuning
-	DownloadChunkMaxAttempts  = 3
-	DownloadChunkParallelism  = 5
-	VerifyChunkParallelism    = 10
+	DownloadChunkMaxAttempts = 3
+	DownloadChunkParallelism = 5
 
 	// Pipeline verification tuning
 	PipelineVerifyParallelism = 5                // concurrent verifications during upload (runs alongside uploads)
