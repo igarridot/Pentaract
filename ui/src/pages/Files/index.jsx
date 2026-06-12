@@ -1,8 +1,8 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Typography, List, Box, TextField, InputAdornment,
-  MenuItem, Divider, Breadcrumbs, Link as MuiLink, Button, FormControlLabel, Checkbox,
+  Typography, Box, TextField, InputAdornment,
+  MenuItem, Button, FormControlLabel, Checkbox,
 } from '@mui/material'
 import {
   Search as SearchIcon,
@@ -12,20 +12,19 @@ import {
 } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
-import FSListItem from '../../components/FSListItem'
 import FileInfo from '../../components/FileInfo'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import NavigationBlockDialog from '../../components/NavigationBlockDialog'
 import FloatingMenu from '../../components/Menu'
-import UploadProgress from '../../components/UploadProgress'
-import DownloadProgress from '../../components/DownloadProgress'
-import DeleteProgress from '../../components/DeleteProgress'
-import BulkOperationProgress from '../../components/BulkOperationProgress'
 import MoveDialog from '../../components/MoveDialog'
 import MediaPreviewDialog from '../../components/MediaPreviewDialog'
 import RenameFolderDialog from '../../components/RenameFolderDialog'
 import UploadConflictDialog from '../../components/UploadConflictDialog'
+import FileBreadcrumbs from './FileBreadcrumbs'
+import TransferProgressStack from './TransferProgressStack'
+import FileSelectionToolbar from './FileSelectionToolbar'
+import FileList from './FileList'
 import { getItemPath, getMediaType, buildRenamedPath, getBulkOperationMetrics } from './operations'
 import { useFileNavigation } from './useFileNavigation'
 import { useUploads } from './useUploads'
@@ -217,89 +216,26 @@ export default function Files() {
     setSelectedFilePaths(selectableFiles.map((item) => item.path))
   }
 
-  // --- Breadcrumbs ---
-  const breadcrumbs = [
-    <MuiLink
-      key="root"
-      underline="hover"
-      color="inherit"
-      sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
-      onClick={() => navigate(prefix)}
-    >
-      Root
-    </MuiLink>,
-    ...pathParts.map((part, i) => {
-      const pathTo = prefix + pathParts.slice(0, i + 1).join('/') + '/'
-      return (
-        <MuiLink
-          key={pathTo}
-          underline="hover"
-          color="inherit"
-          sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
-          onClick={() => navigate(pathTo)}
-        >
-          {part}
-        </MuiLink>
-      )
-    }),
-  ]
-
   return (
     <Box>
-      <Breadcrumbs sx={{ mb: 2 }}>{breadcrumbs}</Breadcrumbs>
+      <FileBreadcrumbs prefix={prefix} pathParts={pathParts} onNavigate={navigate} />
 
-      {uploadStates.map((uploadState) => (
-        <UploadProgress
-          key={uploadState.id}
-          filename={uploadState.filename}
-          totalBytes={uploadState.totalBytes}
-          uploadedBytes={uploadState.uploadedBytes}
-          totalChunks={uploadState.totalChunks}
-          uploadedChunks={uploadState.uploadedChunks}
-          verificationTotal={uploadState.verificationTotal}
-          verifiedChunks={uploadState.verifiedChunks}
-          status={uploadState.status}
-          workersStatus={uploadState.workersStatus}
-          onCancel={() => cancelUpload(uploadState.id)}
-        />
-      ))}
-      {downloadStates.map((downloadState) => (
-        <DownloadProgress
-          key={downloadState.id}
-          filename={downloadState.filename}
-          totalBytes={downloadState.totalBytes}
-          downloadedBytes={downloadState.downloadedBytes}
-          totalChunks={downloadState.totalChunks}
-          downloadedChunks={downloadState.downloadedChunks}
-          status={downloadState.status}
-          workersStatus={downloadState.workersStatus}
-          errorMessage={downloadState.errorMessage}
-          onCancel={() => cancelDownload(downloadState.id)}
-        />
-      ))}
-      {deleteState && (
-        <DeleteProgress
-          label={deleteState.label}
-          totalChunks={deleteState.totalChunks}
-          deletedChunks={deleteState.deletedChunks}
-          status={deleteState.status}
-          workersStatus={deleteState.workersStatus}
-        />
-      )}
-      {bulkOperation && (
-        <BulkOperationProgress
-          operation={bulkOperation.operation}
-          status={bulkOperation.status}
-          total={bulkOperation.total}
-          completed={bulkOperation.completed}
-          totalBytes={bulkTotalBytes}
-          processedBytes={bulkProcessedBytes}
-          totalChunks={bulkTotalChunks}
-          processedChunks={bulkProcessedChunks}
-          workersStatus={bulkWorkersStatus}
-          onCancel={bulkOperation.status === 'running' ? () => bulkCancelRef.current?.() : null}
-        />
-      )}
+      <TransferProgressStack
+        uploadStates={uploadStates}
+        onCancelUpload={cancelUpload}
+        downloadStates={downloadStates}
+        onCancelDownload={cancelDownload}
+        deleteState={deleteState}
+        bulkOperation={bulkOperation}
+        bulkMetrics={{
+          totalBytes: bulkTotalBytes,
+          processedBytes: bulkProcessedBytes,
+          totalChunks: bulkTotalChunks,
+          processedChunks: bulkProcessedChunks,
+          workersStatus: bulkWorkersStatus,
+        }}
+        onCancelBulk={() => bulkCancelRef.current?.()}
+      />
 
       <Box component="form" onSubmit={handleSearch} sx={{ mb: 2, display: 'flex', alignItems: 'center', gap: 1 }}>
         <TextField
@@ -328,75 +264,32 @@ export default function Files() {
       </Box>
 
       {selectableFiles.length > 0 && (
-        <Box sx={{ mb: 1.5, display: 'flex', alignItems: 'center', gap: 1, flexWrap: 'wrap' }}>
-          <FormControlLabel
-            control={<Checkbox checked={allFilesSelected} onChange={toggleSelectAllFiles} />}
-            label={`Select all files (${selectableFiles.length})`}
-          />
-          <Button size="small" onClick={() => setSelectedFilePaths([])} disabled={selectedFiles.length === 0}>
-            Clear
-          </Button>
-          <Button size="small" onClick={() => setBulkMoveOpen(true)} disabled={selectedFiles.length === 0 || isBulkOperating}>
-            Move selected
-          </Button>
-          <Button
-            size="small"
-            onClick={() => handleBulkDownload(selectedFiles, { startDownload, downloadStatesRef, releaseDownloadTracking })}
-            disabled={selectedFiles.length === 0 || isBulkOperating}
-          >
-            Download selected
-          </Button>
-          <Button
-            size="small"
-            color="error"
-            onClick={() => setBulkDeleteOpen(true)}
-            disabled={selectedFiles.length === 0 || isBulkOperating}
-          >
-            Delete selected
-          </Button>
-          {selectedFiles.length > 0 && (
-            <Typography variant="body2" color="text.secondary">
-              {`${selectedFiles.length} selected`}
-            </Typography>
-          )}
-        </Box>
+        <FileSelectionToolbar
+          selectableCount={selectableFiles.length}
+          selectedCount={selectedFiles.length}
+          allSelected={allFilesSelected}
+          isBulkOperating={isBulkOperating}
+          onToggleSelectAll={toggleSelectAllFiles}
+          onClear={() => setSelectedFilePaths([])}
+          onMove={() => setBulkMoveOpen(true)}
+          onDownload={() => handleBulkDownload(selectedFiles, { startDownload, downloadStatesRef, releaseDownloadTracking })}
+          onDelete={() => setBulkDeleteOpen(true)}
+        />
       )}
 
-      <Box sx={{
-        bgcolor: 'background.paper',
-        borderRadius: 3,
-        border: '1px solid',
-        borderColor: 'divider',
-        overflow: 'hidden',
-      }}>
-        <List disablePadding>
-          {displayItems.map((item, i) => (
-            <Box key={item.path || item.name}>
-              {i > 0 && <Divider />}
-              <FSListItem
-                item={item}
-                storageId={storageId}
-                onInfo={setInfoFile}
-                onPreview={handlePreview}
-                onDelete={setDeleteTarget}
-                onDownload={startDownload}
-                onMove={setMoveTarget}
-                onRename={setRenameTarget}
-                selectionEnabled
-                isSelected={selectedFilePaths.includes(item.path)}
-                onToggleSelect={toggleFileSelection}
-              />
-            </Box>
-          ))}
-          {displayItems.length === 0 && (
-            <Box sx={{ p: 4, textAlign: 'center' }}>
-              <Typography color="text.secondary" variant="body2">
-                {searchResults ? 'No results found' : 'Empty folder'}
-              </Typography>
-            </Box>
-          )}
-        </List>
-      </Box>
+      <FileList
+        items={displayItems}
+        storageId={storageId}
+        selectedFilePaths={selectedFilePaths}
+        isSearchResults={!!searchResults}
+        onInfo={setInfoFile}
+        onPreview={handlePreview}
+        onDelete={setDeleteTarget}
+        onDownload={startDownload}
+        onMove={setMoveTarget}
+        onRename={setRenameTarget}
+        onToggleSelect={toggleFileSelection}
+      />
 
       <FloatingMenu>
         {(close) => [
