@@ -183,18 +183,7 @@ func TestShouldRetryChunkUpload(t *testing.T) {
 	}
 }
 
-func TestVerifyUploadedChunksEmpty(t *testing.T) {
-	m := &StorageManager{}
-	failedPos, err := m.verifyUploadedChunks(context.Background(), &domain.File{}, domain.Storage{}, nil, nil)
-	if err != nil {
-		t.Fatalf("expected nil for empty results, got: %v", err)
-	}
-	if len(failedPos) != 0 {
-		t.Fatalf("expected no failed positions, got: %v", failedPos)
-	}
-}
-
-func TestVerifyUploadedChunksContentMismatch(t *testing.T) {
+func TestVerifySingleChunkContentMismatch(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New()
 	cipher := NewChunkCipher("secret")
@@ -233,29 +222,24 @@ func TestVerifyUploadedChunksContentMismatch(t *testing.T) {
 	// Provide a hash for "different-data" — verification should fail
 	differentHash := sha256Hash([]byte("different-data"))
 
-	results := []uploadedChunkResult{
-		{
-			TelegramFileID:    "FILE_ID",
-			TelegramMessageID: 1,
-			Position:          0,
-			PlainHash:         differentHash,
-		},
+	result := uploadedChunkResult{
+		TelegramFileID:    "FILE_ID",
+		TelegramMessageID: 1,
+		Position:          0,
+		PlainHash:         differentHash,
 	}
 
 	file := &domain.File{ID: fileID, StorageID: storageID}
-	failedPos, err := m.verifyUploadedChunks(context.Background(), file, domain.Storage{ID: storageID, ChatID: 123}, results, nil)
+	err = m.verifySingleChunk(context.Background(), file, domain.Storage{ID: storageID, ChatID: 123}, result)
 	if err == nil {
 		t.Fatal("expected content mismatch error")
 	}
-	if len(failedPos) != 1 || failedPos[0] != 0 {
-		t.Fatalf("expected failed position [0], got: %v", failedPos)
-	}
-	if !strings.Contains(err.Error(), "failed for 1 chunk") {
-		t.Fatalf("expected chunk failure error, got: %v", err)
+	if !isHashMismatch(err) {
+		t.Fatalf("expected hash mismatch error, got: %v", err)
 	}
 }
 
-func TestVerifyUploadedChunksRetriesTransientDownloadFailure(t *testing.T) {
+func TestVerifySingleChunkRetriesTransientDownloadFailure(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New()
 	cipher := NewChunkCipher("secret")
@@ -299,22 +283,17 @@ func TestVerifyUploadedChunksRetriesTransientDownloadFailure(t *testing.T) {
 		chunkCipher: cipher,
 	}
 
-	results := []uploadedChunkResult{
-		{
-			TelegramFileID:    "FILE_ID",
-			TelegramMessageID: 1,
-			Position:          0,
-			PlainHash:         sha256Hash(plainData),
-		},
+	result := uploadedChunkResult{
+		TelegramFileID:    "FILE_ID",
+		TelegramMessageID: 1,
+		Position:          0,
+		PlainHash:         sha256Hash(plainData),
 	}
 
 	file := &domain.File{ID: fileID, StorageID: storageID}
-	failedPos, err := m.verifyUploadedChunks(context.Background(), file, domain.Storage{ID: storageID, ChatID: 123}, results, nil)
+	err = m.verifySingleChunk(context.Background(), file, domain.Storage{ID: storageID, ChatID: 123}, result)
 	if err != nil {
 		t.Fatalf("expected verification to succeed after retry, got: %v", err)
-	}
-	if len(failedPos) != 0 {
-		t.Fatalf("expected no failed positions, got: %v", failedPos)
 	}
 	// Should have needed more than 1 download attempt
 	if downloadAttempts.Load() <= 1 {

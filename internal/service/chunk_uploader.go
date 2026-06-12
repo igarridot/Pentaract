@@ -34,7 +34,7 @@ func shouldRetryChunkUpload(ctx context.Context, err error) bool {
 	if err == nil {
 		return false
 	}
-	return !contextAborted(ctx, err)
+	return !contextAborted(ctx)
 }
 
 func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.File, storage *domain.Storage, position int16, chunkData []byte, plainHash [sha256.Size]byte) (uploadedChunkResult, error) {
@@ -75,11 +75,8 @@ func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.
 
 		slog.Warn("chunk upload failed, retrying", "position", position, "file", file.Path, "attempt", attempt, "max_attempts", UploadChunkMaxAttempts, "worker", wt.Name, "err", err)
 
-		backoff := time.Duration(attempt) * 500 * time.Millisecond
-		select {
-		case <-ctx.Done():
-			return uploadedChunkResult{}, ctx.Err()
-		case <-time.After(backoff):
+		if backoffErr := sleepBackoff(ctx, attempt); backoffErr != nil {
+			return uploadedChunkResult{}, backoffErr
 		}
 	}
 
@@ -112,7 +109,7 @@ func (m *StorageManager) verifySingleChunk(ctx context.Context, file *domain.Fil
 		chunkStartedAt := time.Now()
 		data, err := m.downloadAndDecryptChunkCached(ctx, file.ID, storage, chunk)
 		if err != nil {
-			if contextAborted(ctx, err) {
+			if contextAborted(ctx) {
 				return ctx.Err()
 			}
 			slog.Warn("chunk verification download failed", "position", result.Position, "file", file.Path, "attempt", attempt+1, "elapsed", time.Since(chunkStartedAt).Round(time.Millisecond), "err", err)
@@ -197,8 +194,8 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 	g.SetLimit(uploadPar)
 
 	// S1: pipeline verification — verify chunks as they finish uploading.
-	// Uses PipelineVerifyParallelism (5) instead of VerifyChunkParallelism (10)
-	// to avoid saturating the Telegram API when running alongside uploads.
+	// Capped at PipelineVerifyParallelism (5) to avoid saturating the Telegram
+	// API when running alongside uploads.
 	verifyCh := make(chan uploadedChunkResult, uploadPar)
 	vg, vctx := errgroup.WithContext(ctx)
 	vg.SetLimit(PipelineVerifyParallelism)
@@ -221,7 +218,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			vg.Go(func() error {
 				err := m.verifySingleChunk(vctx, file, *storage, result)
 				if err != nil {
-					if contextAborted(vctx, err) {
+					if contextAborted(vctx) {
 						return err
 					}
 					// Hash mismatch is permanent — fail the upload immediately.
@@ -302,7 +299,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			result, err := m.uploadChunkWithRetry(gctx, file, storage, pos, chunkDataRef, plainHash)
 			if err != nil {
 				// Context cancellation → propagate immediately
-				if contextAborted(gctx, err) {
+				if contextAborted(gctx) {
 					return err
 				}
 				// Transient failure → save for second round instead of aborting
@@ -436,7 +433,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			}
 			err := m.verifySingleChunk(ctx, file, *storage, result)
 			if err != nil {
-				if contextAborted(ctx, err) {
+				if contextAborted(ctx) {
 					cleanupAllResults()
 					return ctx.Err()
 				}
@@ -509,54 +506,4 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 	slog.Info("upload completed", "file", file.Path, "chunks", len(results), "storage", storage.Name, "chat", storage.Name)
 
 	return nil
-}
-
-// verifyUploadedChunks verifies each uploaded chunk by downloading it and comparing
-// its hash. Retained for backward compatibility with tests.
-func (m *StorageManager) verifyUploadedChunks(ctx context.Context, file *domain.File, storage domain.Storage, results []uploadedChunkResult, progress *UploadProgress) (failedPositions []int16, err error) {
-	if len(results) == 0 {
-		return nil, nil
-	}
-
-	parallelism := VerifyChunkParallelism
-	startedAt := time.Now()
-	slog.Info("verifying upload", "file", file.Path, "chunks", len(results), "parallelism", parallelism, "storage", storage.Name)
-
-	var mu sync.Mutex
-
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(parallelism)
-
-	for _, result := range results {
-		result := result
-		g.Go(func() error {
-			err := m.verifySingleChunk(gctx, file, storage, result)
-			if err != nil {
-				if contextAborted(gctx, err) {
-					return err
-				}
-				mu.Lock()
-				failedPositions = append(failedPositions, result.Position)
-				mu.Unlock()
-				return nil
-			}
-			if progress != nil {
-				progress.VerifiedChunks.Add(1)
-			}
-			return nil
-		})
-	}
-
-	if waitErr := g.Wait(); waitErr != nil {
-		slog.Error("upload verification aborted", "file", file.Path, "elapsed", time.Since(startedAt).Round(time.Millisecond), "err", waitErr)
-		return nil, waitErr
-	}
-
-	if len(failedPositions) > 0 {
-		slog.Error("upload verification completed with failures", "file", file.Path, "failed", len(failedPositions), "total", len(results), "elapsed", time.Since(startedAt).Round(time.Millisecond))
-		return failedPositions, fmt.Errorf("verification failed for %d chunk(s)", len(failedPositions))
-	}
-
-	slog.Info("upload verification completed", "file", file.Path, "chunks", len(results), "elapsed", time.Since(startedAt).Round(time.Millisecond))
-	return nil, nil
 }

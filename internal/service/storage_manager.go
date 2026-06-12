@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"sync"
 	"sync/atomic"
+	"time"
 
 	"github.com/google/uuid"
 	"golang.org/x/sync/singleflight"
@@ -78,15 +79,21 @@ func validateEncryptedChunkSize(chunk []byte) error {
 // or has expired. HTTP client timeouts wrap context.DeadlineExceeded internally,
 // but those are transient errors that should be retried — so we only check the
 // parent context, not the error chain.
-func contextAborted(ctx context.Context, err error) bool {
+func contextAborted(ctx context.Context) bool {
 	return ctx != nil && ctx.Err() != nil
 }
 
-func contextAbortError(ctx context.Context, err error) error {
-	if ctx != nil && ctx.Err() != nil {
+// sleepBackoff waits attempt*500ms before the next retry, returning ctx.Err()
+// if the context is cancelled while waiting. Used by the chunk upload and
+// download retry loops.
+func sleepBackoff(ctx context.Context, attempt int) error {
+	backoff := time.Duration(attempt) * 500 * time.Millisecond
+	select {
+	case <-ctx.Done():
 		return ctx.Err()
+	case <-time.After(backoff):
+		return nil
 	}
-	return err
 }
 
 func (m *StorageManager) getStreamChunkCache() *streamChunkCache {

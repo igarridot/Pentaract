@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
-	"time"
 
 	"github.com/google/uuid"
 
@@ -51,8 +50,8 @@ func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Stora
 	if err == nil {
 		return data, nil
 	}
-	if contextAborted(ctx, err) {
-		return nil, contextAbortError(ctx, err)
+	if contextAborted(ctx) {
+		return nil, ctx.Err()
 	}
 	if !isGetFileFailure(err) {
 		return nil, err
@@ -73,8 +72,8 @@ func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Stora
 			slog.Info("chunk recovered via fallback worker", "position", chunk.Position, "worker", candidate.Name)
 			return data, nil
 		}
-		if contextAborted(ctx, tryErr) {
-			return nil, contextAbortError(ctx, tryErr)
+		if contextAborted(ctx) {
+			return nil, ctx.Err()
 		}
 		lastErr = tryErr
 	}
@@ -91,17 +90,14 @@ func (m *StorageManager) downloadChunkWithRetry(ctx context.Context, storage dom
 		if err == nil {
 			return data, nil
 		}
-		if contextAborted(ctx, err) {
-			return nil, contextAbortError(ctx, err)
+		if contextAborted(ctx) {
+			return nil, ctx.Err()
 		}
 		lastErr = err
 		if attempt < DownloadChunkMaxAttempts {
 			slog.Warn("download chunk failed, retrying", "position", chunk.Position, "attempt", attempt, "max_attempts", DownloadChunkMaxAttempts, "err", err)
-			backoff := time.Duration(attempt) * 500 * time.Millisecond
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(backoff):
+			if backoffErr := sleepBackoff(ctx, attempt); backoffErr != nil {
+				return nil, backoffErr
 			}
 		}
 	}
