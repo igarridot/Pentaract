@@ -38,7 +38,6 @@ func shouldRetryChunkUpload(ctx context.Context, err error) bool {
 }
 
 func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.File, storage *domain.Storage, position int16, chunkData []byte, plainHash [sha256.Size]byte) (uploadedChunkResult, error) {
-	// S5: use pooled encryption buffer
 	encryptedChunkData, releaseEncBuf, err := m.chunkCipher.EncryptChunk(file.ID, position, chunkData)
 	if err != nil {
 		return uploadedChunkResult{}, fmt.Errorf("encrypting chunk %d: %w", position, err)
@@ -58,7 +57,6 @@ func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.
 
 		slog.Info("uploading chunk", "position", position, "file", file.Path, "worker", wt.Name, "storage", storage.Name, "attempt", attempt, "max_attempts", UploadChunkMaxAttempts)
 
-		// S6: propagate context to Telegram upload
 		result, err := m.tgClient.Upload(ctx, wt.Token, storage.ChatID, encryptedChunkData, filename)
 		if err == nil {
 			return uploadedChunkResult{

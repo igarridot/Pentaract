@@ -17,7 +17,7 @@ import (
 
 type mockUsersService struct {
 	registerFn       func(ctx context.Context, email, pass string) (*domain.User, error)
-	isAdminFn    func(user *appjwt.AuthUser) bool
+	isAdminFn        func(user *appjwt.AuthUser) bool
 	listManagedFn    func(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error)
 	updatePasswordFn func(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error
 	deleteManagedFn  func(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID) error

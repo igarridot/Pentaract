@@ -11,7 +11,7 @@ const (
 	// Upload tuning
 	UploadChunkMaxAttempts = 5
 	UploadChunkParallelism = 10
-	TokenBatchSize         = 5 // S2: pre-fetch multiple worker tokens per DB query
+	TokenBatchSize         = 5 // pre-fetch multiple worker tokens per DB query
 
 	// Download tuning
 	DownloadChunkMaxAttempts = 3

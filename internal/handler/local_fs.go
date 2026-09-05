@@ -3,7 +3,6 @@ package handler
 import (
 	"bufio"
 	"context"
-	"encoding/json"
 	"fmt"
 	"io"
 	"log/slog"
@@ -188,7 +187,7 @@ func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
 		}
 
 		pr, pw := io.Pipe()
-		// S3: Buffer one chunk ahead so the file reader can race ahead of
+		// Buffer one chunk ahead so the file reader can race ahead of
 		// the chunk encryption/upload pipeline, smoothing throughput.
 		go func() {
 			bw := bufio.NewWriterSize(pw, service.UploadChunkSize)
@@ -245,8 +244,8 @@ func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) 
 	}
 
 	var req uploadLocalBatchRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		writeError(w, domain.ErrBadRequest("invalid request body"))
+	if err := parseBody(r, &req); err != nil {
+		writeError(w, err)
 		return
 	}
 

@@ -53,8 +53,8 @@ func TestRunSuccess(t *testing.T) {
 
 func TestRunErrors(t *testing.T) {
 	tests := []struct {
-		name    string
-		mutate  func(d *runDeps)
+		name   string
+		mutate func(d *runDeps)
 	}{
 		{
 			name: "create db",

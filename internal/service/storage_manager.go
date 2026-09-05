@@ -80,7 +80,7 @@ func validateEncryptedChunkSize(chunk []byte) error {
 // but those are transient errors that should be retried — so we only check the
 // parent context, not the error chain.
 func contextAborted(ctx context.Context) bool {
-	return ctx != nil && ctx.Err() != nil
+	return ctx.Err() != nil
 }
 
 // sleepBackoff waits attempt*500ms before the next retry, returning ctx.Err()
@@ -205,7 +205,7 @@ type uploadedChunkResult struct {
 	PlainHash         [sha256.Size]byte
 }
 
-// S7: uploadParallelism calculates optimal upload concurrency based on
+// uploadParallelism calculates optimal upload concurrency based on
 // available workers and rate limit, avoiding contention when few workers
 // are configured.
 func (m *StorageManager) uploadParallelism(ctx context.Context, storageID uuid.UUID) int {

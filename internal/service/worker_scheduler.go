@@ -17,7 +17,7 @@ type WorkerScheduler struct {
 	rateLimit   int
 	mu          sync.RWMutex
 	waiting     map[uuid.UUID]int
-	// S2: buffered tokens to reduce DB round-trips
+	// buffered tokens to reduce DB round-trips
 	tokenBufMu sync.Mutex
 	tokenBuf   map[uuid.UUID][]*repository.WorkerToken
 }
@@ -70,7 +70,7 @@ func (s *WorkerScheduler) popBufferedToken(storageID uuid.UUID) *repository.Work
 }
 
 // GetToken blocks until a worker token is available for the given storage.
-// S2: tries to fetch tokens in batches and buffer extras to reduce DB queries.
+// It fetches tokens in batches and buffers the extras to reduce DB queries.
 func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*repository.WorkerToken, error) {
 	// Try buffer first
 	if t := s.popBufferedToken(storageID); t != nil {

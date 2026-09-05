@@ -115,7 +115,7 @@ func parseRateLimitError(resp *http.Response) *RateLimitError {
 // doWithRateLimitRetry executes do() up to maxRetries+1 times, handling 429 rate-limit
 // responses by sleeping for the retry_after duration and retrying. The name parameter
 // is used in log messages to identify the operation.
-// S6: respects context cancellation between retries.
+// Context cancellation is honoured between retries.
 func (c *Client) doWithRateLimitRetry(ctx context.Context, name string, do func() (*http.Response, error)) (*http.Response, error) {
 	for attempt := 0; attempt <= maxRetries; attempt++ {
 		select {
@@ -179,7 +179,6 @@ func buildUploadEnvelope(chatID int64, filename string) (prefix, suffix []byte, 
 }
 
 // Upload sends a file to a Telegram channel via sendDocument.
-// S6: accepts context for cancellation propagation.
 // Automatically retries on 429 (Too Many Requests) using the retry_after value.
 func (c *Client) Upload(ctx context.Context, token string, chatID int64, data []byte, filename string) (*UploadResult, error) {
 	convertedChatID := convertChatID(chatID)

@@ -96,7 +96,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	pr, pw := io.Pipe()
 	copyDone := make(chan struct{})
 
-	// S3: Buffer one chunk ahead so the HTTP body reader can race ahead of
+	// Buffer one chunk ahead so the HTTP body reader can race ahead of
 	// the chunk encryption/upload pipeline, smoothing throughput.
 	go func() {
 		defer close(copyDone)

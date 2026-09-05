@@ -177,7 +177,7 @@ func (r *StorageWorkersRepo) scheduleUsageCleanup() {
 // GetTokenBatch atomically selects up to `count` worker tokens, distributing
 // across workers proportionally to their free slots, and records one usage
 // entry per returned token. Returns nil if no workers are available.
-// S2: reduces DB round-trips for parallel chunk uploads.
+// Batching reduces DB round-trips for parallel chunk uploads.
 func (r *StorageWorkersRepo) GetTokenBatch(ctx context.Context, storageID uuid.UUID, rateLimit, count int) ([]WorkerToken, error) {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {

@@ -18,8 +18,8 @@ type Config struct {
 	DatabaseUser           string
 	DatabasePassword       string
 	DatabaseName           string
-	DatabaseHost string
-	DatabasePort int
+	DatabaseHost           string
+	DatabasePort           int
 }
 
 func (c *Config) DatabaseURL() string {
@@ -45,8 +45,8 @@ func Load() *Config {
 		DatabaseUser:           mustGetEnv("DATABASE_USER"),
 		DatabasePassword:       mustGetEnv("DATABASE_PASSWORD"),
 		DatabaseName:           mustGetEnv("DATABASE_NAME"),
-		DatabaseHost: getEnv("DATABASE_HOST", "db"),
-		DatabasePort: getEnvInt("DATABASE_PORT", 5432),
+		DatabaseHost:           getEnv("DATABASE_HOST", "db"),
+		DatabasePort:           getEnvInt("DATABASE_PORT", 5432),
 	}
 }
 

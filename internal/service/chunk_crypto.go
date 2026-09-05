@@ -15,7 +15,7 @@ import (
 	"golang.org/x/crypto/pbkdf2"
 )
 
-// S5: Pool for encryption output buffers to reduce GC pressure during
+// Pool for encryption output buffers to reduce GC pressure during
 // parallel chunk uploads (~20 MB per buffer, up to 10 concurrent).
 var encryptBufPool sync.Pool
 

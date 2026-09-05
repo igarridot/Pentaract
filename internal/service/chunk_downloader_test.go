@@ -133,34 +133,34 @@ func TestDownloadChunkContextCancellationDuringFallback(t *testing.T) {
 
 func TestInferRangeChunkWindowByteCorrectness(t *testing.T) {
 	tests := []struct {
-		name            string
-		start, end      int64
-		totalSize       int64
-		chunksCount     int
-		wantStartIdx    int
-		wantEndIdx      int
-		wantOffset      int64
-		wantOK          bool
+		name         string
+		start, end   int64
+		totalSize    int64
+		chunksCount  int
+		wantStartIdx int
+		wantEndIdx   int
+		wantOffset   int64
+		wantOK       bool
 	}{
 		{
-			name:         "single chunk always returns index 0",
-			start:        5, end: 10,
-			totalSize:   100,
-			chunksCount: 1,
+			name:  "single chunk always returns index 0",
+			start: 5, end: 10,
+			totalSize:    100,
+			chunksCount:  1,
 			wantStartIdx: 0, wantEndIdx: 0, wantOffset: 0, wantOK: true,
 		},
 		{
-			name:         "zero chunks returns not-ok",
-			start:        0, end: 10,
-			totalSize:   100,
-			chunksCount: 0,
+			name:  "zero chunks returns not-ok",
+			start: 0, end: 10,
+			totalSize:    100,
+			chunksCount:  0,
 			wantStartIdx: 0, wantEndIdx: 0, wantOffset: 0, wantOK: false,
 		},
 		{
-			name:         "range in first chunk",
-			start:        0, end: 100,
-			totalSize:   int64(UploadChunkSize) + 100,
-			chunksCount: 2,
+			name:  "range in first chunk",
+			start: 0, end: 100,
+			totalSize:    int64(UploadChunkSize) + 100,
+			chunksCount:  2,
 			wantStartIdx: 0, wantEndIdx: 0, wantOffset: 0, wantOK: true,
 		},
 		{
@@ -236,7 +236,7 @@ func TestDownloadAndDecryptChunkRoundTrip(t *testing.T) {
 	defer srv.Close()
 
 	m := &StorageManager{
-		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
+		scheduler:   NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
 	}

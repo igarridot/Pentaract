@@ -55,19 +55,19 @@ func run(ctx context.Context, deps runDeps) error {
 
 	// Create database if not exists
 	if err := deps.createDB(ctx, cfg); err != nil {
-		return fmt.Errorf("Failed to create database: %v", err)
+		return fmt.Errorf("creating database: %w", err)
 	}
 
 	// Connect to database
 	poolCfg, err := deps.parsePoolConfig(cfg.DatabaseURL())
 	if err != nil {
-		return fmt.Errorf("Failed to parse database config: %v", err)
+		return fmt.Errorf("parsing database config: %w", err)
 	}
 	poolCfg.MaxConns = int32(cfg.Workers * 8)
 
 	pool, err := deps.newPoolWithConfig(ctx, poolCfg)
 	if err != nil {
-		return fmt.Errorf("Failed to connect to database: %v", err)
+		return fmt.Errorf("connecting to database: %w", err)
 	}
 	if pool != nil {
 		defer pool.Close()
@@ -75,12 +75,12 @@ func run(ctx context.Context, deps runDeps) error {
 
 	// Run migrations
 	if err := deps.initDB(ctx, pool); err != nil {
-		return fmt.Errorf("Failed to initialize database: %v", err)
+		return fmt.Errorf("initializing database: %w", err)
 	}
 
 	// Create superuser
 	if err := deps.createSuperuser(ctx, pool, cfg); err != nil {
-		return fmt.Errorf("Failed to create superuser: %v", err)
+		return fmt.Errorf("creating superuser: %w", err)
 	}
 
 	// Build and start server
@@ -110,7 +110,7 @@ func run(ctx context.Context, deps runDeps) error {
 
 	slog.Info("server starting", "port", cfg.Port)
 	if err := deps.listenAndServe(srv); err != nil && err != http.ErrServerClosed {
-		return fmt.Errorf("Server error: %v", err)
+		return fmt.Errorf("serving http: %w", err)
 	}
 	return nil
 }
