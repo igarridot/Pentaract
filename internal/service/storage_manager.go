@@ -80,7 +80,7 @@ func validateEncryptedChunkSize(chunk []byte) error {
 // but those are transient errors that should be retried — so we only check the
 // parent context, not the error chain.
 func contextAborted(ctx context.Context) bool {
-	return ctx != nil && ctx.Err() != nil
+	return ctx.Err() != nil
 }
 
 // sleepBackoff waits attempt*500ms before the next retry, returning ctx.Err()
@@ -107,17 +107,53 @@ func (m *StorageManager) getStreamChunkCache() *streamChunkCache {
 	return m.streamChunkCache
 }
 
-// UploadProgress tracks chunk upload progress.
+// UploadProgress tracks chunk upload progress. All methods are safe to call
+// on a nil receiver so callers that do not track progress can pass nil.
 type UploadProgress struct {
 	TotalChunks             int32
 	UploadedChunks          atomic.Int32
 	TotalBytes              int64
 	UploadedBytes           atomic.Int64
-	VerificationTotalChunks atomic.Int32 // S1: atomic for concurrent pipeline verification
+	VerificationTotalChunks atomic.Int32 // atomic: updated concurrently by the verification pipeline
 	VerifiedChunks          atomic.Int32
 }
 
-// DownloadProgress tracks chunk download progress.
+// expectedChunks derives TotalChunks from TotalBytes when the size is known.
+func (p *UploadProgress) expectedChunks() {
+	if p == nil || p.TotalBytes <= 0 {
+		return
+	}
+	total := int32(p.TotalBytes / UploadChunkSize)
+	if p.TotalBytes%UploadChunkSize != 0 {
+		total++
+	}
+	p.TotalChunks = total
+}
+
+func (p *UploadProgress) setTotalChunks(total int32) {
+	if p != nil {
+		p.TotalChunks = total
+	}
+}
+
+// chunkUploaded records one uploaded chunk that is now pending verification.
+func (p *UploadProgress) chunkUploaded(bytes int) {
+	if p == nil {
+		return
+	}
+	p.UploadedChunks.Add(1)
+	p.UploadedBytes.Add(int64(bytes))
+	p.VerificationTotalChunks.Add(1)
+}
+
+func (p *UploadProgress) chunkVerified() {
+	if p != nil {
+		p.VerifiedChunks.Add(1)
+	}
+}
+
+// DownloadProgress tracks chunk download progress. All methods are safe to
+// call on a nil receiver.
 type DownloadProgress struct {
 	TotalChunks      int64
 	DownloadedChunks atomic.Int64
@@ -125,10 +161,41 @@ type DownloadProgress struct {
 	DownloadedBytes  atomic.Int64
 }
 
-// DeleteProgress tracks chunk deletion progress in Telegram.
+// setTotalsIfUnset fills the totals once; directory downloads pre-set them
+// for the whole archive, so per-file downloads must not overwrite them.
+func (p *DownloadProgress) setTotalsIfUnset(chunks, bytes int64) {
+	if p == nil || p.TotalChunks != 0 || p.TotalBytes != 0 {
+		return
+	}
+	p.TotalChunks = chunks
+	p.TotalBytes = bytes
+}
+
+func (p *DownloadProgress) chunkDownloaded(bytes int64) {
+	if p == nil {
+		return
+	}
+	p.DownloadedChunks.Add(1)
+	p.DownloadedBytes.Add(bytes)
+}
+
+// DeleteProgress tracks chunk deletion progress in Telegram. All methods are
+// safe to call on a nil receiver.
 type DeleteProgress struct {
 	TotalChunks   int64
 	DeletedChunks atomic.Int64
+}
+
+func (p *DeleteProgress) setTotalChunks(total int64) {
+	if p != nil {
+		p.TotalChunks = total
+	}
+}
+
+func (p *DeleteProgress) chunkDeleted() {
+	if p != nil {
+		p.DeletedChunks.Add(1)
+	}
 }
 
 type uploadedChunkResult struct {
@@ -138,7 +205,7 @@ type uploadedChunkResult struct {
 	PlainHash         [sha256.Size]byte
 }
 
-// S7: uploadParallelism calculates optimal upload concurrency based on
+// uploadParallelism calculates optimal upload concurrency based on
 // available workers and rate limit, avoiding contention when few workers
 // are configured.
 func (m *StorageManager) uploadParallelism(ctx context.Context, storageID uuid.UUID) int {

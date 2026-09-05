@@ -1,6 +1,6 @@
 import { Box, Typography } from '@mui/material'
 import { convertSize } from '../common/size_converter'
-import { calculatePercent } from '../common/progress'
+import { calculatePercent, workersStatusText } from '../common/progress'
 import { useTransferSpeed } from '../common/use_transfer_speed'
 import ProgressCard from './ProgressCard'
 
@@ -14,7 +14,7 @@ export default function DownloadProgress({ filename, totalBytes, downloadedBytes
   const speed = useTransferSpeed(downloadedBytes)
 
   const speedText = speed > 0 && isActive ? `${convertSize(speed)}/s` : ''
-  const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
+  const workersText = workersStatusText(workersStatus)
   const chunkText = totalChunks > 0
     ? `${downloadedChunks}/${totalChunks} chunks \u00b7 ${pendingChunks} pending`
     : `${downloadedChunks} chunks`

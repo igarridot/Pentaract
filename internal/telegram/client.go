@@ -22,7 +22,18 @@ import (
 
 const maxRetries = 3
 
-var telegramSleep = time.Sleep
+// telegramSleep waits d or until ctx is cancelled. Tests replace it to skip
+// rate-limit and backoff waits.
+var telegramSleep = func(ctx context.Context, d time.Duration) error {
+	timer := time.NewTimer(d)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
 
 type Client struct {
 	baseURL        string
@@ -40,39 +51,28 @@ func newTransport() *http.Transport {
 	return transport
 }
 
-// newUploadClient returns an HTTP client for uploads (large body sends).
-// 2 minutes accommodates ~20MB chunks on slow connections (e.g. 2 Mbps ~80s)
-// plus Telegram processing, TLS negotiation and rate-limit waits.
-func newUploadClient() *http.Client {
+// newHTTPClient returns a client for Telegram calls. 2 minutes accommodates
+// ~20MB chunks on slow connections (e.g. 2 Mbps ~80s) plus Telegram
+// processing, TLS negotiation and rate-limit waits.
+func newHTTPClient() *http.Client {
 	return &http.Client{
 		Timeout:   2 * time.Minute,
 		Transport: newTransport(),
 	}
 }
 
-// newDownloadClient returns an HTTP client for downloads and API calls
-// where a 2-minute timeout is more than enough for ~20MB chunks.
-func newDownloadClient() *http.Client {
-	return &http.Client{
-		Timeout:   2 * time.Minute,
-		Transport: newTransport(),
-	}
+// retryBackoff is the wait before retry number attempt (0-based).
+func retryBackoff(attempt int) time.Duration {
+	return time.Duration(attempt+1) * 500 * time.Millisecond
 }
 
-// retryBackoff sleeps with exponential backoff before a retry attempt.
-func retryBackoff(ctx context.Context, attempt int) {
-	backoff := time.Duration(attempt+1) * 500 * time.Millisecond
-	select {
-	case <-ctx.Done():
-	case <-time.After(backoff):
-	}
-}
-
+// NewClient builds a Telegram Bot API client. Uploads and downloads use
+// separate connection pools so large sends never starve chunk fetches.
 func NewClient(baseURL string) *Client {
 	return &Client{
 		baseURL:        baseURL,
-		httpClient:     newUploadClient(),
-		downloadClient: newDownloadClient(),
+		httpClient:     newHTTPClient(),
+		downloadClient: newHTTPClient(),
 	}
 }
 
@@ -112,47 +112,70 @@ func parseRateLimitError(resp *http.Response) *RateLimitError {
 	}
 }
 
-// doWithRateLimitRetry executes do() up to maxRetries+1 times, handling 429 rate-limit
-// responses by sleeping for the retry_after duration and retrying. The name parameter
-// is used in log messages to identify the operation.
-// S6: respects context cancellation between retries.
-func (c *Client) doWithRateLimitRetry(ctx context.Context, name string, do func() (*http.Response, error)) (*http.Response, error) {
+// doWithRetry sends the request built by newReq up to maxRetries+1 times and
+// returns the status code with the fully read body. It retries transient
+// transport errors and body read failures with backoff, and 429 responses
+// after sleeping for Telegram's retry_after. name identifies the call in logs
+// and errors. Context cancellation is honoured between retries.
+func (c *Client) doWithRetry(ctx context.Context, client *http.Client, name string, newReq func() (*http.Request, error)) (int, []byte, error) {
 	for attempt := 0; attempt <= maxRetries; attempt++ {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return 0, nil, err
 		}
 
-		resp, err := do()
+		req, err := newReq()
+		if err != nil {
+			return 0, nil, fmt.Errorf("creating %s request: %w", name, err)
+		}
+
+		resp, err := client.Do(req)
 		if err != nil {
 			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
 				slog.Warn("telegram transient error on "+name+", retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
-				retryBackoff(ctx, attempt)
+				if err := telegramSleep(ctx, retryBackoff(attempt)); err != nil {
+					return 0, nil, err
+				}
 				continue
 			}
-			return nil, err
+			return 0, nil, fmt.Errorf("%s request: %w", name, err)
 		}
 
 		if rlErr := parseRateLimitError(resp); rlErr != nil {
 			resp.Body.Close()
 			if attempt == maxRetries {
-				return nil, rlErr
+				return 0, nil, rlErr
 			}
 			slog.Warn("telegram rate limited on "+name, "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
-			sleepDur := time.Duration(rlErr.RetryAfter) * time.Second
-			select {
-			case <-ctx.Done():
-				return nil, ctx.Err()
-			case <-time.After(sleepDur):
+			if err := telegramSleep(ctx, time.Duration(rlErr.RetryAfter)*time.Second); err != nil {
+				return 0, nil, err
 			}
 			continue
 		}
 
-		return resp, nil
+		body, err := io.ReadAll(resp.Body)
+		resp.Body.Close()
+		if err != nil {
+			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
+				slog.Warn("telegram transient read error on "+name+", retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
+				if err := telegramSleep(ctx, retryBackoff(attempt)); err != nil {
+					return 0, nil, err
+				}
+				continue
+			}
+			return 0, nil, fmt.Errorf("reading %s response: %w", name, err)
+		}
+
+		return resp.StatusCode, body, nil
 	}
 
-	return nil, fmt.Errorf("telegram %s failed after %d retries", name, maxRetries)
+	return 0, nil, fmt.Errorf("telegram %s failed after %d retries", name, maxRetries)
+}
+
+// getWithRetry is doWithRetry for a plain GET.
+func (c *Client) getWithRetry(ctx context.Context, client *http.Client, name, url string) (int, []byte, error) {
+	return c.doWithRetry(ctx, client, name, func() (*http.Request, error) {
+		return http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
+	})
 }
 
 func buildUploadEnvelope(chatID int64, filename string) (prefix, suffix []byte, contentType string, err error) {
@@ -179,49 +202,35 @@ func buildUploadEnvelope(chatID int64, filename string) (prefix, suffix []byte, 
 }
 
 // Upload sends a file to a Telegram channel via sendDocument.
-// S6: accepts context for cancellation propagation.
 // Automatically retries on 429 (Too Many Requests) using the retry_after value.
 func (c *Client) Upload(ctx context.Context, token string, chatID int64, data []byte, filename string) (*UploadResult, error) {
-	convertedChatID := convertChatID(chatID)
-	prefix, suffix, contentType, err := buildUploadEnvelope(convertedChatID, filename)
+	prefix, suffix, contentType, err := buildUploadEnvelope(convertChatID(chatID), filename)
 	if err != nil {
 		return nil, err
 	}
 
 	apiURL := fmt.Sprintf("%s/bot%s/sendDocument", c.baseURL, token)
-
-	resp, err := c.doWithRateLimitRetry(ctx, "sendDocument", func() (*http.Response, error) {
-		body := io.MultiReader(bytes.NewReader(prefix), bytes.NewReader(data), bytes.NewReader(suffix))
-		req, err := http.NewRequestWithContext(ctx, "POST", apiURL, body)
+	status, body, err := c.doWithRetry(ctx, c.httpClient, "sendDocument", func() (*http.Request, error) {
+		reqBody := io.MultiReader(bytes.NewReader(prefix), bytes.NewReader(data), bytes.NewReader(suffix))
+		req, err := http.NewRequestWithContext(ctx, http.MethodPost, apiURL, reqBody)
 		if err != nil {
-			return nil, fmt.Errorf("creating request: %w", err)
+			return nil, err
 		}
 		req.Header.Set("Content-Type", contentType)
 		req.ContentLength = int64(len(prefix) + len(data) + len(suffix))
-
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("sending document: %w", err)
-		}
-		return resp, nil
+		return req, nil
 	})
 	if err != nil {
 		return nil, err
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return nil, fmt.Errorf("telegram API error (status %d): %s", resp.StatusCode, string(respBody))
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("telegram API error (status %d): %s", status, string(body))
 	}
 
 	var result SendDocumentResponse
-	err = json.NewDecoder(resp.Body).Decode(&result)
-	resp.Body.Close()
-	if err != nil {
+	if err := json.Unmarshal(body, &result); err != nil {
 		return nil, fmt.Errorf("decoding response: %w", err)
 	}
-
 	if !result.OK {
 		return nil, fmt.Errorf("telegram sendDocument failed")
 	}
@@ -235,27 +244,16 @@ func (c *Client) Upload(ctx context.Context, token string, chatID int64, data []
 // DeleteMessage deletes a message from a Telegram channel.
 // Automatically retries on 429 (Too Many Requests).
 func (c *Client) DeleteMessage(ctx context.Context, token string, chatID int64, messageID int64) error {
-	convertedChatID := convertChatID(chatID)
 	apiURL := fmt.Sprintf("%s/bot%s/deleteMessage?chat_id=%d&message_id=%d",
-		c.baseURL, token, convertedChatID, messageID)
+		c.baseURL, token, convertChatID(chatID), messageID)
 
-	resp, err := c.doWithRateLimitRetry(ctx, "deleteMessage", func() (*http.Response, error) {
-		resp, err := c.httpClient.Get(apiURL)
-		if err != nil {
-			return nil, fmt.Errorf("deleting message: %w", err)
-		}
-		return resp, nil
-	})
+	status, body, err := c.getWithRetry(ctx, c.httpClient, "deleteMessage", apiURL)
 	if err != nil {
 		return err
 	}
-
-	if resp.StatusCode != http.StatusOK {
-		respBody, _ := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		return fmt.Errorf("telegram deleteMessage error (status %d): %s", resp.StatusCode, string(respBody))
+	if status != http.StatusOK {
+		return fmt.Errorf("telegram deleteMessage error (status %d): %s", status, string(body))
 	}
-	resp.Body.Close()
 	return nil
 }
 
@@ -266,25 +264,9 @@ func (c *Client) ResolveFileIDByMessage(ctx context.Context, token string, chatI
 	apiURL := fmt.Sprintf("%s/bot%s/forwardMessage?chat_id=%d&from_chat_id=%d&message_id=%d&disable_notification=true",
 		c.baseURL, token, convertedChatID, convertedChatID, messageID)
 
-	resp, err := c.doWithRateLimitRetry(ctx, "forwardMessage", func() (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, apiURL, nil)
-		if err != nil {
-			return nil, fmt.Errorf("creating forwardMessage request: %w", err)
-		}
-		resp, err := c.httpClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("forwarding message: %w", err)
-		}
-		return resp, nil
-	})
+	status, body, err := c.getWithRetry(ctx, c.httpClient, "forwardMessage", apiURL)
 	if err != nil {
 		return "", err
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return "", fmt.Errorf("reading forwardMessage response: %w", err)
 	}
 
 	var forwardResp ForwardMessageResponse
@@ -292,8 +274,8 @@ func (c *Client) ResolveFileIDByMessage(ctx context.Context, token string, chatI
 		return "", fmt.Errorf("decoding forwardMessage response: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
-		return "", fmt.Errorf("%w: forwardMessage failed (status %d): %s", domain.ErrTelegramResolveFailed, resp.StatusCode, string(body))
+	if status != http.StatusOK {
+		return "", fmt.Errorf("%w: forwardMessage failed (status %d): %s", domain.ErrTelegramResolveFailed, status, string(body))
 	}
 	if !forwardResp.OK || forwardResp.Result.Document.FileID == "" {
 		return "", fmt.Errorf("%w: forwardMessage missing document file_id: %s", domain.ErrTelegramResolveFailed, string(body))
@@ -306,14 +288,10 @@ func (c *Client) ResolveFileIDByMessage(ctx context.Context, token string, chatI
 	return forwardResp.Result.Document.FileID, nil
 }
 
+// isRetryableDownloadError reports whether a transport or body read error is
+// worth retrying: network errors and truncated bodies, unless ctx is done.
 func isRetryableDownloadError(ctx context.Context, err error) bool {
-	if err == nil {
-		return false
-	}
-	if ctx != nil && ctx.Err() != nil {
-		return false
-	}
-	if errors.Is(err, context.Canceled) {
+	if err == nil || ctx.Err() != nil || errors.Is(err, context.Canceled) {
 		return false
 	}
 	if errors.Is(err, io.ErrUnexpectedEOF) || errors.Is(err, io.EOF) {
@@ -325,30 +303,13 @@ func isRetryableDownloadError(ctx context.Context, err error) bool {
 }
 
 // Download retrieves a file from Telegram by its file_id honoring request cancellation.
-// Automatically retries on 429 (Too Many Requests).
+// Automatically retries on 429 (Too Many Requests) and transient transport errors.
 func (c *Client) Download(ctx context.Context, token string, telegramFileID string) ([]byte, error) {
-	// Step 1: Get file path (with retry on 429 and transient errors)
+	// Step 1: resolve the file path.
 	getFileURL := fmt.Sprintf("%s/bot%s/getFile?file_id=%s", c.baseURL, token, url.QueryEscape(telegramFileID))
-
-	resp, err := c.doWithRateLimitRetry(ctx, "getFile", func() (*http.Response, error) {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, getFileURL, nil)
-		if err != nil {
-			return nil, fmt.Errorf("creating getFile request: %w", err)
-		}
-		resp, err := c.downloadClient.Do(req)
-		if err != nil {
-			return nil, fmt.Errorf("getting file info: %w", err)
-		}
-		return resp, nil
-	})
+	status, body, err := c.getWithRetry(ctx, c.downloadClient, "getFile", getFileURL)
 	if err != nil {
 		return nil, err
-	}
-
-	body, err := io.ReadAll(resp.Body)
-	resp.Body.Close()
-	if err != nil {
-		return nil, fmt.Errorf("reading getFile response: %w", err)
 	}
 
 	var fileResp GetFileResponse
@@ -356,65 +317,32 @@ func (c *Client) Download(ctx context.Context, token string, telegramFileID stri
 		return nil, fmt.Errorf("decoding file info: %w", err)
 	}
 
-	if resp.StatusCode != http.StatusOK {
+	if status != http.StatusOK {
 		errMsg := string(body)
 		if strings.Contains(strings.ToLower(errMsg), "file is too big") {
-			return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramFileTooBig, resp.StatusCode, errMsg)
+			return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramFileTooBig, status, errMsg)
 		}
-		return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramGetFileFailed, resp.StatusCode, errMsg)
+		return nil, fmt.Errorf("%w (status %d): %s", domain.ErrTelegramGetFileFailed, status, errMsg)
 	}
 	if !fileResp.OK || fileResp.Result.FilePath == "" {
 		return nil, fmt.Errorf("%w: %s", domain.ErrTelegramGetFileFailed, string(body))
 	}
 
-	// Step 2: Download the file (with retry on 429 and transient errors)
+	// Step 2: download the file bytes.
 	downloadURL := fmt.Sprintf("%s/file/bot%s/%s", c.baseURL, token, fileResp.Result.FilePath)
-	for attempt := 0; attempt <= maxRetries; attempt++ {
-		req, err := http.NewRequestWithContext(ctx, http.MethodGet, downloadURL, nil)
-		if err != nil {
-			return nil, fmt.Errorf("creating file download request: %w", err)
+	status, data, err := c.getWithRetry(ctx, c.downloadClient, "file download", downloadURL)
+	if err != nil {
+		var rlErr *RateLimitError
+		if errors.As(err, &rlErr) {
+			return nil, err
 		}
-		dlResp, err := c.downloadClient.Do(req)
-		if err != nil {
-			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
-				slog.Warn("transient file download error, retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
-				retryBackoff(ctx, attempt)
-				continue
-			}
-			return nil, fmt.Errorf("%w: %v", domain.ErrDownloadInterrupted, err)
-		}
-
-		if rlErr := parseRateLimitError(dlResp); rlErr != nil {
-			dlResp.Body.Close()
-			if attempt == maxRetries {
-				return nil, rlErr
-			}
-			slog.Warn("telegram rate limited on file download", "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
-			telegramSleep(time.Duration(rlErr.RetryAfter) * time.Second)
-			continue
-		}
-
-		if dlResp.StatusCode != http.StatusOK {
-			respBody, _ := io.ReadAll(dlResp.Body)
-			dlResp.Body.Close()
-			return nil, fmt.Errorf("telegram file download error (status %d): %s", dlResp.StatusCode, string(respBody))
-		}
-
-		data, err := io.ReadAll(dlResp.Body)
-		dlResp.Body.Close()
-		if err != nil {
-			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
-				slog.Warn("transient file read error, retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
-				retryBackoff(ctx, attempt)
-				continue
-			}
-			return nil, fmt.Errorf("%w: %v", domain.ErrDownloadInterrupted, err)
-		}
-
-		return data, nil
+		return nil, fmt.Errorf("%w: %v", domain.ErrDownloadInterrupted, err)
+	}
+	if status != http.StatusOK {
+		return nil, fmt.Errorf("telegram file download error (status %d): %s", status, string(data))
 	}
 
-	return nil, fmt.Errorf("telegram file download failed after %d retries", maxRetries)
+	return data, nil
 }
 
 // GenerateChunkFilename generates a filename for a chunk.

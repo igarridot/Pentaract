@@ -38,7 +38,6 @@ func shouldRetryChunkUpload(ctx context.Context, err error) bool {
 }
 
 func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.File, storage *domain.Storage, position int16, chunkData []byte, plainHash [sha256.Size]byte) (uploadedChunkResult, error) {
-	// S5: use pooled encryption buffer
 	encryptedChunkData, releaseEncBuf, err := m.chunkCipher.EncryptChunk(file.ID, position, chunkData)
 	if err != nil {
 		return uploadedChunkResult{}, fmt.Errorf("encrypting chunk %d: %w", position, err)
@@ -58,7 +57,6 @@ func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.
 
 		slog.Info("uploading chunk", "position", position, "file", file.Path, "worker", wt.Name, "storage", storage.Name, "attempt", attempt, "max_attempts", UploadChunkMaxAttempts)
 
-		// S6: propagate context to Telegram upload
 		result, err := m.tgClient.Upload(ctx, wt.Token, storage.ChatID, encryptedChunkData, filename)
 		if err == nil {
 			return uploadedChunkResult{
@@ -132,10 +130,14 @@ func (m *StorageManager) verifySingleChunk(ctx context.Context, file *domain.Fil
 	return fmt.Errorf("verifying chunk %d: exhausted retries", result.Position)
 }
 
-// Upload reads from reader chunk by chunk (streaming), uploads to Telegram in parallel,
-// and records chunk metadata in the DB. Never holds the full file in memory.
-// S1: verification runs concurrently as chunks complete (pipeline).
-// S7: upload parallelism adapts to available workers.
+// Upload reads from reader chunk by chunk (streaming), uploads to Telegram in
+// parallel and records chunk metadata in the DB. It never holds the full file
+// in memory. Chunks are verified concurrently as they finish uploading, and
+// the upload parallelism adapts to the available workers.
+//
+// Phases: parallel upload -> sequential retry of failed chunks -> drain the
+// verifier -> retry transiently failed verifications -> persist. Any failure
+// deletes the chunks already sent to Telegram.
 func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
 	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
@@ -143,367 +145,394 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 	}
 
 	slog.Info("starting upload", "file", file.Path, "storage", storage.Name, "chat", storage.Name)
+	progress.expectedChunks()
 
-	// Calculate total chunks from file size if known
-	if progress != nil && progress.TotalBytes > 0 {
-		total := int32(progress.TotalBytes / UploadChunkSize)
-		if progress.TotalBytes%UploadChunkSize != 0 {
-			total++
-		}
-		progress.TotalChunks = total
+	parallelism := m.uploadParallelism(ctx, storage.ID)
+	slog.Info("upload parallelism", "file", file.Path, "parallelism", parallelism)
+
+	run := &uploadRun{
+		m:        m,
+		ctx:      ctx,
+		file:     file,
+		storage:  storage,
+		progress: progress,
+		verifier: m.startChunkVerifier(ctx, file, *storage, progress, parallelism),
 	}
 
-	var mu sync.Mutex
-	var results []uploadedChunkResult
-	var failedChunks []failedChunkInfo
-	var failedVerifyPositions []int16
-
-	// cleanupResultsSelective deletes the given chunk results from Telegram.
-	cleanupResultsSelective := func(toClean []uploadedChunkResult) {
-		if len(toClean) == 0 {
-			return
-		}
-		slog.Warn("cleaning up chunks from telegram", "file", file.Path, "chunks", len(toClean))
-		cleanupChunks := make([]domain.FileChunk, len(toClean))
-		for i, r := range toClean {
-			cleanupChunks[i] = domain.FileChunk{
-				TelegramMessageID: r.TelegramMessageID,
-			}
-		}
-		go func() {
-			if err := m.DeleteFromTelegram(context.Background(), *storage, cleanupChunks, nil); err != nil {
-				slog.Error("cleanup after failed upload returned error", "err", err)
-			}
-		}()
+	if err := run.uploadChunks(reader, parallelism); err != nil {
+		return run.abort(err)
+	}
+	if err := run.retryFailedChunks(); err != nil {
+		return run.abort(err)
+	}
+	if err := run.verifier.stop(); err != nil {
+		return run.abort(err)
 	}
 
-	// cleanupAllResults deletes all uploaded chunks from Telegram.
-	cleanupAllResults := func() {
-		mu.Lock()
-		uploaded := make([]uploadedChunkResult, len(results))
-		copy(uploaded, results)
-		mu.Unlock()
-		cleanupResultsSelective(uploaded)
+	failedPositions, err := run.retryFailedVerifications()
+	if err != nil {
+		return run.abort(err)
+	}
+	if len(failedPositions) > 0 {
+		slog.Error("upload verification completed with failures", "file", file.Path, "failed", len(failedPositions), "total", len(run.results))
+		return run.abort(fmt.Errorf("verification failed for %d chunk(s)", len(failedPositions)))
 	}
 
-	// S7: adaptive parallelism
-	uploadPar := m.uploadParallelism(ctx, storage.ID)
-	slog.Info("upload parallelism", "file", file.Path, "parallelism", uploadPar)
+	return run.persist()
+}
 
-	g, gctx := errgroup.WithContext(ctx)
-	g.SetLimit(uploadPar)
+// uploadRun holds the state shared by the phases of a single Upload call.
+type uploadRun struct {
+	m        *StorageManager
+	ctx      context.Context
+	file     *domain.File
+	storage  *domain.Storage
+	progress *UploadProgress
+	verifier *chunkVerifier
 
-	// S1: pipeline verification — verify chunks as they finish uploading.
-	// Capped at PipelineVerifyParallelism (5) to avoid saturating the Telegram
-	// API when running alongside uploads.
-	verifyCh := make(chan uploadedChunkResult, uploadPar)
-	vg, vctx := errgroup.WithContext(ctx)
-	vg.SetLimit(PipelineVerifyParallelism)
+	mu           sync.Mutex
+	results      []uploadedChunkResult
+	failedChunks []failedChunkInfo
+}
 
-	cb := newVerifyCircuitBreaker()
-	var verifyMu sync.Mutex
-	var verifyRetryQueue []uploadedChunkResult
-	verifyDone := make(chan struct{})
-	go func() {
-		defer close(verifyDone)
-		for result := range verifyCh {
-			result := result
+// uploadChunks streams the reader into chunks and uploads them in parallel.
+// Chunks that fail transiently are collected for retryFailedChunks instead of
+// failing the whole upload.
+func (r *uploadRun) uploadChunks(reader io.Reader, parallelism int) error {
+	g, gctx := errgroup.WithContext(r.ctx)
+	g.SetLimit(parallelism)
 
-			// Circuit breaker: if tripped, wait for the cooldown period
-			// before dispatching more verifications.
-			if err := cb.WaitIfTripped(vctx); err != nil {
-				return
-			}
+	stopWatch := closeOnCancel(r.ctx, reader)
+	defer stopWatch()
 
-			vg.Go(func() error {
-				err := m.verifySingleChunk(vctx, file, *storage, result)
-				if err != nil {
-					if contextAborted(vctx) {
-						return err
-					}
-					// Hash mismatch is permanent — fail the upload immediately.
-					if isHashMismatch(err) {
-						verifyMu.Lock()
-						failedVerifyPositions = append(failedVerifyPositions, result.Position)
-						verifyMu.Unlock()
-						slog.Error("pipeline verification hash mismatch", "position", result.Position, "file", file.Path, "err", err)
-						return fmt.Errorf("verification of chunk %d failed: %w", result.Position, err)
-					}
-					// Transient failure (download timeout / throttling) —
-					// notify the circuit breaker and queue for retry after
-					// cooldown instead of aborting the entire upload.
-					cb.RecordFailure()
-					verifyMu.Lock()
-					verifyRetryQueue = append(verifyRetryQueue, result)
-					verifyMu.Unlock()
-					slog.Warn("pipeline verification transient failure, queued for retry",
-						"position", result.Position, "file", file.Path,
-						"consecutive_failures", cb.ConsecutiveFailures(), "err", err)
-					return nil
-				}
-				cb.RecordSuccess()
-				if progress != nil {
-					progress.VerifiedChunks.Add(1)
-				}
-				return nil
-			})
-		}
-	}()
-
-	// Close the reader when context is cancelled so io.ReadFull unblocks.
-	cancelled := make(chan struct{})
-	go func() {
-		select {
-		case <-ctx.Done():
-			if rc, ok := reader.(io.Closer); ok {
-				rc.Close()
-			}
-		case <-cancelled:
-		}
-	}()
-	defer close(cancelled)
-
-	position := int16(0)
-	var readCancelled bool
-	for {
-		// Check context before blocking on read
-		select {
-		case <-ctx.Done():
-			readCancelled = true
-		default:
-		}
-		if readCancelled {
-			break
-		}
-
-		uploadBuf := uploadChunkBufferPool.Get().([]byte)
-		n, readErr := io.ReadFull(reader, uploadBuf)
+	var position int16
+	for r.ctx.Err() == nil {
+		buf := uploadChunkBufferPool.Get().([]byte)
+		n, readErr := io.ReadFull(reader, buf)
 		if n == 0 && readErr != nil {
-			uploadChunkBufferPool.Put(uploadBuf)
-			// Check if the read failed due to cancellation
-			if ctx.Err() != nil {
-				readCancelled = true
-			}
+			uploadChunkBufferPool.Put(buf)
 			break
 		}
-		chunkData := uploadBuf[:n]
+
+		chunk := buf[:n]
 		pos := position
-		plainHash := sha256.Sum256(chunkData)
 		position++
-		uploadBufRef := uploadBuf
-		chunkDataRef := chunkData
-
+		hash := sha256.Sum256(chunk)
 		g.Go(func() error {
-			defer uploadChunkBufferPool.Put(uploadBufRef)
-
-			result, err := m.uploadChunkWithRetry(gctx, file, storage, pos, chunkDataRef, plainHash)
-			if err != nil {
-				// Context cancellation → propagate immediately
-				if contextAborted(gctx) {
-					return err
-				}
-				// Transient failure → save for second round instead of aborting
-				dataCopy := make([]byte, len(chunkDataRef))
-				copy(dataCopy, chunkDataRef)
-				mu.Lock()
-				failedChunks = append(failedChunks, failedChunkInfo{
-					position:  pos,
-					data:      dataCopy,
-					plainHash: plainHash,
-				})
-				mu.Unlock()
-				return nil
-			}
-
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
-
-			if progress != nil {
-				progress.UploadedChunks.Add(1)
-				progress.UploadedBytes.Add(int64(len(chunkDataRef)))
-				progress.VerificationTotalChunks.Add(1)
-			}
-
-			// S1: send for pipeline verification
-			select {
-			case verifyCh <- result:
-			case <-gctx.Done():
-				return gctx.Err()
-			}
-
-			return nil
+			defer uploadChunkBufferPool.Put(buf)
+			return r.uploadChunk(gctx, pos, chunk, hash)
 		})
 
 		if readErr != nil {
-			if ctx.Err() != nil {
-				readCancelled = true
-			}
 			break
 		}
 	}
 
-	if progress != nil {
-		progress.TotalChunks = int32(position)
+	r.progress.setTotalChunks(int32(position))
+
+	if err := g.Wait(); err != nil {
+		return err
 	}
+	return r.ctx.Err()
+}
 
-	waitErr := g.Wait()
-
-	// If cancelled or errgroup propagated a context error, clean up
-	if readCancelled || waitErr != nil {
-		close(verifyCh)
-		<-verifyDone
-		vg.Wait()
-		cleanupAllResults()
-		if waitErr != nil {
-			return waitErr
+func (r *uploadRun) uploadChunk(ctx context.Context, position int16, data []byte, hash [sha256.Size]byte) error {
+	result, err := r.m.uploadChunkWithRetry(ctx, r.file, r.storage, position, data, hash)
+	if err != nil {
+		if contextAborted(ctx) {
+			return err
 		}
-		return ctx.Err()
+		// Transient failure: keep an independent copy (the pool buffer is
+		// reused) for the sequential second round instead of aborting.
+		r.mu.Lock()
+		r.failedChunks = append(r.failedChunks, failedChunkInfo{
+			position:  position,
+			data:      append([]byte(nil), data...),
+			plainHash: hash,
+		})
+		r.mu.Unlock()
+		return nil
 	}
 
-	// Second round: retry failed chunks sequentially (avoids rate limiting)
-	if len(failedChunks) > 0 {
-		slog.Warn("retrying failed chunks sequentially", "file", file.Path, "failed", len(failedChunks), "succeeded", len(results))
-		for _, fc := range failedChunks {
-			if ctx.Err() != nil {
-				close(verifyCh)
-				<-verifyDone
-				vg.Wait()
-				cleanupAllResults()
-				return ctx.Err()
-			}
-			result, err := m.uploadChunkWithRetry(ctx, file, storage, fc.position, fc.data, fc.plainHash)
-			if err != nil {
-				close(verifyCh)
-				<-verifyDone
-				vg.Wait()
-				cleanupAllResults()
-				return fmt.Errorf("second-round upload chunk %d: %w", fc.position, err)
-			}
-			mu.Lock()
-			results = append(results, result)
-			mu.Unlock()
+	r.recordResult(result, len(data))
+	return r.verifier.submit(ctx, result)
+}
 
-			if progress != nil {
-				progress.UploadedChunks.Add(1)
-				progress.UploadedBytes.Add(int64(len(fc.data)))
-				progress.VerificationTotalChunks.Add(1)
-			}
+func (r *uploadRun) recordResult(result uploadedChunkResult, bytes int) {
+	r.mu.Lock()
+	r.results = append(r.results, result)
+	r.mu.Unlock()
+	r.progress.chunkUploaded(bytes)
+}
 
-			// Send retried chunk for verification too
-			verifyCh <- result
+// retryFailedChunks re-uploads the chunks that failed during the parallel
+// phase one at a time, which avoids tripping Telegram rate limits again.
+func (r *uploadRun) retryFailedChunks() error {
+	if len(r.failedChunks) == 0 {
+		return nil
+	}
+
+	slog.Warn("retrying failed chunks sequentially", "file", r.file.Path, "failed", len(r.failedChunks), "succeeded", len(r.results))
+	for _, fc := range r.failedChunks {
+		if err := r.ctx.Err(); err != nil {
+			return err
 		}
-		slog.Info("second-round upload completed", "file", file.Path, "recovered", len(failedChunks))
+		result, err := r.m.uploadChunkWithRetry(r.ctx, r.file, r.storage, fc.position, fc.data, fc.plainHash)
+		if err != nil {
+			return fmt.Errorf("second-round upload chunk %d: %w", fc.position, err)
+		}
+		r.recordResult(result, len(fc.data))
+		if err := r.verifier.submit(r.ctx, result); err != nil {
+			return err
+		}
 	}
+	slog.Info("second-round upload completed", "file", r.file.Path, "recovered", len(r.failedChunks))
+	return nil
+}
 
-	// Signal verification consumer to stop, then wait for all verifications
-	close(verifyCh)
-	<-verifyDone
-	verifyWaitErr := vg.Wait()
+// retryFailedVerifications re-verifies the chunks the circuit breaker queued,
+// waiting a cooldown before each round. It returns the positions that are
+// still failing after all rounds (hash mismatches included).
+func (r *uploadRun) retryFailedVerifications() ([]int16, error) {
+	failed := r.verifier.failedPositions()
+	retryQueue := r.verifier.takeRetryQueue()
 
-	if verifyWaitErr != nil {
-		cleanupAllResults()
-		return verifyWaitErr
-	}
-
-	// Retry transiently failed verifications after a cooldown.
-	// The circuit breaker queued these instead of aborting the upload.
-	verifyMu.Lock()
-	retryQueue := append([]uploadedChunkResult(nil), verifyRetryQueue...)
-	verifyRetryQueue = nil
-	verifyMu.Unlock()
-
-	for retryRound := 0; len(retryQueue) > 0 && retryRound < VerifyCBMaxRetryRounds; retryRound++ {
+	for round := 1; len(retryQueue) > 0 && round <= VerifyCBMaxRetryRounds; round++ {
 		slog.Info("waiting before retrying failed verifications",
-			"file", file.Path, "round", retryRound+1, "chunks", len(retryQueue),
+			"file", r.file.Path, "round", round, "chunks", len(retryQueue),
 			"cooldown", VerifyCBCooldownDuration)
 
 		select {
-		case <-ctx.Done():
-			cleanupAllResults()
-			return ctx.Err()
+		case <-r.ctx.Done():
+			return nil, r.ctx.Err()
 		case <-time.After(VerifyCBCooldownDuration):
 		}
 
 		var stillFailed []uploadedChunkResult
 		for _, result := range retryQueue {
-			if ctx.Err() != nil {
-				cleanupAllResults()
-				return ctx.Err()
+			if err := r.ctx.Err(); err != nil {
+				return nil, err
 			}
-			err := m.verifySingleChunk(ctx, file, *storage, result)
-			if err != nil {
-				if contextAborted(ctx) {
-					cleanupAllResults()
-					return ctx.Err()
-				}
-				if isHashMismatch(err) {
-					failedVerifyPositions = append(failedVerifyPositions, result.Position)
-				} else {
-					stillFailed = append(stillFailed, result)
-				}
-			} else {
-				slog.Info("chunk verified on retry", "position", result.Position, "file", file.Path, "round", retryRound+1)
-				if progress != nil {
-					progress.VerifiedChunks.Add(1)
-				}
+			err := r.m.verifySingleChunk(r.ctx, r.file, *r.storage, result)
+			switch {
+			case err == nil:
+				slog.Info("chunk verified on retry", "position", result.Position, "file", r.file.Path, "round", round)
+				r.progress.chunkVerified()
+			case contextAborted(r.ctx):
+				return nil, r.ctx.Err()
+			case isHashMismatch(err):
+				failed = append(failed, result.Position)
+			default:
+				stillFailed = append(stillFailed, result)
 			}
 		}
 		retryQueue = stillFailed
 
 		if len(retryQueue) == 0 {
-			slog.Info("all retried verifications succeeded", "file", file.Path, "round", retryRound+1)
+			slog.Info("all retried verifications succeeded", "file", r.file.Path, "round", round)
 		}
 	}
 
-	// Any chunks still failing after all retry rounds are permanent failures
 	for _, result := range retryQueue {
-		failedVerifyPositions = append(failedVerifyPositions, result.Position)
+		failed = append(failed, result.Position)
 	}
+	return failed, nil
+}
 
-	// Handle verification failures
-	failedVPos := append([]int16(nil), failedVerifyPositions...)
-
-	if len(failedVPos) > 0 {
-		slog.Error("upload verification completed with failures", "file", file.Path, "failed", len(failedVPos), "total", len(results))
-		failedSet := make(map[int16]struct{}, len(failedVPos))
-		for _, pos := range failedVPos {
-			failedSet[pos] = struct{}{}
-		}
-		var failedResults, goodResults []uploadedChunkResult
-		for _, r := range results {
-			if _, failed := failedSet[r.Position]; failed {
-				failedResults = append(failedResults, r)
-			} else {
-				goodResults = append(goodResults, r)
-			}
-		}
-		cleanupResultsSelective(failedResults)
-		cleanupResultsSelective(goodResults)
-		return fmt.Errorf("verification failed for %d chunk(s)", len(failedVPos))
-	}
-
-	sort.Slice(results, func(i, j int) bool {
-		return results[i].Position < results[j].Position
+// persist writes the chunk records and marks the file as uploaded.
+func (r *uploadRun) persist() error {
+	sort.Slice(r.results, func(i, j int) bool {
+		return r.results[i].Position < r.results[j].Position
 	})
 
-	// Create chunk records
-	fileChunks := make([]domain.FileChunk, len(results))
-	for i, r := range results {
+	fileChunks := make([]domain.FileChunk, len(r.results))
+	for i, res := range r.results {
 		fileChunks[i] = domain.FileChunk{
-			FileID:            file.ID,
-			TelegramFileID:    r.TelegramFileID,
-			TelegramMessageID: r.TelegramMessageID,
-			Position:          r.Position,
+			FileID:            r.file.ID,
+			TelegramFileID:    res.TelegramFileID,
+			TelegramMessageID: res.TelegramMessageID,
+			Position:          res.Position,
 		}
 	}
 
-	if err := m.filesRepo.CreateChunksAndMarkUploaded(ctx, file.ID, fileChunks); err != nil {
-		cleanupAllResults()
+	if err := r.m.filesRepo.CreateChunksAndMarkUploaded(r.ctx, r.file.ID, fileChunks); err != nil {
+		r.cleanupAll()
 		return fmt.Errorf("saving verified chunks: %w", err)
 	}
 
-	slog.Info("upload completed", "file", file.Path, "chunks", len(results), "storage", storage.Name, "chat", storage.Name)
-
+	slog.Info("upload completed", "file", r.file.Path, "chunks", len(r.results), "storage", r.storage.Name, "chat", r.storage.Name)
 	return nil
+}
+
+// abort stops the verifier, removes every uploaded chunk from Telegram and
+// returns err unchanged.
+func (r *uploadRun) abort(err error) error {
+	_ = r.verifier.stop()
+	r.cleanupAll()
+	return err
+}
+
+// cleanupAll deletes every chunk uploaded so far from Telegram in the
+// background; the upload has already failed so the caller does not wait.
+func (r *uploadRun) cleanupAll() {
+	r.mu.Lock()
+	uploaded := append([]uploadedChunkResult(nil), r.results...)
+	r.mu.Unlock()
+	if len(uploaded) == 0 {
+		return
+	}
+
+	slog.Warn("cleaning up chunks from telegram", "file", r.file.Path, "chunks", len(uploaded))
+	chunks := make([]domain.FileChunk, len(uploaded))
+	for i, res := range uploaded {
+		chunks[i] = domain.FileChunk{TelegramMessageID: res.TelegramMessageID}
+	}
+	storage := *r.storage
+	go func() {
+		if err := r.m.DeleteFromTelegram(context.Background(), storage, chunks, nil); err != nil {
+			slog.Error("cleanup after failed upload returned error", "err", err)
+		}
+	}()
+}
+
+// closeOnCancel closes reader when ctx is cancelled so a blocked io.ReadFull
+// unblocks. The returned function stops the watch.
+func closeOnCancel(ctx context.Context, reader io.Reader) func() {
+	closer, ok := reader.(io.Closer)
+	if !ok {
+		return func() {}
+	}
+	stopped := make(chan struct{})
+	go func() {
+		select {
+		case <-ctx.Done():
+			closer.Close()
+		case <-stopped:
+		}
+	}()
+	return func() { close(stopped) }
+}
+
+// chunkVerifier re-downloads uploaded chunks and checks their hash while the
+// upload is still in flight. Transient failures trip a circuit breaker and are
+// queued for a later retry round; a hash mismatch fails the verifier.
+type chunkVerifier struct {
+	m        *StorageManager
+	ctx      context.Context
+	file     *domain.File
+	storage  domain.Storage
+	progress *UploadProgress
+	cb       *verifyCircuitBreaker
+	group    *errgroup.Group
+	in       chan uploadedChunkResult
+	done     chan struct{}
+	stopOnce sync.Once
+	stopErr  error
+
+	mu         sync.Mutex
+	retryQueue []uploadedChunkResult
+	failedPos  []int16
+}
+
+// startChunkVerifier runs the verification pipeline with at most
+// PipelineVerifyParallelism concurrent verifications, so it does not saturate
+// the Telegram API while uploads are still running.
+func (m *StorageManager) startChunkVerifier(ctx context.Context, file *domain.File, storage domain.Storage, progress *UploadProgress, buffer int) *chunkVerifier {
+	group, vctx := errgroup.WithContext(ctx)
+	group.SetLimit(PipelineVerifyParallelism)
+	v := &chunkVerifier{
+		m:        m,
+		ctx:      vctx,
+		file:     file,
+		storage:  storage,
+		progress: progress,
+		cb:       newVerifyCircuitBreaker(),
+		group:    group,
+		in:       make(chan uploadedChunkResult, buffer),
+		done:     make(chan struct{}),
+	}
+	go v.consume()
+	return v
+}
+
+func (v *chunkVerifier) consume() {
+	defer close(v.done)
+	for result := range v.in {
+		// When the breaker is tripped, wait for the cooldown before
+		// dispatching more verifications.
+		if err := v.cb.WaitIfTripped(v.ctx); err != nil {
+			return
+		}
+		v.group.Go(func() error { return v.verify(result) })
+	}
+}
+
+// submit queues a chunk for verification. It also returns once the verifier
+// itself has stopped (context cancelled or hash mismatch), so a caller never
+// blocks on a pipeline that is no longer consuming.
+func (v *chunkVerifier) submit(ctx context.Context, result uploadedChunkResult) error {
+	select {
+	case v.in <- result:
+		return nil
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-v.ctx.Done():
+		return v.ctx.Err()
+	}
+}
+
+func (v *chunkVerifier) verify(result uploadedChunkResult) error {
+	err := v.m.verifySingleChunk(v.ctx, v.file, v.storage, result)
+	if err == nil {
+		v.cb.RecordSuccess()
+		v.progress.chunkVerified()
+		return nil
+	}
+	if contextAborted(v.ctx) {
+		return err
+	}
+	if isHashMismatch(err) {
+		// Permanent: fail the upload immediately.
+		v.mu.Lock()
+		v.failedPos = append(v.failedPos, result.Position)
+		v.mu.Unlock()
+		slog.Error("pipeline verification hash mismatch", "position", result.Position, "file", v.file.Path, "err", err)
+		return fmt.Errorf("verification of chunk %d failed: %w", result.Position, err)
+	}
+
+	// Transient (download timeout / throttling): notify the breaker and
+	// queue for retry after the cooldown instead of aborting the upload.
+	v.cb.RecordFailure()
+	v.mu.Lock()
+	v.retryQueue = append(v.retryQueue, result)
+	v.mu.Unlock()
+	slog.Warn("pipeline verification transient failure, queued for retry",
+		"position", result.Position, "file", v.file.Path,
+		"consecutive_failures", v.cb.ConsecutiveFailures(), "err", err)
+	return nil
+}
+
+// stop closes the intake, waits for in-flight verifications and returns the
+// first verification error. Safe to call more than once.
+func (v *chunkVerifier) stop() error {
+	v.stopOnce.Do(func() {
+		close(v.in)
+		<-v.done
+		v.stopErr = v.group.Wait()
+	})
+	return v.stopErr
+}
+
+func (v *chunkVerifier) takeRetryQueue() []uploadedChunkResult {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	queue := v.retryQueue
+	v.retryQueue = nil
+	return queue
+}
+
+func (v *chunkVerifier) failedPositions() []int16 {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	return append([]int16(nil), v.failedPos...)
 }

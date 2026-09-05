@@ -151,138 +151,75 @@ func (m *StorageManager) downloadAndDecryptChunkCached(ctx context.Context, file
 
 type chunkDataLoader func(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error)
 
-type chunkDownloadJob struct {
-	chunk domain.FileChunk
-}
-
-func (m *StorageManager) downloadChunksInOrderWithLoader(
+// downloadChunksInOrder loads chunks in parallel (DownloadChunkParallelism)
+// and hands them to writeChunk strictly in position order.
+func (m *StorageManager) downloadChunksInOrder(
 	ctx context.Context,
 	file *domain.File,
 	storage *domain.Storage,
 	chunks []domain.FileChunk,
 	loadChunk chunkDataLoader,
 	writeChunk func(chunk domain.FileChunk, data []byte) error,
-	parallelism int,
 ) error {
-	if parallelism <= 0 {
-		parallelism = 1
-	}
-	if parallelism > DownloadChunkParallelism {
-		parallelism = DownloadChunkParallelism
-	}
-
-	jobs := make([]chunkDownloadJob, len(chunks))
-	for index, chunk := range chunks {
-		jobs[index] = chunkDownloadJob{chunk: chunk}
-	}
-
 	return runOrderedJobs(
 		ctx,
-		parallelism,
-		jobs,
-		func(loadCtx context.Context, job chunkDownloadJob) ([]byte, error) {
-			return loadChunk(loadCtx, file.ID, *storage, job.chunk)
+		DownloadChunkParallelism,
+		chunks,
+		func(loadCtx context.Context, chunk domain.FileChunk) ([]byte, error) {
+			return loadChunk(loadCtx, file.ID, *storage, chunk)
 		},
-		func(job chunkDownloadJob, data []byte) error {
-			return writeChunk(job.chunk, data)
-		},
+		writeChunk,
 		nil,
 	)
 }
 
-func (m *StorageManager) downloadChunksInOrder(
-	ctx context.Context,
-	file *domain.File,
-	storage *domain.Storage,
-	chunks []domain.FileChunk,
-	writeChunk func(chunk domain.FileChunk, data []byte) error,
-) error {
-	return m.downloadChunksInOrderWithLoader(ctx, file, storage, chunks, m.downloadAndDecryptChunkCached, writeChunk, DownloadChunkParallelism)
+// writeWholeFile streams every chunk of file to w in order, loading chunks
+// with loadChunk. label names the operation in logs.
+func (m *StorageManager) writeWholeFile(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, loadChunk chunkDataLoader, label string) error {
+	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
+	if err != nil {
+		return fmt.Errorf("listing chunks: %w", err)
+	}
+	if len(chunks) == 0 {
+		return domain.ErrNotFound("file chunks")
+	}
+
+	progress.setTotalsIfUnset(int64(len(chunks)), file.Size)
+
+	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
+	if err != nil {
+		return fmt.Errorf("getting storage: %w", err)
+	}
+
+	slog.Info("starting "+label, "file", file.Path, "chunks", len(chunks), "storage", storage.Name, "chat", storage.Name)
+
+	err = m.downloadChunksInOrder(ctx, file, storage, chunks, loadChunk, func(chunk domain.FileChunk, data []byte) error {
+		if _, err := w.Write(data); err != nil {
+			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
+		}
+		progress.chunkDownloaded(int64(len(data)))
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+
+	slog.Info(label+" completed", "file", file.Path, "storage", storage.Name, "chat", storage.Name)
+	return nil
 }
 
 // DownloadToWriter streams a file's chunks sequentially to the given writer.
-// All chunk downloads go through the scheduler for rate-limited token acquisition.
+// Chunks are always fetched from Telegram (no cache), since a full download
+// reads each chunk exactly once.
 func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
-	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
-	if err != nil {
-		return fmt.Errorf("listing chunks: %w", err)
-	}
-
-	if len(chunks) == 0 {
-		return domain.ErrNotFound("file chunks")
-	}
-
-	if progress != nil && progress.TotalChunks == 0 && progress.TotalBytes == 0 {
-		progress.TotalChunks = int64(len(chunks))
-		progress.TotalBytes = file.Size
-	}
-
-	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
-	if err != nil {
-		return fmt.Errorf("getting storage: %w", err)
-	}
-
-	slog.Info("starting download", "file", file.Path, "chunks", len(chunks), "storage", storage.Name, "chat", storage.Name)
-
-	if err := m.downloadChunksInOrderWithLoader(ctx, file, storage, chunks, m.downloadAndDecryptChunk, func(chunk domain.FileChunk, data []byte) error {
-		if _, err := w.Write(data); err != nil {
-			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
-		}
-
-		if progress != nil {
-			progress.DownloadedChunks.Add(1)
-			progress.DownloadedBytes.Add(int64(len(data)))
-		}
-		return nil
-	}, DownloadChunkParallelism); err != nil {
-		return err
-	}
-
-	slog.Info("download completed", "file", file.Path, "storage", storage.Name, "chat", storage.Name)
-	return nil
+	return m.writeWholeFile(ctx, file, w, progress, m.downloadAndDecryptChunk, "download")
 }
 
-// StreamToWriter keeps the optimized streaming path used by inline previews and
-// media playback. It can reuse cached decrypted chunks and download ahead in
-// parallel, which helps with buffering and seek-heavy clients such as Kodi.
+// StreamToWriter is the streaming path used by inline previews and media
+// playback. It reuses cached decrypted chunks, which helps with buffering and
+// seek-heavy clients such as Kodi.
 func (m *StorageManager) StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
-	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
-	if err != nil {
-		return fmt.Errorf("listing chunks: %w", err)
-	}
-
-	if len(chunks) == 0 {
-		return domain.ErrNotFound("file chunks")
-	}
-
-	if progress != nil && progress.TotalChunks == 0 && progress.TotalBytes == 0 {
-		progress.TotalChunks = int64(len(chunks))
-		progress.TotalBytes = file.Size
-	}
-
-	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
-	if err != nil {
-		return fmt.Errorf("getting storage: %w", err)
-	}
-
-	slog.Info("starting stream", "file", file.Path, "chunks", len(chunks), "storage", storage.Name, "chat", storage.Name)
-
-	if err := m.downloadChunksInOrder(ctx, file, storage, chunks, func(chunk domain.FileChunk, data []byte) error {
-		if _, err := w.Write(data); err != nil {
-			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
-		}
-
-		if progress != nil {
-			progress.DownloadedChunks.Add(1)
-			progress.DownloadedBytes.Add(int64(len(data)))
-		}
-		return nil
-	}); err != nil {
-		return err
-	}
-
-	slog.Info("stream completed", "file", file.Path, "storage", storage.Name, "chat", storage.Name)
-	return nil
+	return m.writeWholeFile(ctx, file, w, progress, m.downloadAndDecryptChunkCached, "stream")
 }
 
 // ExactFileSize derives the exact file size from chunk count plus the actual
@@ -378,7 +315,7 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 		progress.TotalChunks = int64(len(rangeChunks))
 	}
 
-	return m.downloadChunksInOrder(ctx, file, storage, rangeChunks, func(chunk domain.FileChunk, data []byte) error {
+	return m.downloadChunksInOrder(ctx, file, storage, rangeChunks, m.downloadAndDecryptChunkCached, func(chunk domain.FileChunk, data []byte) error {
 		chunkStart := offset
 		chunkEndExclusive := chunkStart + int64(len(data))
 		offset = chunkEndExclusive
@@ -387,20 +324,9 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 			return nil
 		}
 
-		left := int64(0)
-		if start > chunkStart {
-			left = start - chunkStart
-		}
-		right := int64(len(data))
-		if end+1 < chunkEndExclusive {
-			right = end + 1 - chunkStart
-		}
-		if left < 0 {
-			left = 0
-		}
-		if right > int64(len(data)) {
-			right = int64(len(data))
-		}
+		// Clip the chunk to the requested [start, end] window.
+		left := max(start-chunkStart, 0)
+		right := min(end+1-chunkStart, int64(len(data)))
 		if left >= right {
 			return nil
 		}
@@ -409,11 +335,7 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 			return fmt.Errorf("writing ranged chunk %d: %w", chunk.Position, err)
 		}
 
-		if progress != nil {
-			progress.DownloadedChunks.Add(1)
-			progress.DownloadedBytes.Add(right - left)
-		}
-
+		progress.chunkDownloaded(right - left)
 		return nil
 	})
 }

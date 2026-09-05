@@ -7,6 +7,8 @@ import {
   getBulkOperationMetrics,
   getItemPath,
   getMediaType,
+  getFileExtension,
+  getVideoMime,
   runUploadPipeline,
 } from './operations.js'
 
@@ -149,4 +151,19 @@ test('file operation helpers derive paths and media type consistently', () => {
   assert.equal(buildRenamedPath({ path: 'docs/report.pdf' }, 'final.pdf'), 'docs/final.pdf')
   assert.equal(buildBulkMoveTargetPath('archive', 'report.pdf'), 'archive/report.pdf')
   assert.equal(buildBulkMoveTargetPath('', 'report.pdf'), 'report.pdf')
+})
+
+test('getFileExtension lowercases and tolerates missing names', () => {
+  assert.equal(getFileExtension('Clip.MP4'), 'mp4')
+  assert.equal(getFileExtension('archive.tar.gz'), 'gz')
+  assert.equal(getFileExtension('noext'), 'noext')
+  assert.equal(getFileExtension(undefined), '')
+})
+
+test('getVideoMime resolves the source type for previewable videos', () => {
+  assert.equal(getVideoMime('a.mp4'), 'video/mp4')
+  assert.equal(getVideoMime('a.m4v'), 'video/mp4')
+  assert.equal(getVideoMime('a.webm'), 'video/webm')
+  assert.equal(getVideoMime('a.mov'), 'video/quicktime')
+  assert.equal(getVideoMime('a.mkv'), undefined)
 })

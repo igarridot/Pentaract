@@ -7,6 +7,7 @@ import (
 	"log/slog"
 	"net/http"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -23,6 +24,61 @@ func (h *FilesHandler) scheduleUploadTrackerCleanup(uploadID string) {
 		delete(h.uploads, uploadID)
 		h.mu.Unlock()
 	})
+}
+
+// registerUpload creates and registers the tracker for an upload so its
+// upload_id can be subscribed to immediately, before any byte is transferred.
+// The returned context is cancelled by CancelUpload.
+func (h *FilesHandler) registerUpload(uploadID string, storageID uuid.UUID, fullPath string, fileSize int64) (*uploadTracker, context.Context) {
+	uploadCtx, cancel := context.WithCancel(context.Background())
+	tracker := &uploadTracker{
+		progress:  &service.UploadProgress{TotalBytes: fileSize},
+		cancel:    cancel,
+		storageID: storageID,
+		filePath:  fullPath,
+	}
+	h.mu.Lock()
+	h.uploads[uploadID] = tracker
+	h.mu.Unlock()
+	return tracker, uploadCtx
+}
+
+// runTrackedUpload feeds src through a one-chunk buffer into the upload
+// service and records the outcome on the tracker. Buffering one chunk ahead
+// lets the source reader race ahead of the encryption/upload pipeline, which
+// smooths throughput. src is always closed.
+func (h *FilesHandler) runTrackedUpload(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, fullPath string, fileSize int64, src io.ReadCloser, onConflict string) {
+	pr, pw := io.Pipe()
+	go func() {
+		bw := bufio.NewWriterSize(pw, service.UploadChunkSize)
+		_, err := io.Copy(bw, src)
+		if flushErr := bw.Flush(); err == nil {
+			err = flushErr
+		}
+		src.Close()
+		pw.CloseWithError(err)
+	}()
+	// Always close the pipe reader so the copy goroutine unblocks, even when
+	// the upload was skipped or finished without consuming the full stream.
+	defer pr.Close()
+
+	file, skipped, uploadErr := h.svc.Upload(ctx, userID, storageID, fullPath, fileSize, pr, tracker.progress, onConflict)
+	h.finishUpload(tracker, file, skipped, uploadErr)
+}
+
+func (h *FilesHandler) finishUpload(tracker *uploadTracker, file *domain.File, skipped bool, uploadErr error) {
+	h.mu.Lock()
+	tracker.done = true
+	tracker.err = uploadErr
+	tracker.skipped = skipped
+	if file != nil {
+		tracker.fileID = file.ID
+	}
+	h.mu.Unlock()
+
+	if uploadErr != nil {
+		slog.Error("upload failed", "file", tracker.filePath, "err", uploadErr)
+	}
 }
 
 func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
@@ -76,10 +132,7 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		}
 	}
 	if fileSize <= 0 {
-		fileSize = r.ContentLength
-		if fileSize < 0 {
-			fileSize = 0
-		}
+		fileSize = max(r.ContentLength, 0)
 	}
 
 	if filePart == nil || filename == "" {
@@ -92,63 +145,18 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		onConflict = service.UploadConflictKeepBoth
 	}
 	fullPath := pathutil.Join(path, filename)
-
-	pr, pw := io.Pipe()
-	copyDone := make(chan struct{})
-
-	// S3: Buffer one chunk ahead so the HTTP body reader can race ahead of
-	// the chunk encryption/upload pipeline, smoothing throughput.
-	go func() {
-		defer close(copyDone)
-		bw := bufio.NewWriterSize(pw, service.UploadChunkSize)
-		_, err := io.Copy(bw, filePart)
-		if flushErr := bw.Flush(); err == nil {
-			err = flushErr
-		}
-		filePart.Close()
-		pw.CloseWithError(err)
-	}()
-
-	uploadCtx, cancel := context.WithCancel(context.Background())
-
 	if uploadID == "" {
 		uploadID = uuid.New().String()
 	}
-	progress := &service.UploadProgress{TotalBytes: fileSize}
-	tracker := &uploadTracker{
-		progress:  progress,
-		cancel:    cancel,
-		storageID: storageID,
-		filePath:  fullPath,
-	}
 
-	h.mu.Lock()
-	h.uploads[uploadID] = tracker
-	h.mu.Unlock()
+	tracker, uploadCtx := h.registerUpload(uploadID, storageID, fullPath, fileSize)
 
+	// The multipart part is only readable while this handler runs, so the
+	// upload goroutine signals when it has consumed the whole body.
+	bodyConsumed := make(chan struct{})
 	go func() {
-		defer func() {
-			// Always close the pipe reader so the body-copy goroutine
-			// unblocks and copyDone fires, even when the upload was
-			// skipped or succeeded without consuming the full stream.
-			pr.Close()
-			h.scheduleUploadTrackerCleanup(uploadID)
-		}()
-
-		file, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress, onConflict)
-
-		h.mu.Lock()
-		tracker.done = true
-		tracker.err = uploadErr
-		tracker.skipped = skipped
-		if file != nil {
-			tracker.fileID = file.ID
-		}
-		h.mu.Unlock()
-
-		if uploadErr != nil {
-			slog.Error("upload failed", "file", fullPath, "err", uploadErr)
-		}
+		defer h.scheduleUploadTrackerCleanup(uploadID)
+		h.runTrackedUpload(uploadCtx, tracker, user.ID, storageID, fullPath, fileSize, &signalOnClose{ReadCloser: filePart, done: bodyConsumed}, onConflict)
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]any{"upload_id": uploadID})
@@ -156,8 +164,20 @@ func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		f.Flush()
 	}
 
-	// Keep the handler alive until the body is fully read into the pipe.
-	<-copyDone
+	<-bodyConsumed
+}
+
+// signalOnClose closes done once the wrapped reader is closed.
+type signalOnClose struct {
+	io.ReadCloser
+	done chan struct{}
+	once sync.Once
+}
+
+func (s *signalOnClose) Close() error {
+	err := s.ReadCloser.Close()
+	s.once.Do(func() { close(s.done) })
+	return err
 }
 
 // CancelUpload cancels an in-flight upload and cleans up.

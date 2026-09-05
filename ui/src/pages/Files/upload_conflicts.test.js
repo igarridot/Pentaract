@@ -1,7 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { buildUploadEntries, normalizeUploadPath, resolveUploadEntries } from './upload_conflicts.js'
+import {
+  buildUploadEntries, normalizeUploadPath, resolveUploadEntries,
+  fileNameFromPath, fileNamesOf, findSkippedEntries,
+} from './upload_conflicts.js'
 
 test('normalizeUploadPath trims slashes and handles empty path', () => {
   assert.equal(normalizeUploadPath('/a/b/'), 'a/b')
@@ -60,4 +63,32 @@ test('resolveUploadEntries skips conflicted files when decision is skip with app
   )
 
   assert.deepEqual(resolved.map((e) => e.filename), ['c.txt'])
+})
+
+test('fileNameFromPath returns the last path segment', () => {
+  assert.equal(fileNameFromPath('media/clips/a.mp4'), 'a.mp4')
+  assert.equal(fileNameFromPath('a.mp4'), 'a.mp4')
+  assert.equal(fileNameFromPath(''), '')
+  assert.equal(fileNameFromPath(undefined), '')
+})
+
+test('fileNamesOf collects only file names from a listing', () => {
+  const names = fileNamesOf([
+    { name: 'a.txt', is_file: true },
+    { name: 'docs', is_file: false },
+    { name: 'b.txt', is_file: true },
+  ])
+  assert.deepEqual([...names].sort(), ['a.txt', 'b.txt'])
+  assert.equal(fileNamesOf(null).size, 0)
+})
+
+test('findSkippedEntries reports entries dropped by conflict resolution', () => {
+  const entries = [
+    { targetPath: 'docs', filename: 'a.txt' },
+    { targetPath: 'docs', filename: 'b.txt' },
+    { targetPath: '', filename: 'a.txt' },
+  ]
+  const skipped = findSkippedEntries(entries, [entries[0], entries[2]])
+  assert.deepEqual(skipped, [entries[1]])
+  assert.deepEqual(findSkippedEntries(entries, entries), [])
 })

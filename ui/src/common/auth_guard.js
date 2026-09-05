@@ -22,3 +22,16 @@ export function getRedirectPath() {
   localStorage.removeItem('redirect')
   return path || '/storages'
 }
+
+// Reads the user id (JWT "sub") from the stored access token without
+// verifying it; the server still validates every request.
+export function getCurrentUserId() {
+  const token = localStorage.getItem('access_token')
+  if (!token) return null
+  try {
+    const payload = JSON.parse(atob(token.split('.')[1]))
+    return payload.sub ?? null
+  } catch {
+    return null
+  }
+}

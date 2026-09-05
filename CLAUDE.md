@@ -64,7 +64,8 @@ Repositories → Telegram Client → WorkerScheduler → StorageManager → Serv
 ### Frontend
 
 - `ui/src/api/` — API client with shared SSE subscription (`subscribeAuthSSE`)
-- `ui/src/pages/Files/` — Main file browser, split into hooks: `useUploads`, `useDownloads`, `useDeleteOperation`, `useBulkOperations`, `useFileNavigation`
+- `ui/src/pages/Files/` — Main file browser, split into hooks: `useUploads`, `useDownloads`, `useDeleteOperation`, `useBulkOperations`, `useFileNavigation`. `useUploadConflicts` (conflict dialog + directory cache) is shared with `pages/LocalUpload`; `common/use_delete_progress.js` is shared with `pages/Storages`
+- Pure, node-tested modules hold the logic hooks and components lean on: `common/progress.js`, `pages/Files/operations.js`, `pages/Files/upload_conflicts.js`, `pages/LocalUpload/local_upload_paths.js`
 - `ui/src/components/ProgressCard.jsx` — Shared progress UI used by all 4 progress components
 
 ## Configuration

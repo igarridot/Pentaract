@@ -28,15 +28,13 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 		}
 	}
 
-	if progress != nil {
-		total := int64(0)
-		for _, c := range chunks {
-			if c.TelegramMessageID != 0 {
-				total++
-			}
+	total := int64(0)
+	for _, c := range chunks {
+		if c.TelegramMessageID != 0 {
+			total++
 		}
-		progress.TotalChunks = total
 	}
+	progress.setTotalChunks(total)
 
 	for _, c := range chunks {
 		if c.TelegramMessageID == 0 {
@@ -66,9 +64,7 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 					slog.Warn("retrying message delete via fallback worker", "message_id", c.TelegramMessageID, "worker", candidate.Name, "chat", storage.Name)
 				}
 				if err := m.tgClient.DeleteMessage(gctx, candidate.Token, storage.ChatID, c.TelegramMessageID); err == nil {
-					if progress != nil {
-						progress.DeletedChunks.Add(1)
-					}
+					progress.chunkDeleted()
 					return nil
 				} else {
 					lastErr = err

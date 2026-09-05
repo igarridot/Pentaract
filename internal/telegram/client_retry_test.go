@@ -12,7 +12,7 @@ import (
 func withNoSleep(t *testing.T) {
 	t.Helper()
 	orig := telegramSleep
-	telegramSleep = func(time.Duration) {}
+	telegramSleep = func(context.Context, time.Duration) error { return nil }
 	t.Cleanup(func() { telegramSleep = orig })
 }
 
@@ -172,5 +172,48 @@ func TestDownloadRetriesOnUnexpectedEOF(t *testing.T) {
 	data, err := c.Download(context.Background(), "TOKEN", "FILE")
 	if err != nil || string(data) != "payload-ok" || getFileAttempts < 1 || downloadAttempts < 2 {
 		t.Fatalf("expected retry success after unexpected EOF, err=%v data=%q getFileAttempts=%d downloadAttempts=%d", err, string(data), getFileAttempts, downloadAttempts)
+	}
+}
+
+func TestDeleteMessageHonoursCancelledContext(t *testing.T) {
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte(`{"ok":true}`))
+	}))
+	defer srv.Close()
+
+	ctx, cancel := context.WithCancel(context.Background())
+	cancel()
+
+	c := NewClient(srv.URL)
+	err := c.DeleteMessage(ctx, "TOKEN", 1, 1)
+	if err == nil || calls != 0 {
+		t.Fatalf("expected cancelled context to stop deleteMessage before any request, err=%v calls=%d", err, calls)
+	}
+}
+
+func TestRateLimitWaitStopsWhenContextIsCancelled(t *testing.T) {
+	ctx, cancel := context.WithCancel(context.Background())
+	orig := telegramSleep
+	telegramSleep = func(ctx context.Context, d time.Duration) error {
+		cancel() // the caller gives up while we are waiting for retry_after
+		return ctx.Err()
+	}
+	t.Cleanup(func() { telegramSleep = orig })
+
+	attempts := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		attempts++
+		w.WriteHeader(http.StatusTooManyRequests)
+		_, _ = w.Write([]byte(`{"ok":false,"parameters":{"retry_after":30}}`))
+	}))
+	defer srv.Close()
+
+	c := NewClient(srv.URL)
+	_, err := c.Download(ctx, "TOKEN", "FILE")
+	if err == nil || attempts != 1 {
+		t.Fatalf("expected a single attempt followed by cancellation, err=%v attempts=%d", err, attempts)
 	}
 }

@@ -1,13 +1,5 @@
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box } from '@mui/material'
-
-function getVideoMime(name) {
-  const ext = name?.split('.').pop()?.toLowerCase() || ''
-  if (ext === 'mp4' || ext === 'm4v') return 'video/mp4'
-  if (ext === 'webm') return 'video/webm'
-  if (ext === 'ogg') return 'video/ogg'
-  if (ext === 'mov') return 'video/quicktime'
-  return undefined
-}
+import { getVideoMime } from '../pages/Files/operations'
 
 export default function MediaPreviewDialog({ open, file, mediaType, src, onClose, onDownload }) {
   const videoMime = getVideoMime(file?.name)
