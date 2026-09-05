@@ -1,16 +1,25 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
+	"sync"
 	"testing"
+	"time"
 
+	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
+	appjwt "github.com/Dominux/Pentaract/internal/jwt"
+	"github.com/Dominux/Pentaract/internal/service"
 )
 
 // newTestFilesHandlerWithBase creates a FilesHandler with a custom localBasePath
@@ -341,4 +350,132 @@ func TestUploadLocalBatch(t *testing.T) {
 			t.Fatalf("expected 400, got %d", w.Code)
 		}
 	})
+}
+
+func TestUploadLocalBatchCancelledQueuedItemIsNeverStarted(t *testing.T) {
+	base := resolvedTempDir(t)
+	for _, name := range []string{"first.txt", "second.txt"} {
+		if err := os.WriteFile(filepath.Join(base, name), []byte(name), 0o644); err != nil {
+			t.Fatal(err)
+		}
+	}
+
+	firstStarted := make(chan struct{})
+	releaseFirst := make(chan struct{})
+	var uploaded []string
+	var mu sync.Mutex
+	svc := &mockFilesService{
+		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
+			mu.Lock()
+			uploaded = append(uploaded, path)
+			mu.Unlock()
+			if strings.HasSuffix(path, "first.txt") {
+				close(firstStarted)
+				<-releaseFirst
+			}
+			_, _ = io.Copy(io.Discard, reader)
+			return &domain.File{ID: uuid.New(), Path: path}, false, nil
+		},
+	}
+	h := newTestFilesHandlerWithBase(svc, base)
+
+	body := `{"items":[{"local_path":"first.txt","dest_path":""},{"local_path":"second.txt","dest_path":""}]}`
+	w := httptest.NewRecorder()
+	h.UploadLocalBatch(w, makeFilesReq(http.MethodPost, "/", body, uuid.New().String(), ""))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d body=%s", w.Code, w.Body.String())
+	}
+	var resp struct {
+		Uploads []struct {
+			UploadID string `json:"upload_id"`
+		} `json:"uploads"`
+	}
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || len(resp.Uploads) != 2 {
+		t.Fatalf("unexpected response %s (%v)", w.Body.String(), err)
+	}
+
+	<-firstStarted
+
+	// Cancel the second item while the first one is still uploading.
+	cancelReq := httptest.NewRequest(http.MethodPost, "/", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("uploadID", resp.Uploads[1].UploadID)
+	cancelReq = cancelReq.WithContext(context.WithValue(cancelReq.Context(), chi.RouteCtxKey, rctx))
+	cancelReq = cancelReq.WithContext(context.WithValue(cancelReq.Context(), authUserKey, &appjwt.AuthUser{ID: uuid.New()}))
+	cw := httptest.NewRecorder()
+	h.CancelUpload(cw, cancelReq)
+	if cw.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 cancelling queued upload, got %d", cw.Code)
+	}
+
+	close(releaseFirst)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h.mu.RLock()
+		second := h.uploads[resp.Uploads[1].UploadID]
+		done := second != nil && second.done
+		err := error(nil)
+		if second != nil {
+			err = second.err
+		}
+		h.mu.RUnlock()
+		if done {
+			if !errors.Is(err, context.Canceled) {
+				t.Fatalf("queued item should finish with context.Canceled, got %v", err)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("queued upload never reached a terminal state")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	mu.Lock()
+	defer mu.Unlock()
+	if len(uploaded) != 1 || !strings.HasSuffix(uploaded[0], "first.txt") {
+		t.Fatalf("cancelled queued item must not be uploaded, got %v", uploaded)
+	}
+}
+
+func TestUploadLocalStreamsFileAndMarksTrackerDone(t *testing.T) {
+	base := resolvedTempDir(t)
+	if err := os.WriteFile(filepath.Join(base, "payload.bin"), []byte("local-bytes"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	got := make(chan string, 1)
+	svc := &mockFilesService{
+		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
+			b, _ := io.ReadAll(reader)
+			if size != int64(len("local-bytes")) || progress == nil || progress.TotalBytes != size {
+				t.Errorf("unexpected size/progress: size=%d progress=%+v", size, progress)
+			}
+			got <- path + ":" + string(b)
+			return &domain.File{ID: uuid.New(), Path: path}, false, nil
+		},
+	}
+	h := newTestFilesHandlerWithBase(svc, base)
+
+	w := httptest.NewRecorder()
+	h.UploadLocal(w, makeFilesReq(http.MethodPost, "/", `{"local_path":"payload.bin","dest_path":"docs","upload_id":"local-done"}`, uuid.New().String(), ""))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("expected 202, got %d", w.Code)
+	}
+
+	select {
+	case v := <-got:
+		if v != "docs/payload.bin:local-bytes" {
+			t.Fatalf("unexpected upload payload %q", v)
+		}
+	case <-time.After(2 * time.Second):
+		t.Fatal("upload service was not called")
+	}
+
+	progressW := httptest.NewRecorder()
+	h.UploadProgress(progressW, makeFilesReq(http.MethodGet, "/?upload_id=local-done", "", "", ""))
+	if !strings.Contains(progressW.Body.String(), `"status":"done"`) {
+		t.Fatalf("expected done status over SSE, got %q", progressW.Body.String())
+	}
 }

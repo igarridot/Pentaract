@@ -1,10 +1,8 @@
 package handler
 
 import (
-	"bufio"
 	"context"
 	"fmt"
-	"io"
 	"log/slog"
 	"net/http"
 	"os"
@@ -145,7 +143,6 @@ func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	fileSize := info.Size()
 	destPath := pathutil.TrimTrailingSlash(req.DestPath)
 	fullPath := pathutil.Join(destPath, info.Name())
 
@@ -159,64 +156,24 @@ func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
 		uploadID = uuid.New().String()
 	}
 
-	progress := &service.UploadProgress{TotalBytes: fileSize}
-	uploadCtx, cancel := context.WithCancel(context.Background())
-	tracker := &uploadTracker{
-		progress:  progress,
-		cancel:    cancel,
-		storageID: storageID,
-		filePath:  fullPath,
-	}
-
-	h.mu.Lock()
-	h.uploads[uploadID] = tracker
-	h.mu.Unlock()
-
-	// Start a goroutine that opens the file, pipes it, and uploads.
+	tracker, uploadCtx := h.registerUpload(uploadID, storageID, fullPath, info.Size())
 	go func() {
 		defer h.scheduleUploadTrackerCleanup(uploadID)
-
-		f, err := os.Open(resolvedPath)
-		if err != nil {
-			slog.Error("local upload: failed to open file", "file", resolvedPath, "err", err)
-			h.mu.Lock()
-			tracker.done = true
-			tracker.err = err
-			h.mu.Unlock()
-			return
-		}
-
-		pr, pw := io.Pipe()
-		// Buffer one chunk ahead so the file reader can race ahead of
-		// the chunk encryption/upload pipeline, smoothing throughput.
-		go func() {
-			bw := bufio.NewWriterSize(pw, service.UploadChunkSize)
-			_, copyErr := io.Copy(bw, f)
-			if flushErr := bw.Flush(); copyErr == nil {
-				copyErr = flushErr
-			}
-			f.Close()
-			pw.CloseWithError(copyErr)
-		}()
-
-		file, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, fullPath, fileSize, pr, progress, onConflict)
-
-		h.mu.Lock()
-		tracker.done = true
-		tracker.err = uploadErr
-		tracker.skipped = skipped
-		if file != nil {
-			tracker.fileID = file.ID
-		}
-		h.mu.Unlock()
-
-		if uploadErr != nil {
-			slog.Error("local upload failed", "file", fullPath, "err", uploadErr)
-			pr.Close()
-		}
+		h.uploadLocalFile(uploadCtx, tracker, user.ID, storageID, resolvedPath, fullPath, info.Size(), onConflict)
 	}()
 
 	writeJSON(w, http.StatusAccepted, map[string]any{"upload_id": uploadID})
+}
+
+// uploadLocalFile opens a file from the local mount and runs a tracked upload.
+func (h *FilesHandler) uploadLocalFile(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, localPath, fullPath string, fileSize int64, onConflict string) {
+	f, err := os.Open(localPath)
+	if err != nil {
+		slog.Error("local upload: failed to open file", "file", localPath, "err", err)
+		h.finishUpload(tracker, nil, false, err)
+		return
+	}
+	h.runTrackedUpload(ctx, tracker, userID, storageID, fullPath, fileSize, f, onConflict)
 }
 
 type uploadLocalBatchItem struct {
@@ -267,7 +224,6 @@ func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) 
 	type resolvedItem struct {
 		resolvedPath string
 		info         os.FileInfo
-		destPath     string
 		fullPath     string
 	}
 	resolved := make([]resolvedItem, 0, len(req.Items))
@@ -290,13 +246,10 @@ func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) 
 			writeError(w, domain.ErrBadRequest(fmt.Sprintf("%q is a directory, not a file", item.LocalPath)))
 			return
 		}
-		dp := pathutil.TrimTrailingSlash(item.DestPath)
-		fp := pathutil.Join(dp, info.Name())
 		resolved = append(resolved, resolvedItem{
 			resolvedPath: rp,
 			info:         info,
-			destPath:     dp,
-			fullPath:     fp,
+			fullPath:     pathutil.Join(pathutil.TrimTrailingSlash(item.DestPath), info.Name()),
 		})
 	}
 
@@ -304,85 +257,36 @@ func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) 
 		LocalPath string `json:"local_path"`
 		UploadID  string `json:"upload_id"`
 	}
-	results := make([]uploadResult, 0, len(resolved))
-
-	// Pre-create all trackers so every upload_id is immediately available for
-	// SSE progress subscriptions.
-	type trackerEntry struct {
+	type queuedUpload struct {
 		uploadID string
+		item     resolvedItem
 		tracker  *uploadTracker
-		progress *service.UploadProgress
-		cancel   context.CancelFunc
+		ctx      context.Context
 	}
-	trackers := make([]trackerEntry, len(resolved))
+
+	// Pre-register every tracker so each upload_id can be subscribed to (and
+	// cancelled) right away, even for items still waiting in the queue.
+	results := make([]uploadResult, 0, len(resolved))
+	queue := make([]queuedUpload, 0, len(resolved))
 	for i, ri := range resolved {
 		uploadID := uuid.New().String()
-		progress := &service.UploadProgress{TotalBytes: ri.info.Size()}
-		uploadCtx, cancel := context.WithCancel(context.Background())
-		tracker := &uploadTracker{
-			progress:  progress,
-			cancel:    cancel,
-			storageID: storageID,
-			filePath:  ri.fullPath,
-		}
-
-		h.mu.Lock()
-		h.uploads[uploadID] = tracker
-		h.mu.Unlock()
-
-		trackers[i] = trackerEntry{uploadID: uploadID, tracker: tracker, progress: progress, cancel: cancel}
-		results = append(results, uploadResult{
-			LocalPath: req.Items[i].LocalPath,
-			UploadID:  uploadID,
-		})
-		_ = uploadCtx // used by cancel
+		tracker, uploadCtx := h.registerUpload(uploadID, storageID, ri.fullPath, ri.info.Size())
+		queue = append(queue, queuedUpload{uploadID: uploadID, item: ri, tracker: tracker, ctx: uploadCtx})
+		results = append(results, uploadResult{LocalPath: req.Items[i].LocalPath, UploadID: uploadID})
 	}
 
 	// Process files sequentially in a single goroutine, matching browser upload
 	// behavior. This prevents multiple files from competing for Telegram API
 	// bandwidth and avoids upload timeouts.
 	go func() {
-		for i, ri := range resolved {
-			te := trackers[i]
-
-			f, err := os.Open(ri.resolvedPath)
-			if err != nil {
-				slog.Error("local batch upload: failed to open file", "file", ri.resolvedPath, "err", err)
-				h.mu.Lock()
-				te.tracker.done = true
-				te.tracker.err = err
-				h.mu.Unlock()
-				h.scheduleUploadTrackerCleanup(te.uploadID)
-				continue
+		for _, q := range queue {
+			if err := q.ctx.Err(); err != nil {
+				// Cancelled while still queued: report it without starting.
+				h.finishUpload(q.tracker, nil, false, err)
+			} else {
+				h.uploadLocalFile(q.ctx, q.tracker, user.ID, storageID, q.item.resolvedPath, q.item.fullPath, q.item.info.Size(), onConflict)
 			}
-
-			pr, pw := io.Pipe()
-			go func() {
-				_, copyErr := io.Copy(pw, f)
-				f.Close()
-				pw.CloseWithError(copyErr)
-			}()
-
-			uploadCtx, cancel := context.WithCancel(context.Background())
-			te.tracker.cancel = cancel
-
-			file, skipped, uploadErr := h.svc.Upload(uploadCtx, user.ID, storageID, ri.fullPath, ri.info.Size(), pr, te.progress, onConflict)
-
-			h.mu.Lock()
-			te.tracker.done = true
-			te.tracker.err = uploadErr
-			te.tracker.skipped = skipped
-			if file != nil {
-				te.tracker.fileID = file.ID
-			}
-			h.mu.Unlock()
-
-			if uploadErr != nil {
-				slog.Error("local batch upload failed", "file", ri.fullPath, "err", uploadErr)
-				pr.Close()
-			}
-
-			h.scheduleUploadTrackerCleanup(te.uploadID)
+			h.scheduleUploadTrackerCleanup(q.uploadID)
 		}
 	}()
 
