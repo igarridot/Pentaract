@@ -24,7 +24,7 @@ export default function Users() {
   const load = useCallback(() => run(() => API.users.listManaged(), {
     onSuccess: (data) => setUsers(data || []),
     onError: (err) => {
-      if (!(err?.message || '').toLowerCase().includes('forbidden')) return false
+      if (err?.status !== 403) return false
       addAlert('Admin access required', 'error')
       navigate('/storages')
       return true

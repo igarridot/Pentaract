@@ -81,7 +81,8 @@ export default function LocalUpload() {
       setBrowsePath(path)
       setSelected(new Set())
     } catch (err) {
-      if (err.message && (err.message.includes('403') || err.message.toLowerCase().includes('not configured') || err.message.toLowerCase().includes('forbidden'))) {
+      if (err.status === 403) {
+        // The server has no local upload mount configured.
         setNotConfigured(true)
         setEntries([])
       } else {
