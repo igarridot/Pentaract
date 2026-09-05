@@ -144,14 +144,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 
 	slog.Info("starting upload", "file", file.Path, "storage", storage.Name, "chat", storage.Name)
 
-	// Calculate total chunks from file size if known
-	if progress != nil && progress.TotalBytes > 0 {
-		total := int32(progress.TotalBytes / UploadChunkSize)
-		if progress.TotalBytes%UploadChunkSize != 0 {
-			total++
-		}
-		progress.TotalChunks = total
-	}
+	progress.expectedChunks()
 
 	var mu sync.Mutex
 	var results []uploadedChunkResult
@@ -242,9 +235,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 					return nil
 				}
 				cb.RecordSuccess()
-				if progress != nil {
-					progress.VerifiedChunks.Add(1)
-				}
+				progress.chunkVerified()
 				return nil
 			})
 		}
@@ -319,11 +310,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			results = append(results, result)
 			mu.Unlock()
 
-			if progress != nil {
-				progress.UploadedChunks.Add(1)
-				progress.UploadedBytes.Add(int64(len(chunkDataRef)))
-				progress.VerificationTotalChunks.Add(1)
-			}
+			progress.chunkUploaded(len(chunkDataRef))
 
 			// S1: send for pipeline verification
 			select {
@@ -343,9 +330,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 		}
 	}
 
-	if progress != nil {
-		progress.TotalChunks = int32(position)
-	}
+	progress.setTotalChunks(int32(position))
 
 	waitErr := g.Wait()
 
@@ -384,11 +369,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 			results = append(results, result)
 			mu.Unlock()
 
-			if progress != nil {
-				progress.UploadedChunks.Add(1)
-				progress.UploadedBytes.Add(int64(len(fc.data)))
-				progress.VerificationTotalChunks.Add(1)
-			}
+			progress.chunkUploaded(len(fc.data))
 
 			// Send retried chunk for verification too
 			verifyCh <- result
@@ -444,9 +425,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 				}
 			} else {
 				slog.Info("chunk verified on retry", "position", result.Position, "file", file.Path, "round", retryRound+1)
-				if progress != nil {
-					progress.VerifiedChunks.Add(1)
-				}
+				progress.chunkVerified()
 			}
 		}
 		retryQueue = stillFailed

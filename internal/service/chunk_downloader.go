@@ -212,10 +212,7 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 		return domain.ErrNotFound("file chunks")
 	}
 
-	if progress != nil && progress.TotalChunks == 0 && progress.TotalBytes == 0 {
-		progress.TotalChunks = int64(len(chunks))
-		progress.TotalBytes = file.Size
-	}
+	progress.setTotalsIfUnset(int64(len(chunks)), file.Size)
 
 	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
@@ -229,10 +226,7 @@ func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File
 			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
 		}
 
-		if progress != nil {
-			progress.DownloadedChunks.Add(1)
-			progress.DownloadedBytes.Add(int64(len(data)))
-		}
+		progress.chunkDownloaded(int64(len(data)))
 		return nil
 	}, DownloadChunkParallelism); err != nil {
 		return err
@@ -255,10 +249,7 @@ func (m *StorageManager) StreamToWriter(ctx context.Context, file *domain.File, 
 		return domain.ErrNotFound("file chunks")
 	}
 
-	if progress != nil && progress.TotalChunks == 0 && progress.TotalBytes == 0 {
-		progress.TotalChunks = int64(len(chunks))
-		progress.TotalBytes = file.Size
-	}
+	progress.setTotalsIfUnset(int64(len(chunks)), file.Size)
 
 	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
@@ -272,10 +263,7 @@ func (m *StorageManager) StreamToWriter(ctx context.Context, file *domain.File, 
 			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
 		}
 
-		if progress != nil {
-			progress.DownloadedChunks.Add(1)
-			progress.DownloadedBytes.Add(int64(len(data)))
-		}
+		progress.chunkDownloaded(int64(len(data)))
 		return nil
 	}); err != nil {
 		return err
@@ -409,10 +397,7 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 			return fmt.Errorf("writing ranged chunk %d: %w", chunk.Position, err)
 		}
 
-		if progress != nil {
-			progress.DownloadedChunks.Add(1)
-			progress.DownloadedBytes.Add(right - left)
-		}
+		progress.chunkDownloaded(right - left)
 
 		return nil
 	})
