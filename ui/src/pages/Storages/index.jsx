@@ -12,6 +12,7 @@ import {
 } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
+import { getCurrentUserId } from '../../common/auth_guard'
 import { useDeleteProgress } from '../../common/use_delete_progress'
 import { convertSize } from '../../common/size_converter'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
@@ -98,14 +99,7 @@ export default function Storages() {
     }
   }
 
-  const token = localStorage.getItem('access_token')
-  let currentUserId = null
-  if (token) {
-    try {
-      const payload = JSON.parse(atob(token.split('.')[1]))
-      currentUserId = payload.sub
-    } catch {}
-  }
+  const currentUserId = getCurrentUserId()
 
   return (
     <Box>
