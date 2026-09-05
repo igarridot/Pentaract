@@ -1,19 +1,16 @@
 import { useState, useEffect, useCallback } from 'react'
 import {
-  Box, Typography, List, ListItem, ListItemIcon, ListItemText,
-  Checkbox, Button, Breadcrumbs, Link as MuiLink,
+  Box, Typography, Button,
   Select, MenuItem, TextField, FormControl, InputLabel,
-  CircularProgress, Alert,
+  Alert,
 } from '@mui/material'
 import {
-  Folder as FolderIcon,
-  InsertDriveFile as FileIcon,
   CloudUpload as CloudUploadIcon,
   FolderOpen as FolderOpenIcon,
 } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
-import { convertSize } from '../../common/size_converter'
+import PathBreadcrumbs from '../../components/PathBreadcrumbs'
 import UploadProgress from '../../components/UploadProgress'
 import BulkOperationProgress from '../../components/BulkOperationProgress'
 import FolderBrowserDialog from '../../components/FolderBrowserDialog'
@@ -21,6 +18,7 @@ import NavigationBlockDialog from '../../components/NavigationBlockDialog'
 import UploadConflictDialog from '../../components/UploadConflictDialog'
 import { useNavigationBlock } from '../Files/useNavigationBlock'
 import { useLocalUploads } from './useLocalUploads'
+import LocalFsBrowser from './LocalFsBrowser'
 import { sortLocalEntries, localEntryKey, buildLocalBatchItems } from './local_upload_paths'
 
 export default function LocalUpload() {
@@ -99,12 +97,7 @@ export default function LocalUpload() {
     browse('')
   }, [browse])
 
-  // Breadcrumb parts
-  const pathParts = browsePath ? browsePath.replace(/^\/+/, '').replace(/\/+$/, '').split('/').filter(Boolean) : []
-
-  const navigateTo = (path) => {
-    browse(path)
-  }
+  const pathParts = browsePath.split('/').filter(Boolean)
 
   // Selection handlers
   const toggleSelect = (entry) => {
@@ -270,30 +263,11 @@ export default function LocalUpload() {
       )}
 
       {/* Section B: Local Filesystem Browser */}
-      <Breadcrumbs sx={{ mb: 2 }}>
-        <MuiLink
-          underline="hover"
-          color="inherit"
-          sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
-          onClick={() => navigateTo('')}
-        >
-          Root
-        </MuiLink>
-        {pathParts.map((part, i) => {
-          const pathTo = '/' + pathParts.slice(0, i + 1).join('/')
-          return (
-            <MuiLink
-              key={pathTo}
-              underline="hover"
-              color="inherit"
-              sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
-              onClick={() => navigateTo(pathTo)}
-            >
-              {part}
-            </MuiLink>
-          )
-        })}
-      </Breadcrumbs>
+      <PathBreadcrumbs
+        parts={pathParts}
+        sx={{ mb: 2 }}
+        onSelect={(parts) => browse(parts.length ? `/${parts.join('/')}` : '')}
+      />
 
       {/* Select all + upload button */}
       {entries.length > 0 && (
@@ -318,70 +292,13 @@ export default function LocalUpload() {
         </Box>
       )}
 
-      {loading ? (
-        <Box sx={{ p: 4, textAlign: 'center' }}>
-          <CircularProgress size={28} />
-        </Box>
-      ) : (
-        <Box sx={{
-          bgcolor: 'background.paper',
-          borderRadius: 3,
-          border: '1px solid',
-          borderColor: 'divider',
-          overflow: 'hidden',
-        }}>
-          <List disablePadding>
-            {entries.map((entry) => {
-              const key = localEntryKey(entry)
-              const isDir = !entry.is_file
-              return (
-                <ListItem
-                  key={key}
-                  sx={{
-                    borderBottom: '1px solid',
-                    borderColor: 'divider',
-                    '&:last-child': { borderBottom: 'none' },
-                    cursor: isDir ? 'pointer' : 'default',
-                  }}
-                  secondaryAction={
-                    !isDir && entry.size != null ? (
-                      <Typography variant="caption" color="text.secondary">
-                        {convertSize(entry.size)}
-                      </Typography>
-                    ) : null
-                  }
-                >
-                  <Checkbox
-                    edge="start"
-                    checked={selected.has(key)}
-                    onChange={() => toggleSelect(entry)}
-                    sx={{ mr: 1 }}
-                  />
-                  <ListItemIcon
-                    sx={{ minWidth: 36, cursor: isDir ? 'pointer' : 'default' }}
-                    onClick={() => isDir && navigateTo(entry.path)}
-                  >
-                    {isDir ? <FolderIcon color="primary" /> : <FileIcon color="action" />}
-                  </ListItemIcon>
-                  <ListItemText
-                    primary={entry.name}
-                    onClick={() => isDir && navigateTo(entry.path)}
-                    sx={{ cursor: isDir ? 'pointer' : 'default' }}
-                    primaryTypographyProps={{ fontSize: '0.875rem' }}
-                  />
-                </ListItem>
-              )
-            })}
-            {entries.length === 0 && (
-              <Box sx={{ p: 4, textAlign: 'center' }}>
-                <Typography color="text.secondary" variant="body2">
-                  Empty directory
-                </Typography>
-              </Box>
-            )}
-          </List>
-        </Box>
-      )}
+      <LocalFsBrowser
+        entries={entries}
+        selected={selected}
+        loading={loading}
+        onToggle={toggleSelect}
+        onOpenDir={browse}
+      />
 
       <UploadConflictDialog
         open={conflictDialog.open}
