@@ -134,6 +134,9 @@ func uploadProgressStatus(progress *service.UploadProgress, done bool, err error
 	}
 }
 
+// ssePollingInterval is a variable so tests can run the SSE loops faster.
+var ssePollingInterval = service.SSEPollingInterval
+
 // setupSSE configures response headers for Server-Sent Events and returns the flusher.
 func setupSSE(w http.ResponseWriter) (http.Flusher, bool) {
 	flusher, ok := w.(http.Flusher)
@@ -178,7 +181,7 @@ func pollSSE(w http.ResponseWriter, r *http.Request, idParam string, placeholder
 		return
 	}
 
-	ticker := time.NewTicker(service.SSEPollingInterval)
+	ticker := time.NewTicker(ssePollingInterval)
 	defer ticker.Stop()
 	waitStart := time.Now()
 

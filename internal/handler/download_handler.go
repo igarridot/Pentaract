@@ -163,8 +163,7 @@ func (h *FilesHandler) resolvedInlineVideoSize(ctx context.Context, file *domain
 }
 
 func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -182,113 +181,138 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	filename := filepath.Base(file.Path)
-	contentType := contentTypeForFilename(filename)
-	disposition := "attachment"
-	if r.URL.Query().Get("inline") == "1" {
-		disposition = "inline"
+	served := servedFile{
+		file:        file,
+		filename:    filepath.Base(file.Path),
+		contentType: contentTypeForFilename(filepath.Base(file.Path)),
 	}
-
-	// Inline video playback can fan out into multiple concurrent range requests
-	// that share the same download_id. Tracking those requests like regular UI
-	// downloads causes newer range requests to cancel older ones.
-	trackDownload := !(disposition == "inline" && isInlineVideo(contentType, filename))
-
-	downloadCtx := r.Context()
-	var tracker *downloadTracker
-	cleanup := func() {}
-	var progress *service.DownloadProgress
-	if trackDownload {
-		downloadCtx, tracker, cleanup = h.setupDownloadTracker(r, storageID)
-		if tracker != nil {
-			progress = tracker.progress
-		}
-	}
-	defer cleanup()
-
-	w.Header().Set("Content-Type", contentType)
-	w.Header().Set("Content-Disposition", disposition+`; filename="`+sanitizeFilename(filename)+`"`)
+	inline := r.URL.Query().Get("inline") == "1"
 
 	switch {
-	case disposition == "inline" && isInlineVideo(contentType, filename):
-		// Video: handle Range requests for streaming.
-		w.Header().Set("Accept-Ranges", "bytes")
-		rangeHeader := r.Header.Get("Range")
-		if rangeHeader != "" {
-			totalSize, sizeErr := h.resolvedInlineVideoSize(downloadCtx, file)
-			if sizeErr != nil {
-				slog.Error("video size resolution failed", "err", sizeErr)
-				writeError(w, domain.ErrInternal("failed to determine exact video size"))
-				return
-			}
-			start, end, err := parseSingleByteRange(rangeHeader, totalSize)
-			if err != nil {
-				w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
-				w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-				return
-			}
-			w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize))
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
-			w.WriteHeader(http.StatusPartialContent)
-			if err := h.svc.DownloadFileRangeToWriter(downloadCtx, file, w, start, end, totalSize, progress); err != nil {
-				slog.Error("download file range failed", "err", err)
-				h.finishTracker(tracker, err)
-				return
-			}
-		} else {
-			if file.Size > 0 {
-				w.Header().Set("Content-Length", fmt.Sprintf("%d", file.Size))
-			}
-			w.WriteHeader(http.StatusOK)
-			if err := h.svc.StreamFileToWriter(downloadCtx, file, w, progress); err != nil {
-				slog.Error("stream file failed", "err", err)
-				h.finishTracker(tracker, err)
-				return
-			}
-		}
-
-	case disposition == "inline":
-		// Non-video inline: download to temp file, serve with http.ServeContent.
-		tmp, err := os.CreateTemp("", "pentaract-file-*")
-		if err != nil {
-			writeError(w, domain.ErrInternal("failed to create temporary file"))
-			return
-		}
-		tmpPath := tmp.Name()
-		defer func() {
-			tmp.Close()
-			_ = os.Remove(tmpPath)
-		}()
-
-		if err := h.svc.DownloadFileToWriter(downloadCtx, file, tmp, progress); err != nil {
-			slog.Error("download file failed", "err", err)
-			h.finishTracker(tracker, err)
-			writeError(w, err)
-			return
-		}
-
-		info, err := tmp.Stat()
-		if err != nil {
-			writeError(w, domain.ErrInternal("failed to stat temporary file"))
-			return
-		}
-		if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-			writeError(w, domain.ErrInternal("failed to rewind temporary file"))
-			return
-		}
-		w.Header().Set("Accept-Ranges", "bytes")
-		http.ServeContent(w, r, filename, info.ModTime(), tmp)
-
+	case inline && isInlineVideo(served.contentType, served.filename):
+		h.serveInlineVideo(w, r, served)
+	case inline:
+		h.serveInlineFile(w, r, served, storageID)
 	default:
-		// Attachment: stream directly.
-		w.WriteHeader(http.StatusOK)
-		if err := h.svc.DownloadFileToWriter(downloadCtx, file, w, progress); err != nil {
-			slog.Error("download file failed", "err", err)
-			h.failTracker(r, tracker, err)
-			return
+		h.serveAttachment(w, r, served, storageID)
+	}
+}
+
+// servedFile is what the response describes: the record plus the derived
+// filename and content type.
+type servedFile struct {
+	file        *domain.File
+	filename    string
+	contentType string
+}
+
+func (s servedFile) writeHeaders(w http.ResponseWriter, disposition string) {
+	w.Header().Set("Content-Type", s.contentType)
+	w.Header().Set("Content-Disposition", disposition+`; filename="`+sanitizeFilename(s.filename)+`"`)
+}
+
+// trackedDownload sets up progress tracking for downloads the UI follows via
+// download_id. The returned cleanup must be deferred by the caller.
+func (h *FilesHandler) trackedDownload(r *http.Request, storageID uuid.UUID) (context.Context, *downloadTracker, *service.DownloadProgress, func()) {
+	ctx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
+	var progress *service.DownloadProgress
+	if tracker != nil {
+		progress = tracker.progress
+	}
+	return ctx, tracker, progress, cleanup
+}
+
+// serveInlineVideo streams a video for in-browser playback, honouring Range
+// requests. Playback fans out into several concurrent range requests that
+// share one download_id, so these are deliberately not tracked: tracking them
+// would make newer range requests cancel older ones.
+func (h *FilesHandler) serveInlineVideo(w http.ResponseWriter, r *http.Request, s servedFile) {
+	ctx := r.Context()
+	s.writeHeaders(w, "inline")
+	w.Header().Set("Accept-Ranges", "bytes")
+
+	rangeHeader := r.Header.Get("Range")
+	if rangeHeader == "" {
+		if s.file.Size > 0 {
+			w.Header().Set("Content-Length", fmt.Sprintf("%d", s.file.Size))
 		}
+		w.WriteHeader(http.StatusOK)
+		if err := h.svc.StreamFileToWriter(ctx, s.file, w, nil); err != nil {
+			slog.Error("stream file failed", "err", err)
+		}
+		return
 	}
 
+	totalSize, err := h.resolvedInlineVideoSize(ctx, s.file)
+	if err != nil {
+		slog.Error("video size resolution failed", "err", err)
+		writeError(w, domain.ErrInternal("failed to determine exact video size"))
+		return
+	}
+	start, end, err := parseSingleByteRange(rangeHeader, totalSize)
+	if err != nil {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
+		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+		return
+	}
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+	w.WriteHeader(http.StatusPartialContent)
+	if err := h.svc.DownloadFileRangeToWriter(ctx, s.file, w, start, end, totalSize, nil); err != nil {
+		slog.Error("download file range failed", "err", err)
+	}
+}
+
+// serveInlineFile serves a non-video preview. The file is fully downloaded to
+// a temporary file first so http.ServeContent can answer Range requests.
+func (h *FilesHandler) serveInlineFile(w http.ResponseWriter, r *http.Request, s servedFile, storageID uuid.UUID) {
+	ctx, tracker, progress, cleanup := h.trackedDownload(r, storageID)
+	defer cleanup()
+	s.writeHeaders(w, "inline")
+
+	tmp, err := os.CreateTemp("", "pentaract-file-*")
+	if err != nil {
+		writeError(w, domain.ErrInternal("failed to create temporary file"))
+		return
+	}
+	defer func() {
+		tmp.Close()
+		_ = os.Remove(tmp.Name())
+	}()
+
+	if err := h.svc.DownloadFileToWriter(ctx, s.file, tmp, progress); err != nil {
+		slog.Error("download file failed", "err", err)
+		h.finishTracker(tracker, err)
+		writeError(w, err)
+		return
+	}
+
+	info, err := tmp.Stat()
+	if err != nil {
+		writeError(w, domain.ErrInternal("failed to stat temporary file"))
+		return
+	}
+	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
+		writeError(w, domain.ErrInternal("failed to rewind temporary file"))
+		return
+	}
+	w.Header().Set("Accept-Ranges", "bytes")
+	http.ServeContent(w, r, s.filename, info.ModTime(), tmp)
+	h.finishTracker(tracker, nil)
+}
+
+// serveAttachment streams the file straight to the response as a download.
+func (h *FilesHandler) serveAttachment(w http.ResponseWriter, r *http.Request, s servedFile, storageID uuid.UUID) {
+	ctx, tracker, progress, cleanup := h.trackedDownload(r, storageID)
+	defer cleanup()
+	s.writeHeaders(w, "attachment")
+
+	w.WriteHeader(http.StatusOK)
+	if err := h.svc.DownloadFileToWriter(ctx, s.file, w, progress); err != nil {
+		slog.Error("download file failed", "err", err)
+		h.failTracker(r, tracker, err)
+		return
+	}
 	h.finishTracker(tracker, nil)
 }
 
@@ -338,8 +362,7 @@ func parseSingleByteRange(header string, size int64) (int64, int64, error) {
 }
 
 func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -349,16 +372,11 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 
 	dirName := pathutil.ArchiveName(path)
 
-	downloadCtx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
+	downloadCtx, tracker, progress, cleanup := h.trackedDownload(r, storageID)
 	defer cleanup()
 
 	w.Header().Set("Content-Type", "application/zip")
 	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, sanitizeFilename(dirName)))
-
-	var progress *service.DownloadProgress
-	if tracker != nil {
-		progress = tracker.progress
-	}
 
 	writer := io.Writer(w)
 	if flusher, ok := w.(http.Flusher); ok {
@@ -458,12 +476,12 @@ func (h *FilesHandler) DeleteProgress(w http.ResponseWriter, r *http.Request) {
 		},
 		map[string]any{"status": "error"},
 		func() (map[string]any, bool, bool) {
-			tracker, exists := getDeleteTracker(deleteID)
+			tracker, exists := h.deletes.get(deleteID)
 			if !exists {
 				return nil, false, false
 			}
 
-			done, trackerErr, total, deleted := getDeleteTrackerStatus(tracker)
+			done, trackerErr, total, deleted := tracker.status()
 			status := "deleting"
 			if done && trackerErr != nil {
 				status = "error"

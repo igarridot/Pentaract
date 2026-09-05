@@ -25,7 +25,7 @@ import (
 // newTestFilesHandlerWithBase creates a FilesHandler with a custom localBasePath
 // for testing (the production constructor auto-detects from /mnt/data).
 func newTestFilesHandlerWithBase(svc filesService, basePath string) *FilesHandler {
-	h := NewFilesHandler(svc)
+	h := newTestFilesHandler(svc)
 	h.localBasePath = basePath
 	return h
 }

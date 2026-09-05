@@ -30,8 +30,7 @@ type grantAccessRequest struct {
 }
 
 func (h *AccessHandler) Grant(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -52,8 +51,7 @@ func (h *AccessHandler) Grant(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AccessHandler) List(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -73,8 +71,7 @@ type revokeAccessRequest struct {
 }
 
 func (h *AccessHandler) Revoke(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -101,8 +98,7 @@ func (h *AccessHandler) Revoke(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *AccessHandler) GrantCandidates(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return

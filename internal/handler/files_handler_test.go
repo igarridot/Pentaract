@@ -9,6 +9,7 @@ import (
 	"mime/multipart"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"strings"
 	"testing"
 	"time"
@@ -125,6 +126,17 @@ func (m *mockFilesService) Search(ctx context.Context, userID, storageID uuid.UU
 	return m.searchFn(ctx, userID, storageID, basePath, searchPath)
 }
 
+// TestMain speeds up the SSE loops and the cancel settle delay for the package.
+func TestMain(m *testing.M) {
+	ssePollingInterval = 10 * time.Millisecond
+	cancelUploadSettleDelay = 20 * time.Millisecond
+	os.Exit(m.Run())
+}
+
+func newTestFilesHandler(svc filesService) *FilesHandler {
+	return NewFilesHandler(svc, NewDeleteTrackers())
+}
+
 func makeFilesReq(method, target, body, storageID, wildcard string) *http.Request {
 	req := httptest.NewRequest(method, target, strings.NewReader(body))
 	rctx := chi.NewRouteContext()
@@ -140,14 +152,14 @@ func makeFilesReq(method, target, body, storageID, wildcard string) *http.Reques
 }
 
 func TestNewFilesHandler(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
-	if h == nil || h.svc == nil || h.uploads == nil || h.downloads == nil {
+	h := NewFilesHandler(&mockFilesService{}, NewDeleteTrackers())
+	if h == nil || h.svc == nil || h.uploads == nil || h.downloads == nil || h.deletes == nil {
 		t.Fatalf("expected initialized files handler")
 	}
 }
 
 func TestFilesHandlerTreeAndSearchNilBecomeEmpty(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := newTestFilesHandler(&mockFilesService{})
 	storageID := uuid.New().String()
 
 	w := httptest.NewRecorder()
@@ -166,7 +178,7 @@ func TestFilesHandlerTreeAndSearchNilBecomeEmpty(t *testing.T) {
 func TestFilesHandlerDeleteFileValidationAndSuccess(t *testing.T) {
 	var gotPath string
 	var gotForce bool
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		deleteFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error {
 			gotPath = path
 			gotForce = forceDelete
@@ -197,7 +209,7 @@ func TestFilesHandlerDeleteFileValidationAndSuccess(t *testing.T) {
 func TestFilesHandlerDownloadAttachment(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "folder/a.txt", Size: 3}, nil
 		},
@@ -221,7 +233,7 @@ func TestFilesHandlerDownloadAttachmentWithTrackingCompletesWithoutCancellation(
 	fileID := uuid.New()
 	storageID := uuid.New().String()
 	progressWasProvided := false
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "folder/a.txt", Size: 3}, nil
 		},
@@ -257,7 +269,7 @@ func TestFilesHandlerDownloadInlineVideoWithDownloadIDSkipsTracking(t *testing.T
 	fileID := uuid.New()
 	storageID := uuid.New().String()
 	progressWasProvided := false
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mkv", Size: 11}, nil
 		},
@@ -295,7 +307,7 @@ func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
 	rangeCalled := false
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -324,7 +336,7 @@ func TestFilesHandlerDownloadInlineVideoRangeUsesStoredFileSize(t *testing.T) {
 	exactCalled := false
 	var gotTotal int64
 
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -361,7 +373,7 @@ func TestFilesHandlerDownloadInlineVideoUsesStreamingPathWithoutRange(t *testing
 	streamCalled := false
 	downloadCalled := false
 	exactCalled := false
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -407,7 +419,7 @@ func TestFilesHandlerDownloadInlineVideoWithoutRangeAndUnknownSizeSkipsExactLook
 	storageID := uuid.New().String()
 	streamCalled := false
 	exactCalled := false
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 0}, nil
 		},
@@ -445,7 +457,7 @@ func TestFilesHandlerDownloadInlineVideoOpenRangeExtendsToEOF(t *testing.T) {
 	storageID := uuid.New().String()
 	rangeCalled := false
 	var gotStart, gotEnd, gotTotal int64
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -485,7 +497,7 @@ func TestFilesHandlerDownloadInlineMKVRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
 	rangeCalled := false
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mkv", Size: 11}, nil
 		},
@@ -514,7 +526,7 @@ func TestFilesHandlerDownloadInlineMKVRange(t *testing.T) {
 func TestFilesHandlerDownloadInlineInvalidRange(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
@@ -533,7 +545,7 @@ func TestFilesHandlerDownloadInlineInvalidRange(t *testing.T) {
 }
 
 func TestFilesHandlerDownloadAndUploadValidation(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := newTestFilesHandler(&mockFilesService{})
 	storageID := uuid.New().String()
 
 	w := httptest.NewRecorder()
@@ -551,7 +563,7 @@ func TestFilesHandlerDownloadAndUploadValidation(t *testing.T) {
 
 func TestFilesHandlerUploadSuccess(t *testing.T) {
 	uploadDone := make(chan struct{})
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
 			defer close(uploadDone)
 			b, _ := io.ReadAll(reader)
@@ -595,7 +607,7 @@ func TestFilesHandlerUploadSuccess(t *testing.T) {
 }
 
 func TestFilesHandlerUploadSkipOnConflict(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
 			if onConflict != service.UploadConflictSkip {
 				t.Fatalf("expected skip policy, got %q", onConflict)
@@ -719,7 +731,7 @@ func TestUploadProgressStatus(t *testing.T) {
 }
 
 func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := newTestFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 
 	w := httptest.NewRecorder()
@@ -768,7 +780,7 @@ func TestFilesHandlerCancelUpload(t *testing.T) {
 		cleaned <- fID
 		return nil
 	}
-	h := NewFilesHandler(mock)
+	h := newTestFilesHandler(mock)
 
 	uploadID := "up-1"
 	storageID := uuid.New()
@@ -801,7 +813,7 @@ func TestFilesHandlerCancelUpload(t *testing.T) {
 }
 
 func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := newTestFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 
 	h.uploads["u1"] = &uploadTracker{
@@ -839,15 +851,10 @@ func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
 		t.Fatalf("expected friendly download error SSE, got %q", w.Body.String())
 	}
 
-	tracker := startDeleteTracker("del-progress", storageID)
+	tracker := h.deletes.start("del-progress", storageID)
 	tracker.progress.TotalChunks = 3
 	tracker.progress.DeletedChunks.Store(3)
-	markDeleteTrackerDone(tracker, nil)
-	defer func() {
-		deleteRegistry.mu.Lock()
-		delete(deleteRegistry.m, "del-progress")
-		deleteRegistry.mu.Unlock()
-	}()
+	tracker.finish(nil)
 
 	w = httptest.NewRecorder()
 	h.DeleteProgress(w, makeFilesReq(http.MethodGet, "/?delete_id=del-progress", "", "", ""))
@@ -857,7 +864,7 @@ func TestFilesHandlerUploadDownloadDeleteProgressDone(t *testing.T) {
 }
 
 func TestFilesHandlerUploadProgressVerifying(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := newTestFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 	progress := &service.UploadProgress{
 		TotalBytes:  10,
@@ -895,7 +902,7 @@ func TestFilesHandlerUploadProgressVerifying(t *testing.T) {
 
 func TestFilesHandlerMoveAndCreateFolder(t *testing.T) {
 	var movedOld, movedNew, folderPath, folderName string
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		moveFn: func(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error {
 			movedOld = oldPath
 			movedNew = newPath
@@ -935,7 +942,7 @@ func TestFilesHandlerMoveAndCreateFolder(t *testing.T) {
 }
 
 func TestFilesHandlerDownloadDir(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
 			_, _ = io.Copy(w, bytes.NewBufferString("zipdata"))
 			return "docs", nil
@@ -953,7 +960,7 @@ func TestFilesHandlerDownloadDir(t *testing.T) {
 }
 
 func TestFilesHandlerDownloadDirWithTrackingCompletesWithoutCancellation(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
 			if progress == nil {
 				t.Fatalf("expected tracked directory download to receive progress object")
@@ -983,7 +990,7 @@ func TestFilesHandlerDownloadDirWithTrackingCompletesWithoutCancellation(t *test
 }
 
 func TestFilesHandlerDownloadDirUsesFilesZipForRoot(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
 			_, _ = io.Copy(w, bytes.NewBufferString("zipdata"))
 			return "files", nil
@@ -1000,7 +1007,7 @@ func TestFilesHandlerDownloadDirUsesFilesZipForRoot(t *testing.T) {
 func TestFilesHandlerDownloadInlineNonVideo(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "doc.txt", Size: 5}, nil
 		},
@@ -1041,7 +1048,7 @@ func TestFilesHandlerDownloadBrowserDisconnectKeepsTrackerInterrupted(t *testing
 	req, cancelReq := cancelableFilesReq("/?download_id=dl-blocked", storageID, "clips/scene.funscript")
 	defer cancelReq()
 
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
@@ -1067,7 +1074,7 @@ func TestFilesHandlerDownloadBrowserDisconnectKeepsTrackerInterrupted(t *testing
 		t.Fatalf("expected interrupted tracker, got interrupted=%v done=%v canceled=%v err=%v", interrupted, done, canceled, err)
 	}
 
-	body := collectDownloadProgress(t, h, "dl-blocked", 2*service.SSEPollingInterval+100*time.Millisecond)
+	body := collectDownloadProgress(t, h, "dl-blocked", 2*ssePollingInterval+100*time.Millisecond)
 	if !strings.Contains(body, `"status":"interrupted"`) {
 		t.Fatalf("expected SSE to report interrupted status, got %q", body)
 	}
@@ -1082,7 +1089,7 @@ func TestFilesHandlerDownloadResumedRequestReplacesInterruptedTracker(t *testing
 	defer cancelBlocked()
 
 	blocked := true
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
@@ -1122,7 +1129,7 @@ func TestFilesHandlerDownloadResumedRequestReplacesInterruptedTracker(t *testing
 		t.Fatalf("unexpected resumed tracker state: done=%v err=%v interrupted=%v", done, err, interrupted)
 	}
 
-	body := collectDownloadProgress(t, h, "dl-resume", 2*service.SSEPollingInterval+100*time.Millisecond)
+	body := collectDownloadProgress(t, h, "dl-resume", 2*ssePollingInterval+100*time.Millisecond)
 	if !strings.Contains(body, `"status":"done"`) {
 		t.Fatalf("expected SSE to report the resumed download as done, got %q", body)
 	}
@@ -1137,7 +1144,7 @@ func TestFilesHandlerDownloadInterruptedTrackerExpiresAsError(t *testing.T) {
 	req, cancelReq := cancelableFilesReq("/?download_id=dl-expire", storageID, "clips/scene.funscript")
 	defer cancelReq()
 
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
@@ -1174,7 +1181,7 @@ func TestFilesHandlerDownloadInterruptedTrackerExpiresAsError(t *testing.T) {
 		time.Sleep(5 * time.Millisecond)
 	}
 
-	body := collectDownloadProgress(t, h, "dl-expire", 2*service.SSEPollingInterval+100*time.Millisecond)
+	body := collectDownloadProgress(t, h, "dl-expire", 2*ssePollingInterval+100*time.Millisecond)
 	if !strings.Contains(body, `"status":"error"`) || !strings.Contains(body, "did not resume it") {
 		t.Fatalf("expected SSE error explaining the browser interruption, got %q", body)
 	}
@@ -1185,7 +1192,7 @@ func TestFilesHandlerCancelInterruptedDownloadReportsCancelled(t *testing.T) {
 	req, cancelReq := cancelableFilesReq("/?download_id=dl-cancel", storageID, "clips/scene.funscript")
 	defer cancelReq()
 
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
@@ -1206,7 +1213,7 @@ func TestFilesHandlerCancelInterruptedDownloadReportsCancelled(t *testing.T) {
 		t.Fatalf("expected 204 cancelling an interrupted download, got %d", w.Code)
 	}
 
-	body := collectDownloadProgress(t, h, "dl-cancel", 2*service.SSEPollingInterval+100*time.Millisecond)
+	body := collectDownloadProgress(t, h, "dl-cancel", 2*ssePollingInterval+100*time.Millisecond)
 	if !strings.Contains(body, `"status":"cancelled"`) {
 		t.Fatalf("expected SSE to report cancelled, got %q", body)
 	}
@@ -1214,7 +1221,7 @@ func TestFilesHandlerCancelInterruptedDownloadReportsCancelled(t *testing.T) {
 
 func TestFilesHandlerDownloadRealFailureStillReportsError(t *testing.T) {
 	storageID := uuid.New().String()
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
@@ -1244,7 +1251,7 @@ func TestFilesHandlerDownloadDirBrowserDisconnectKeepsTrackerInterrupted(t *test
 	req, cancelReq := cancelableFilesReq("/?download_id=dir-blocked", storageID, "clips")
 	defer cancelReq()
 
-	h := NewFilesHandler(&mockFilesService{
+	h := newTestFilesHandler(&mockFilesService{
 		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
 			cancelReq()
 			return "", fmt.Errorf("writing zip entry: %w", ctx.Err())

@@ -26,6 +26,10 @@ func (h *FilesHandler) scheduleUploadTrackerCleanup(uploadID string) {
 	})
 }
 
+// cancelUploadSettleDelay is how long CancelUpload waits for the upload
+// goroutine to record the file id before cleaning up. A variable for tests.
+var cancelUploadSettleDelay = time.Second
+
 // registerUpload creates and registers the tracker for an upload so its
 // upload_id can be subscribed to immediately, before any byte is transferred.
 // The returned context is cancelled by CancelUpload.
@@ -82,8 +86,7 @@ func (h *FilesHandler) finishUpload(tracker *uploadTracker, file *domain.File, s
 }
 
 func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -200,7 +203,7 @@ func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 
 	go func() {
 		// Wait for the upload goroutine to finish so tracker.fileID is set.
-		time.Sleep(1 * time.Second)
+		time.Sleep(cancelUploadSettleDelay)
 
 		h.mu.RLock()
 		fileID := tracker.fileID

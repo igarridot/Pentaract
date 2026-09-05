@@ -11,7 +11,8 @@ import (
 )
 
 type StoragesHandler struct {
-	svc storagesService
+	svc     storagesService
+	deletes *DeleteTrackers
 }
 
 type storagesService interface {
@@ -21,8 +22,8 @@ type storagesService interface {
 	Delete(ctx context.Context, userID uuid.UUID, storageID uuid.UUID, progress *service.DeleteProgress) error
 }
 
-func NewStoragesHandler(svc storagesService) *StoragesHandler {
-	return &StoragesHandler{svc: svc}
+func NewStoragesHandler(svc storagesService, deletes *DeleteTrackers) *StoragesHandler {
+	return &StoragesHandler{svc: svc, deletes: deletes}
 }
 
 type createStorageRequest struct {
@@ -61,8 +62,7 @@ func (h *StoragesHandler) List(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StoragesHandler) Get(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -78,35 +78,18 @@ func (h *StoragesHandler) Get(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StoragesHandler) Delete(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	deleteID := r.URL.Query().Get("delete_id")
-	var tracker *deleteTracker
-	if deleteID != "" {
-		tracker = startDeleteTracker(deleteID, storageID)
-		defer scheduleDeleteTrackerCleanup(deleteID)
-	}
-
-	var progress *service.DeleteProgress
-	if tracker != nil {
-		progress = tracker.progress
-	}
-
-	if err := h.svc.Delete(r.Context(), user.ID, storageID, progress); err != nil {
-		if tracker != nil {
-			markDeleteTrackerDone(tracker, err)
-		}
+	progress, finish := h.deletes.track(r.URL.Query().Get("delete_id"), storageID)
+	err = h.svc.Delete(r.Context(), user.ID, storageID, progress)
+	finish(err)
+	if err != nil {
 		writeError(w, err)
 		return
-	}
-
-	if tracker != nil {
-		markDeleteTrackerDone(tracker, nil)
 	}
 
 	w.WriteHeader(http.StatusNoContent)

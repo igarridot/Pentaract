@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"log/slog"
@@ -10,6 +11,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
+	appjwt "github.com/Dominux/Pentaract/internal/jwt"
 )
 
 func writeJSON(w http.ResponseWriter, status int, data any) {
@@ -26,7 +28,12 @@ func writeError(w http.ResponseWriter, err error) {
 		writeJSON(w, appErr.Code, appErr)
 		return
 	}
-	slog.Error("unhandled error", "err", err)
+	if errors.Is(err, context.Canceled) {
+		// The client went away; nothing is wrong on our side.
+		slog.Debug("request cancelled by client", "err", err)
+	} else {
+		slog.Error("unhandled error", "err", err)
+	}
 	writeJSON(w, http.StatusInternalServerError, &domain.AppError{
 		Code:    http.StatusInternalServerError,
 		Message: "internal server error",
@@ -40,6 +47,16 @@ func parseUUIDParam(r *http.Request, name string) (uuid.UUID, error) {
 		return uuid.Nil, domain.ErrBadRequest("invalid " + name)
 	}
 	return id, nil
+}
+
+// storageRequest returns the authenticated user and the storage addressed by
+// the route, the preamble of every storage-scoped handler.
+func storageRequest(r *http.Request) (*appjwt.AuthUser, uuid.UUID, error) {
+	storageID, err := parseUUIDParam(r, "storageID")
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	return GetAuthUser(r.Context()), storageID, nil
 }
 
 func parseBody(r *http.Request, dst any) error {

@@ -43,13 +43,14 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	workersSvc := service.NewStorageWorkersService(workersRepo)
 	filesSvc := service.NewFilesService(filesRepo, accessRepo, storageManager, storagesRepo, scheduler)
 
-	// Handlers
+	// Handlers. Delete progress is shared: files and storages both delete.
+	deletes := handler.NewDeleteTrackers()
 	authH := handler.NewAuthHandler(authSvc)
 	usersH := handler.NewUsersHandler(usersSvc)
-	storagesH := handler.NewStoragesHandler(storagesSvc)
+	storagesH := handler.NewStoragesHandler(storagesSvc, deletes)
 	accessH := handler.NewAccessHandler(accessSvc)
 	workersH := handler.NewStorageWorkersHandler(workersSvc)
-	filesH := handler.NewFilesHandler(filesSvc)
+	filesH := handler.NewFilesHandler(filesSvc, deletes)
 
 	// Router
 	r := chi.NewRouter()

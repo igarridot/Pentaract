@@ -24,6 +24,7 @@ type FilesHandler struct {
 	mu        sync.RWMutex
 	uploads   map[string]*uploadTracker
 	downloads map[string]*downloadTracker
+	deletes   *DeleteTrackers
 
 	fileSizes     *fileSizeCache
 	localBasePath string
@@ -50,7 +51,9 @@ type filesService interface {
 // the host directory specified by LOCAL_UPLOAD_BASE_PATH is mounted.
 const LocalUploadMountPath = "/mnt/data"
 
-func NewFilesHandler(svc filesService) *FilesHandler {
+// NewFilesHandler builds the files handler. deletes is shared with the
+// storages handler so both report through the same delete progress stream.
+func NewFilesHandler(svc filesService, deletes *DeleteTrackers) *FilesHandler {
 	// Auto-detect local upload support: enabled when the mount point exists.
 	basePath := ""
 	if info, err := os.Stat(LocalUploadMountPath); err == nil && info.IsDir() {
@@ -61,6 +64,7 @@ func NewFilesHandler(svc filesService) *FilesHandler {
 		svc:           svc,
 		uploads:       make(map[string]*uploadTracker),
 		downloads:     make(map[string]*downloadTracker),
+		deletes:       deletes,
 		fileSizes:     newFileSizeCache(),
 		localBasePath: basePath,
 	}
@@ -77,8 +81,7 @@ type moveFileRequest struct {
 }
 
 func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -104,8 +107,7 @@ func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *FilesHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -131,8 +133,7 @@ func (h *FilesHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *FilesHandler) Tree(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -150,8 +151,7 @@ func (h *FilesHandler) Tree(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *FilesHandler) Search(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -170,8 +170,7 @@ func (h *FilesHandler) Search(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -184,33 +183,18 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	deleteID := r.URL.Query().Get("delete_id")
 	forceDelete, err := strconv.ParseBool(r.URL.Query().Get("force_delete"))
 	if err != nil && r.URL.Query().Get("force_delete") != "" {
 		writeError(w, domain.ErrBadRequest("invalid force_delete value"))
 		return
 	}
-	var tracker *deleteTracker
-	if deleteID != "" {
-		tracker = startDeleteTracker(deleteID, storageID)
-		defer scheduleDeleteTrackerCleanup(deleteID)
-	}
 
-	var progress *service.DeleteProgress
-	if tracker != nil {
-		progress = tracker.progress
-	}
-
-	if err := h.svc.Delete(r.Context(), user.ID, storageID, path, progress, forceDelete); err != nil {
-		if tracker != nil {
-			markDeleteTrackerDone(tracker, err)
-		}
+	progress, finish := h.deletes.track(r.URL.Query().Get("delete_id"), storageID)
+	err = h.svc.Delete(r.Context(), user.ID, storageID, path, progress, forceDelete)
+	finish(err)
+	if err != nil {
 		writeError(w, err)
 		return
-	}
-
-	if tracker != nil {
-		markDeleteTrackerDone(tracker, nil)
 	}
 
 	w.WriteHeader(http.StatusNoContent)
