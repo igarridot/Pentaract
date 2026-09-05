@@ -912,8 +912,8 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	mock.ExpectExec("INSERT INTO file_chunks").
 		WithArgs(fileID, "TG_FILE", int64(77), int16(0)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
-		WithArgs(fileID).
+	mock.ExpectExec("UPDATE files SET is_uploaded = true, size = \\$2 WHERE id = \\$1").
+		WithArgs(fileID, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec("DELETE FROM files").
 		WithArgs(fileID).
@@ -1030,8 +1030,8 @@ func TestStorageManagerUploadRetriesOnlyFailedChunk(t *testing.T) {
 	mock.ExpectExec("INSERT INTO file_chunks").
 		WithArgs(fileID, "TG_FILE_0", int64(100), int16(0), fileID, "TG_FILE_1", int64(101), int16(1)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 2))
-	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
-		WithArgs(fileID).
+	mock.ExpectExec("UPDATE files SET is_uploaded = true, size = \\$2 WHERE id = \\$1").
+		WithArgs(fileID, pgxmock.AnyArg()).
 		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 	mock.ExpectExec("DELETE FROM files").
 		WithArgs(fileID).
@@ -1522,5 +1522,40 @@ func TestStorageManagerDownloadAndDecryptChunkTooBig(t *testing.T) {
 	})
 	if err == nil || !errors.Is(err, domain.ErrTelegramFileTooBig) {
 		t.Fatalf("expected file-too-big error, got: %v", err)
+	}
+}
+
+func TestDownloadToWriterServesCachedChunksWithoutHittingTelegram(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New()
+	cipher := NewChunkCipher("secret")
+
+	telegramHits := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		telegramHits++
+		w.WriteHeader(http.StatusInternalServerError)
+	}))
+	defer srv.Close()
+
+	repo := newFakeChunksRepo()
+	repo.chunks = []domain.FileChunk{{ID: uuid.New(), FileID: fileID, TelegramFileID: "F1", Position: 0}}
+	m := newStorageManager(storageDeps{
+		filesRepo:    repo,
+		storagesRepo: fakeStorageGetter{storage: domain.Storage{ID: storageID, Name: "Main", ChatID: 1}},
+		workersRepo:  &fakeWorkersRepo{},
+		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
+		tgClient:     telegram.NewClient(srv.URL),
+		chunkCipher:  cipher,
+	})
+	// ExactFileSize has just measured the last chunk: it sits in the stream cache.
+	m.ChunkDownloader.cache.set(streamChunkCacheKey{fileID: fileID, position: 0}, []byte("cached-bytes"))
+
+	var out bytes.Buffer
+	err := m.DownloadToWriter(context.Background(), &domain.File{ID: fileID, Path: "a.bin", StorageID: storageID}, &out, nil)
+	if err != nil || out.String() != "cached-bytes" {
+		t.Fatalf("expected the cached chunk to be served, got %q err=%v", out.String(), err)
+	}
+	if telegramHits != 0 {
+		t.Fatalf("a cached chunk must not be fetched again, telegram hits=%d", telegramHits)
 	}
 }

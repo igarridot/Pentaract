@@ -193,6 +193,7 @@ type uploadRun struct {
 	mu           sync.Mutex
 	results      []uploadedChunkResult
 	failedChunks []failedChunkInfo
+	totalBytes   int64 // plaintext bytes uploaded, recorded as the exact file size
 }
 
 // uploadChunks streams the reader into chunks and uploads them in parallel.
@@ -261,6 +262,7 @@ func (r *uploadRun) uploadChunk(ctx context.Context, position int16, data []byte
 func (r *uploadRun) recordResult(result uploadedChunkResult, bytes int) {
 	r.mu.Lock()
 	r.results = append(r.results, result)
+	r.totalBytes += int64(bytes)
 	r.mu.Unlock()
 	r.progress.chunkUploaded(bytes)
 }
@@ -339,7 +341,10 @@ func (r *uploadRun) retryFailedVerifications() ([]int16, error) {
 	return failed, nil
 }
 
-// persist writes the chunk records and marks the file as uploaded.
+// persist writes the chunk records, stores the exact size and marks the file
+// as uploaded. The size at creation time may come from the request's
+// Content-Length, which includes multipart framing; the exact value is what
+// Content-Length and Range responses rely on.
 func (r *uploadRun) persist() error {
 	sort.Slice(r.results, func(i, j int) bool {
 		return r.results[i].Position < r.results[j].Position
@@ -355,7 +360,7 @@ func (r *uploadRun) persist() error {
 		}
 	}
 
-	if err := r.u.filesRepo.CreateChunksAndMarkUploaded(r.ctx, r.file.ID, fileChunks); err != nil {
+	if err := r.u.filesRepo.CreateChunksAndMarkUploaded(r.ctx, r.file.ID, fileChunks, r.totalBytes); err != nil {
 		r.cleanupAll()
 		return fmt.Errorf("saving verified chunks: %w", err)
 	}
