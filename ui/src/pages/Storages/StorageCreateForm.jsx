@@ -3,35 +3,27 @@ import { useNavigate } from 'react-router-dom'
 import { Box, Typography, TextField, Button, Stack } from '@mui/material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
+import { useApiAction } from '../../common/use_api_action'
+import Panel from '../../components/Panel'
 
 export default function StorageCreateForm() {
   const navigate = useNavigate()
-  const addAlert = useAlert()
+  const run = useApiAction(useAlert())
   const [name, setName] = useState('')
   const [chatId, setChatId] = useState('')
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault()
-    try {
-      await API.storages.create(name, parseInt(chatId, 10))
-      addAlert('Storage created', 'success')
-      navigate('/storages')
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
+    return run(() => API.storages.create(name, parseInt(chatId, 10)), {
+      success: 'Storage created',
+      onSuccess: () => navigate('/storages'),
+    })
   }
 
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 3 }}>Create Storage</Typography>
-      <Box sx={{
-        bgcolor: 'background.paper',
-        borderRadius: 3,
-        border: '1px solid',
-        borderColor: 'divider',
-        p: 3,
-        maxWidth: 480,
-      }}>
+      <Panel sx={{ p: 3, maxWidth: 480 }}>
         <form onSubmit={handleSubmit}>
           <Stack spacing={2.5}>
             <TextField
@@ -49,7 +41,7 @@ export default function StorageCreateForm() {
             </Button>
           </Stack>
         </form>
-      </Box>
+      </Panel>
     </Box>
   )
 }

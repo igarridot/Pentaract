@@ -1,54 +1,53 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useCallback } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
-  Box, Typography, Paper, Table, TableHead, TableRow, TableCell, TableBody,
+  Box, Typography, Table, TableHead, TableRow, TableCell, TableBody,
   IconButton, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
 } from '@mui/material'
 import { Delete as DeleteIcon, Key as KeyIcon } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
+import { useApiAction } from '../../common/use_api_action'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
+import Panel from '../../components/Panel'
 
 export default function Users() {
   const navigate = useNavigate()
   const addAlert = useAlert()
+  const run = useApiAction(addAlert)
   const [users, setUsers] = useState([])
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [passwordTarget, setPasswordTarget] = useState(null)
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
 
-  const load = async () => {
-    try {
-      const data = await API.users.listManaged()
-      setUsers(data || [])
-    } catch (err) {
-      if ((err?.message || '').toLowerCase().includes('forbidden')) {
-        addAlert('Admin access required', 'error')
-        navigate('/storages')
-        return
-      }
-      addAlert(err.message, 'error')
-    }
+  const load = useCallback(() => run(() => API.users.listManaged(), {
+    onSuccess: (data) => setUsers(data || []),
+    onError: (err) => {
+      if (!(err?.message || '').toLowerCase().includes('forbidden')) return false
+      addAlert('Admin access required', 'error')
+      navigate('/storages')
+      return true
+    },
+  }), [run, addAlert, navigate])
+
+  useEffect(() => { load() }, [load])
+
+  const closePasswordDialog = () => {
+    setPasswordTarget(null)
+    setNewPassword('')
+    setConfirmPassword('')
   }
 
-  useEffect(() => {
-    load()
-  }, [])
-
-  const handleDelete = async () => {
+  const handleDelete = () => {
     if (!deleteTarget) return
-    try {
-      await API.users.deleteManaged(deleteTarget.id)
-      addAlert('User deleted', 'success')
-      setDeleteTarget(null)
-      load()
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
+    return run(() => API.users.deleteManaged(deleteTarget.id), {
+      success: 'User deleted',
+      onSuccess: () => { setDeleteTarget(null); load() },
+    })
   }
 
-  const handleUpdatePassword = async () => {
+  const handleUpdatePassword = () => {
     if (!passwordTarget) return
     if (!newPassword) {
       addAlert('Password is required', 'error')
@@ -58,21 +57,16 @@ export default function Users() {
       addAlert('Passwords do not match', 'error')
       return
     }
-    try {
-      await API.users.updatePassword(passwordTarget.id, newPassword)
-      addAlert('Password updated', 'success')
-      setPasswordTarget(null)
-      setNewPassword('')
-      setConfirmPassword('')
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
+    return run(() => API.users.updatePassword(passwordTarget.id, newPassword), {
+      success: 'Password updated',
+      onSuccess: closePasswordDialog,
+    })
   }
 
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 3 }}>User Management</Typography>
-      <Paper sx={{ borderRadius: 3, border: '1px solid', borderColor: 'divider', overflow: 'hidden' }}>
+      <Panel>
         <Table size="small">
           <TableHead>
             <TableRow>
@@ -103,7 +97,7 @@ export default function Users() {
             )}
           </TableBody>
         </Table>
-      </Paper>
+      </Panel>
 
       <ActionConfirmDialog
         open={!!deleteTarget}
@@ -114,7 +108,7 @@ export default function Users() {
         onCancel={() => setDeleteTarget(null)}
       />
 
-      <Dialog open={!!passwordTarget} onClose={() => setPasswordTarget(null)} maxWidth="xs" fullWidth>
+      <Dialog open={!!passwordTarget} onClose={closePasswordDialog} maxWidth="xs" fullWidth>
         <DialogTitle>Change Password</DialogTitle>
         <DialogContent>
           <Typography variant="body2" color="text.secondary" sx={{ mb: 2 }}>
@@ -138,7 +132,7 @@ export default function Users() {
           />
         </DialogContent>
         <DialogActions>
-          <Button onClick={() => { setPasswordTarget(null); setNewPassword(''); setConfirmPassword('') }} color="inherit">Cancel</Button>
+          <Button onClick={closePasswordDialog} color="inherit">Cancel</Button>
           <Button variant="contained" onClick={handleUpdatePassword} disabled={!newPassword || !confirmPassword}>
             Update
           </Button>

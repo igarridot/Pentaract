@@ -6,10 +6,12 @@ import {
 } from '@mui/material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
+import { useApiAction } from '../../common/use_api_action'
+import Panel from '../../components/Panel'
 
 export default function StorageWorkerCreateForm() {
   const navigate = useNavigate()
-  const addAlert = useAlert()
+  const run = useApiAction(useAlert())
   const [name, setName] = useState('')
   const [token, setToken] = useState('')
   const [storageId, setStorageId] = useState('')
@@ -25,28 +27,18 @@ export default function StorageWorkerCreateForm() {
     load()
   }, [])
 
-  const handleSubmit = async (e) => {
+  const handleSubmit = (e) => {
     e.preventDefault()
-    try {
-      await API.storageWorkers.create(name, token, storageId || null)
-      addAlert('Worker created', 'success')
-      navigate('/storage_workers')
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
+    return run(() => API.storageWorkers.create(name, token, storageId || null), {
+      success: 'Worker created',
+      onSuccess: () => navigate('/storage_workers'),
+    })
   }
 
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 3 }}>Create Worker</Typography>
-      <Box sx={{
-        bgcolor: 'background.paper',
-        borderRadius: 3,
-        border: '1px solid',
-        borderColor: 'divider',
-        p: 3,
-        maxWidth: 480,
-      }}>
+      <Panel sx={{ p: 3, maxWidth: 480 }}>
         <form onSubmit={handleSubmit}>
           <Stack spacing={2.5}>
             <TextField
@@ -76,7 +68,7 @@ export default function StorageWorkerCreateForm() {
             </Button>
           </Stack>
         </form>
-      </Box>
+      </Panel>
     </Box>
   )
 }
