@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from 'react'
+import { useState, useEffect } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
   Typography, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
@@ -11,18 +11,13 @@ import {
   People as PeopleIcon,
 } from '@mui/icons-material'
 import API from '../../api'
-import { createOperationId } from '../../common/operation_id'
 import { useAlert } from '../../components/AlertStack'
+import { useDeleteProgress } from '../../common/use_delete_progress'
 import { convertSize } from '../../common/size_converter'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
 import Access from '../../components/Access'
 import GrantAccess from '../../components/GrantAccess'
 import DeleteProgress from '../../components/DeleteProgress'
-import {
-  applyDeleteProgressUpdate,
-  createDeleteProgressState,
-  getDeleteProgressResetDelay,
-} from '../../common/delete_progress'
 
 export default function Storages() {
   const navigate = useNavigate()
@@ -34,8 +29,7 @@ export default function Storages() {
   const [grantOpen, setGrantOpen] = useState(false)
   const [grantCandidates, setGrantCandidates] = useState([])
   const [editUser, setEditUser] = useState(null)
-  const [deleteState, setDeleteState] = useState(null)
-  const cancelDeleteProgressRef = useRef(null)
+  const { deleteState, runTrackedDelete } = useDeleteProgress()
 
   const load = async () => {
     try {
@@ -47,43 +41,17 @@ export default function Storages() {
   }
 
   useEffect(() => { load() }, [])
-  useEffect(() => () => {
-    if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
-  }, [])
 
   const handleDelete = async () => {
     try {
-      const deleteId = createOperationId()
-      if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
-      setDeleteState(createDeleteProgressState(deleteTarget?.name || 'storage'))
-
-      const cancel = API.files.subscribeDeleteProgress(deleteId, (data) => {
-        setDeleteState((prev) => applyDeleteProgressUpdate(prev, data))
-
-        if (data.status === 'done') {
-          cancel()
-          setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay(data.status))
-        }
-        if (data.status === 'error') {
-          cancel()
-          setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay(data.status))
-        }
-      })
-      cancelDeleteProgressRef.current = cancel
-
-      await API.storages.delete(deleteTarget.id, deleteId)
-      cancel()
-      cancelDeleteProgressRef.current = null
+      await runTrackedDelete(
+        deleteTarget?.name || 'storage',
+        (deleteId) => API.storages.delete(deleteTarget.id, deleteId),
+      )
       setDeleteTarget(null)
       addAlert('Storage deleted', 'success')
       load()
     } catch (err) {
-      if (cancelDeleteProgressRef.current) {
-        cancelDeleteProgressRef.current()
-        cancelDeleteProgressRef.current = null
-      }
-      setDeleteState((prev) => (prev ? { ...prev, status: 'error' } : null))
-      setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay('error'))
       addAlert(err.message, 'error')
     }
   }

@@ -1,18 +1,12 @@
-import { useState, useCallback, useRef } from 'react'
+import { useState } from 'react'
 import API from '../../api'
-import { createOperationId } from '../../common/operation_id'
-import {
-  applyDeleteProgressUpdate,
-  createDeleteProgressState,
-  getDeleteProgressResetDelay,
-} from '../../common/delete_progress'
+import { useDeleteProgress } from '../../common/use_delete_progress'
 import { getItemPath } from './operations'
 
 export function useDeleteOperation(addAlert, storageId, loadTree) {
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [forceDelete, setForceDelete] = useState(false)
-  const [deleteState, setDeleteState] = useState(null)
-  const cancelDeleteProgressRef = useRef(null)
+  const { deleteState, runTrackedDelete, stopTracking } = useDeleteProgress()
 
   const isDeleting = deleteState?.status === 'deleting'
 
@@ -24,47 +18,20 @@ export function useDeleteOperation(addAlert, storageId, loadTree) {
 
     try {
       const path = getItemPath(target)
-      const deleteId = createOperationId()
-      if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
-      setDeleteState(createDeleteProgressState(target.name || path))
-
-      const cancel = API.files.subscribeDeleteProgress(deleteId, (data) => {
-        setDeleteState((prev) => applyDeleteProgressUpdate(prev, data))
-
-        if (data.status === 'done') {
-          cancel()
-          cancelDeleteProgressRef.current = null
-          loadTree()
-          setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay(data.status))
-        }
-        if (data.status === 'error') {
-          cancel()
-          cancelDeleteProgressRef.current = null
-          setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay(data.status))
-        }
-      })
-      cancelDeleteProgressRef.current = cancel
-
-      await API.files.delete(storageId, path, deleteId, forceDelete)
+      await runTrackedDelete(
+        target.name || path,
+        (deleteId) => API.files.delete(storageId, path, deleteId, forceDelete),
+        { onTerminal: (status) => { if (status === 'done') loadTree() } },
+      )
       addAlert('Deleted', 'success')
       loadTree()
     } catch (err) {
-      if (cancelDeleteProgressRef.current) {
-        cancelDeleteProgressRef.current()
-        cancelDeleteProgressRef.current = null
-      }
-      setDeleteState((prev) => (prev ? { ...prev, status: 'error' } : null))
-      setTimeout(() => setDeleteState(null), getDeleteProgressResetDelay('error'))
       addAlert(err.message, 'error')
     } finally {
       setForceDelete(false)
       loadTree()
     }
   }
-
-  const cleanupDelete = useCallback(() => {
-    if (cancelDeleteProgressRef.current) cancelDeleteProgressRef.current()
-  }, [])
 
   return {
     deleteTarget,
@@ -74,6 +41,6 @@ export function useDeleteOperation(addAlert, storageId, loadTree) {
     deleteState,
     isDeleting,
     confirmDelete,
-    cleanupDelete,
+    cleanupDelete: stopTracking,
   }
 }
