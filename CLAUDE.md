@@ -20,6 +20,7 @@ make down
 make test                # Go + UI tests in container
 go test ./...            # Go tests locally
 cd ui && pnpm test       # UI tests locally (node:test, not vitest)
+cd ui && pnpm lint       # ESLint (rules-of-hooks + exhaustive-deps); CI runs it
 
 # Single Go test
 go test -run TestName ./internal/service/
@@ -58,14 +59,17 @@ Repositories → Telegram Client → WorkerScheduler → StorageManager → Serv
 
 - `internal/telegram/` — Telegram Bot API client with rate-limit retry (`doWithRateLimitRetry`), transient error backoff
 - `internal/service/` — Business logic. `StorageManager` is the core: `chunk_uploader.go`, `chunk_downloader.go`, `chunk_deleter.go`, `chunk_crypto.go`
-- `internal/handler/` — HTTP handlers. Upload/download split into `upload_handler.go`, `download_handler.go`. SSE polling unified in `progress_tracker.go`
+- `internal/handler/` — HTTP handlers. Upload/download split into `upload_handler.go`, `download_handler.go`. SSE polling unified in `progress_tracker.go`. `DeleteTrackers` (delete progress registry) is injected into both the files and storages handlers
 - `internal/repository/` — PostgreSQL queries. `files.go` has the complex path-based queries (ListDir, Search, CreateFileAnyway with dedup)
 
 ### Frontend
 
 - `ui/src/api/` — API client with shared SSE subscription (`subscribeAuthSSE`)
-- `ui/src/pages/Files/` — Main file browser, split into hooks: `useUploads`, `useDownloads`, `useDeleteOperation`, `useBulkOperations`, `useFileNavigation`. `useUploadConflicts` (conflict dialog + directory cache) is shared with `pages/LocalUpload`; `common/use_delete_progress.js` is shared with `pages/Storages`
-- Pure, node-tested modules hold the logic hooks and components lean on: `common/progress.js`, `pages/Files/operations.js`, `pages/Files/upload_conflicts.js`, `pages/LocalUpload/local_upload_paths.js`
+- `ui/src/pages/Files/` — Main file browser, split into hooks: `useUploads`, `useDownloads`, `useDeleteOperation`, `useBulkOperations`, `useFileNavigation`, `useFileSelection`. `useUploadConflicts` (conflict dialog + directory cache) is shared with `pages/LocalUpload`; `common/use_delete_progress.js` is shared with `pages/Storages`
+- `common/use_api_action.js` — `run(action, { success, onSuccess, onError })` replaces the try/await/addAlert boilerplate in pages
+- Shared components: `Panel` (bordered surface), `PathBreadcrumbs` (Root > a > b), `ProgressCard`
+- Pure, node-tested modules hold the logic hooks and components lean on: `common/progress.js`, `common/api_action.js`, `pages/Files/operations.js`, `pages/Files/upload_conflicts.js`, `pages/LocalUpload/local_upload_paths.js`
+- Storage paths inside URLs go through `encodePath` in `ui/src/api/index.js` (per-segment `encodeURIComponent`); the server decodes with `url.PathUnescape`
 - `ui/src/components/ProgressCard.jsx` — Shared progress UI used by all 4 progress components
 
 ## Configuration
@@ -82,7 +86,7 @@ All via environment variables (see `.env.example`). Key ones:
 
 **Go handlers**: Mock service interfaces with function fields (`mockFilesService`), use `httptest`. See `internal/handler/files_handler_test.go`.
 
-**Go services**: Fake repository interfaces. See `internal/service/files_test.go`.
+**Go services**: Fake repository interfaces. See `internal/service/files_test.go`; `StorageManager` takes `chunksRepository`/`storageGetter` interfaces so upload tests use in-memory fakes (`chunk_uploader_flow_test.go`).
 
 **Frontend**: Node.js built-in `test` module (NOT vitest). Run with `pnpm test` which calls `node --test`.
 
