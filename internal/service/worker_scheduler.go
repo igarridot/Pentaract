@@ -23,7 +23,6 @@ type WorkerScheduler struct {
 }
 
 type schedulerWorkersRepo interface {
-	GetToken(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error)
 	GetTokenBatch(ctx context.Context, storageID uuid.UUID, rateLimit, count int) ([]repository.WorkerToken, error)
 	NextAvailableIn(ctx context.Context, storageID uuid.UUID, rateLimit int) (time.Duration, error)
 }

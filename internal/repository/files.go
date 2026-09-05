@@ -93,14 +93,6 @@ func (r *FilesRepo) CreateFileIfNotExists(ctx context.Context, path string, size
 	return f, false, nil
 }
 
-func (r *FilesRepo) MarkUploaded(ctx context.Context, fileID uuid.UUID) error {
-	_, err := r.pool.Exec(ctx,
-		`UPDATE files SET is_uploaded = true WHERE id = $1`,
-		fileID,
-	)
-	return err
-}
-
 func (r *FilesRepo) GetByPath(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error) {
 	f := &domain.File{}
 	err := r.pool.QueryRow(ctx,
@@ -291,10 +283,6 @@ func (r *FilesRepo) Delete(ctx context.Context, storageID uuid.UUID, path string
 		return domain.ErrNotFound("file")
 	}
 	return nil
-}
-
-func (r *FilesRepo) CreateChunks(ctx context.Context, chunks []domain.FileChunk) error {
-	return createChunks(ctx, r.pool, chunks)
 }
 
 func createChunks(ctx context.Context, execer interface {

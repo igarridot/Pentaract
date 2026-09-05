@@ -80,11 +80,11 @@ func TestStorageWorkersRepoMutationsAndScheduling(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("WITH available_workers AS").
-		WithArgs(storageID, 10).
+		WithArgs(storageID, 10, 1).
 		WillReturnRows(pgxmock.NewRows([]string{"token", "name"}).AddRow("token", "w1"))
 	mock.ExpectCommit()
-	if wt, err := repo.GetToken(context.Background(), storageID, 10); err != nil || wt == nil {
-		t.Fatalf("get token failed: %v %v", wt, err)
+	if tokens, err := repo.GetTokenBatch(context.Background(), storageID, 10, 1); err != nil || len(tokens) != 1 {
+		t.Fatalf("get token batch failed: %v %v", tokens, err)
 	}
 
 	mock.ExpectQuery("SELECT MIN\\(swu.created_at\\)").
@@ -130,12 +130,12 @@ func TestStorageWorkersRepoErrorBranches(t *testing.T) {
 
 	mock.ExpectBegin()
 	mock.ExpectQuery("WITH available_workers AS").
-		WithArgs(storageID, 10).
-		WillReturnError(pgx.ErrNoRows)
+		WithArgs(storageID, 10, 1).
+		WillReturnRows(pgxmock.NewRows([]string{"token", "name"}))
 	mock.ExpectRollback()
-	wt, err := repo.GetToken(context.Background(), storageID, 10)
-	if err != nil || wt != nil {
-		t.Fatalf("expected nil,nil for no available worker, got wt=%v err=%v", wt, err)
+	tokens, err := repo.GetTokenBatch(context.Background(), storageID, 10, 1)
+	if err != nil || len(tokens) != 0 {
+		t.Fatalf("expected no tokens when no worker is available, got tokens=%v err=%v", tokens, err)
 	}
 
 	mock.ExpectQuery("SELECT MIN\\(swu.created_at\\)").

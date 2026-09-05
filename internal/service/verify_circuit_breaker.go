@@ -29,13 +29,12 @@ func isHashMismatch(err error) bool {
 // during an upload and pauses new verifications when a threshold is reached,
 // giving Telegram time to recover from throttling. One instance per upload.
 type verifyCircuitBreaker struct {
-	mu                   sync.Mutex
-	consecutiveFailures  int
-	consecutiveSuccesses int
-	tripped              bool
-	lastTrippedAt        time.Time
-	cooldown             time.Duration
-	failureThreshold     int
+	mu                  sync.Mutex
+	consecutiveFailures int
+	tripped             bool
+	lastTrippedAt       time.Time
+	cooldown            time.Duration
+	failureThreshold    int
 }
 
 func newVerifyCircuitBreaker() *verifyCircuitBreaker {
@@ -45,12 +44,11 @@ func newVerifyCircuitBreaker() *verifyCircuitBreaker {
 	}
 }
 
-// RecordSuccess resets the failure counter and increments success counter.
+// RecordSuccess resets the failure counter and closes a tripped breaker.
 func (cb *verifyCircuitBreaker) RecordSuccess() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.consecutiveFailures = 0
-	cb.consecutiveSuccesses++
 	if cb.tripped {
 		cb.tripped = false
 		slog.Info("verification circuit breaker recovered")
@@ -63,7 +61,6 @@ func (cb *verifyCircuitBreaker) RecordFailure() {
 	cb.mu.Lock()
 	defer cb.mu.Unlock()
 	cb.consecutiveFailures++
-	cb.consecutiveSuccesses = 0
 	if cb.consecutiveFailures >= cb.failureThreshold && !cb.tripped {
 		cb.tripped = true
 		cb.lastTrippedAt = time.Now()

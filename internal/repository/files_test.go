@@ -37,13 +37,6 @@ func TestFilesRepoCreateMarkGetDelete(t *testing.T) {
 		t.Fatalf("create file anyway failed: file=%+v err=%v", f, err)
 	}
 
-	mock.ExpectExec("UPDATE files SET is_uploaded = true WHERE id = \\$1").
-		WithArgs(fileID).
-		WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	if err := repo.MarkUploaded(ctx, fileID); err != nil {
-		t.Fatalf("mark uploaded failed: %v", err)
-	}
-
 	mock.ExpectQuery("SELECT id, path, size, storage_id, is_uploaded FROM files WHERE storage_id = \\$1 AND path = \\$2").
 		WithArgs(storageID, "dir/video.mkv").
 		WillReturnRows(pgxmock.NewRows([]string{"id", "path", "size", "storage_id", "is_uploaded"}).
@@ -151,14 +144,14 @@ func TestFilesRepoChunksFlow(t *testing.T) {
 	storageID := uuid.New()
 	chunkID := uuid.New()
 
-	if err := repo.CreateChunks(ctx, nil); err != nil {
+	if err := createChunks(ctx, mock, nil); err != nil {
 		t.Fatalf("empty create chunks should be nil, got: %v", err)
 	}
 
 	mock.ExpectExec("INSERT INTO file_chunks").
 		WithArgs(fileID, "tg-1", int64(111), int16(0), fileID, "tg-2", int64(112), int16(1)).
 		WillReturnResult(pgxmock.NewResult("INSERT", 2))
-	err := repo.CreateChunks(ctx, []domain.FileChunk{
+	err := createChunks(ctx, mock, []domain.FileChunk{
 		{FileID: fileID, TelegramFileID: "tg-1", TelegramMessageID: 111, Position: 0},
 		{FileID: fileID, TelegramFileID: "tg-2", TelegramMessageID: 112, Position: 1},
 	})

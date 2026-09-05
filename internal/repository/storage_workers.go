@@ -174,56 +174,6 @@ func (r *StorageWorkersRepo) scheduleUsageCleanup() {
 	}()
 }
 
-// GetToken atomically selects the least-loaded worker under the rate limit
-// and records a usage entry. Returns nil if no worker is available.
-func (r *StorageWorkersRepo) GetToken(ctx context.Context, storageID uuid.UUID, rateLimit int) (*WorkerToken, error) {
-	tx, err := r.pool.Begin(ctx)
-	if err != nil {
-		return nil, err
-	}
-	defer tx.Rollback(ctx)
-
-	// Select least-loaded worker under rate limit and insert usage
-	var token, name string
-	err = tx.QueryRow(ctx,
-		`WITH available_workers AS (
-			SELECT sw.id, sw.name, sw.token, COUNT(swu.id) AS usage_count
-			FROM storage_workers sw
-			LEFT JOIN storage_workers_usages swu
-				ON swu.worker_id = sw.id
-				AND swu.created_at >= now() - interval '1 minute'
-			WHERE sw.storage_id = $1 OR sw.storage_id IS NULL
-			GROUP BY sw.id, sw.name, sw.token
-			HAVING COUNT(swu.id) < $2
-			ORDER BY COUNT(swu.id) ASC, sw.id
-			LIMIT 1
-		),
-		inserted AS (
-			INSERT INTO storage_workers_usages (worker_id)
-			SELECT id FROM available_workers
-			RETURNING worker_id
-		)
-		SELECT aw.token, aw.name
-		FROM available_workers aw
-		JOIN inserted i ON i.worker_id = aw.id`,
-		storageID, rateLimit,
-	).Scan(&token, &name)
-
-	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			r.scheduleUsageCleanup()
-			return nil, nil
-		}
-		return nil, err
-	}
-
-	if err := tx.Commit(ctx); err != nil {
-		return nil, err
-	}
-	r.scheduleUsageCleanup()
-	return &WorkerToken{Token: token, Name: name}, nil
-}
-
 // GetTokenBatch atomically selects up to `count` worker tokens, distributing
 // across workers proportionally to their free slots, and records one usage
 // entry per returned token. Returns nil if no workers are available.
