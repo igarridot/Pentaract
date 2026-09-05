@@ -208,11 +208,21 @@ func (d *ChunkDownloader) writeWholeFile(ctx context.Context, file *domain.File,
 	return nil
 }
 
+// downloadAndDecryptChunkPreferCached serves a chunk from the stream cache
+// when it is already there and otherwise fetches it without caching it: a full
+// download reads each chunk once, so filling the cache would only evict
+// chunks playback is using. The hit matters because ExactFileSize caches the
+// last chunk right before a download starts.
+func (d *ChunkDownloader) downloadAndDecryptChunkPreferCached(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
+	if data, ok := d.cache.get(streamChunkCacheKey{fileID: fileID, position: chunk.Position}); ok {
+		return data, nil
+	}
+	return d.downloadAndDecryptChunk(ctx, fileID, storage, chunk)
+}
+
 // DownloadToWriter streams a file's chunks sequentially to the given writer.
-// Chunks are always fetched from Telegram (no cache), since a full download
-// reads each chunk exactly once.
 func (d *ChunkDownloader) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
-	return d.writeWholeFile(ctx, file, w, progress, d.downloadAndDecryptChunk, "download")
+	return d.writeWholeFile(ctx, file, w, progress, d.downloadAndDecryptChunkPreferCached, "download")
 }
 
 // StreamToWriter is the streaming path used by inline previews and media
