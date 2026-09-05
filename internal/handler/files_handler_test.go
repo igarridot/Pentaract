@@ -761,14 +761,11 @@ func TestFilesHandlerCancelDownloadAndProgressValidation(t *testing.T) {
 
 func TestFilesHandlerCancelUpload(t *testing.T) {
 	cancelled := false
-	cleaned := false
+	cleaned := make(chan uuid.UUID, 1)
 	fileID := uuid.New()
 	mock := &mockFilesService{}
 	mock.cleanupCancelledUploadFn = func(ctx context.Context, userID, storageID uuid.UUID, fID uuid.UUID) error {
-		if fID != fileID {
-			t.Fatalf("cleanup got fileID=%v, want %v", fID, fileID)
-		}
-		cleaned = true
+		cleaned <- fID
 		return nil
 	}
 	h := NewFilesHandler(mock)
@@ -792,9 +789,13 @@ func TestFilesHandlerCancelUpload(t *testing.T) {
 		t.Fatalf("cancel upload expected 204 and cancel callback, got %d cancelled=%v", w.Code, cancelled)
 	}
 
-	// Background cleanup sleeps for 1 second before cleaning up.
-	time.Sleep(1100 * time.Millisecond)
-	if !cleaned {
+	// Background cleanup waits one second for the upload goroutine to settle.
+	select {
+	case got := <-cleaned:
+		if got != fileID {
+			t.Fatalf("cleanup got fileID=%v, want %v", got, fileID)
+		}
+	case <-time.After(3 * time.Second):
 		t.Fatalf("expected cleanup call after cancellation")
 	}
 }
