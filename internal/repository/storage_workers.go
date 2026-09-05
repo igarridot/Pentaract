@@ -9,13 +9,12 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 type StorageWorkersRepo struct {
-	pool                storageWorkersDB
+	pool                DB
 	usageCleanupMu      sync.Mutex
 	lastUsageCleanup    time.Time
 	usageCleanupRunning bool
@@ -26,14 +25,7 @@ const (
 	storageWorkerUsageCleanupInterval = 5 * time.Minute
 )
 
-type storageWorkersDB interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
-func NewStorageWorkersRepo(pool storageWorkersDB) *StorageWorkersRepo {
+func NewStorageWorkersRepo(pool DB) *StorageWorkersRepo {
 	return &StorageWorkersRepo{
 		pool:             pool,
 		lastUsageCleanup: time.Now(),
@@ -61,20 +53,11 @@ func (r *StorageWorkersRepo) List(ctx context.Context, userID uuid.UUID) ([]doma
 		`SELECT id, name, user_id, token, storage_id FROM storage_workers WHERE user_id = $1 ORDER BY name`,
 		userID,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var workers []domain.StorageWorker
-	for rows.Next() {
+	return collectRows(rows, err, func(rows pgx.Rows) (domain.StorageWorker, error) {
 		var w domain.StorageWorker
-		if err := rows.Scan(&w.ID, &w.Name, &w.UserID, &w.Token, &w.StorageID); err != nil {
-			return nil, err
-		}
-		workers = append(workers, w)
-	}
-	return workers, rows.Err()
+		err := rows.Scan(&w.ID, &w.Name, &w.UserID, &w.Token, &w.StorageID)
+		return w, err
+	})
 }
 
 func (r *StorageWorkersRepo) HasWorkers(ctx context.Context, storageID uuid.UUID) (bool, error) {
@@ -94,20 +77,7 @@ func (r *StorageWorkersRepo) ListTokensByStorage(ctx context.Context, storageID 
 		ORDER BY name`,
 		storageID,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	tokens := make([]WorkerToken, 0)
-	for rows.Next() {
-		var wt WorkerToken
-		if err := rows.Scan(&wt.Token, &wt.Name); err != nil {
-			return nil, err
-		}
-		tokens = append(tokens, wt)
-	}
-	return tokens, rows.Err()
+	return collectRows(rows, err, scanWorkerToken)
 }
 
 func (r *StorageWorkersRepo) Delete(ctx context.Context, id, userID uuid.UUID) error {
@@ -146,6 +116,12 @@ func (r *StorageWorkersRepo) Update(ctx context.Context, id, userID uuid.UUID, n
 type WorkerToken struct {
 	Token string
 	Name  string
+}
+
+func scanWorkerToken(rows pgx.Rows) (WorkerToken, error) {
+	var wt WorkerToken
+	err := rows.Scan(&wt.Token, &wt.Name)
+	return wt, err
 }
 
 func (r *StorageWorkersRepo) scheduleUsageCleanup() {
@@ -212,20 +188,8 @@ func (r *StorageWorkersRepo) GetTokenBatch(ctx context.Context, storageID uuid.U
 		FROM expanded e`,
 		storageID, rateLimit, count,
 	)
+	tokens, err := collectRows(rows, err, scanWorkerToken)
 	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var tokens []WorkerToken
-	for rows.Next() {
-		var wt WorkerToken
-		if err := rows.Scan(&wt.Token, &wt.Name); err != nil {
-			return nil, err
-		}
-		tokens = append(tokens, wt)
-	}
-	if err := rows.Err(); err != nil {
 		return nil, err
 	}
 

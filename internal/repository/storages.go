@@ -6,22 +6,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 type StoragesRepo struct {
-	pool storagesDB
+	pool DB
 }
 
-type storagesDB interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-}
-
-func NewStoragesRepo(pool storagesDB) *StoragesRepo {
+func NewStoragesRepo(pool DB) *StoragesRepo {
 	return &StoragesRepo{pool: pool}
 }
 
@@ -53,20 +46,11 @@ func (r *StoragesRepo) List(ctx context.Context, userID uuid.UUID) ([]domain.Sto
 		ORDER BY s.name`,
 		userID,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var storages []domain.StorageWithInfo
-	for rows.Next() {
+	return collectRows(rows, err, func(rows pgx.Rows) (domain.StorageWithInfo, error) {
 		var s domain.StorageWithInfo
-		if err := rows.Scan(&s.ID, &s.Name, &s.ChatID, &s.FilesAmount, &s.Size); err != nil {
-			return nil, err
-		}
-		storages = append(storages, s)
-	}
-	return storages, rows.Err()
+		err := rows.Scan(&s.ID, &s.Name, &s.ChatID, &s.FilesAmount, &s.Size)
+		return s, err
+	})
 }
 
 func (r *StoragesRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.Storage, error) {
