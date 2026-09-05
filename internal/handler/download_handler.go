@@ -163,16 +163,14 @@ func clientDisconnected(r *http.Request, err error) bool {
 	return errors.As(err, &opErr) && opErr.Op == "write"
 }
 
-// exactFileSize returns the byte size needed for Range responses. It trusts
-// the stored size and falls back to measuring the last chunk for legacy
-// records without one, caching the result.
+// exactFileSize returns the byte size announced in Content-Length and Range
+// responses. It is measured from the chunks (cached per file) rather than read
+// from the record: sizes stored by older clients could come from the request's
+// Content-Length, which includes multipart framing, and an inexact
+// Content-Length makes browsers hang or truncate the download.
 func (h *DownloadHandler) exactFileSize(ctx context.Context, file *domain.File) (int64, error) {
 	if totalSize, ok := h.fileSizes.get(file.ID); ok {
 		return totalSize, nil
-	}
-	if file.Size > 0 {
-		h.fileSizes.set(file.ID, file.Size)
-		return file.Size, nil
 	}
 
 	totalSize, err := h.svc.ExactFileSize(ctx, file)
@@ -249,11 +247,16 @@ func (h *DownloadHandler) serveInline(w http.ResponseWriter, r *http.Request, s 
 	s.writeHeaders(w, "inline")
 	w.Header().Set("Accept-Ranges", "bytes")
 
+	totalSize, err := h.exactFileSize(ctx, s.file)
+	if err != nil {
+		slog.Error("file size resolution failed", "err", err)
+		writeError(w, domain.ErrInternal("failed to determine exact file size"))
+		return
+	}
+
 	rangeHeader := r.Header.Get("Range")
 	if rangeHeader == "" {
-		if s.file.Size > 0 {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", s.file.Size))
-		}
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", totalSize))
 		w.WriteHeader(http.StatusOK)
 		if err := h.svc.StreamFileToWriter(ctx, s.file, w, nil); err != nil {
 			slog.Error("stream file failed", "err", err)
@@ -261,34 +264,67 @@ func (h *DownloadHandler) serveInline(w http.ResponseWriter, r *http.Request, s 
 		return
 	}
 
-	totalSize, err := h.exactFileSize(ctx, s.file)
-	if err != nil {
-		slog.Error("file size resolution failed", "err", err)
-		writeError(w, domain.ErrInternal("failed to determine exact file size"))
+	start, end, ok := writeRangeHeaders(w, rangeHeader, totalSize)
+	if !ok {
 		return
 	}
-	start, end, err := parseSingleByteRange(rangeHeader, totalSize)
-	if err != nil {
-		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
-		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
-		return
-	}
-	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
-	w.WriteHeader(http.StatusPartialContent)
 	if err := h.svc.DownloadFileRangeToWriter(ctx, s.file, w, start, end, totalSize, nil); err != nil {
 		slog.Error("download file range failed", "err", err)
 	}
 }
 
-// serveAttachment streams the file straight to the response as a download.
+// writeRangeHeaders answers a single byte-range request: 206 with the range
+// headers when it is satisfiable, 416 otherwise (ok=false, nothing left to do).
+func writeRangeHeaders(w http.ResponseWriter, rangeHeader string, totalSize int64) (start, end int64, ok bool) {
+	start, end, err := parseSingleByteRange(rangeHeader, totalSize)
+	if err != nil {
+		w.Header().Set("Content-Range", fmt.Sprintf("bytes */%d", totalSize))
+		w.WriteHeader(http.StatusRequestedRangeNotSatisfiable)
+		return 0, 0, false
+	}
+	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize))
+	w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+	w.WriteHeader(http.StatusPartialContent)
+	return start, end, true
+}
+
+// serveAttachment streams the file as a download. It always announces the
+// exact Content-Length and honours Range requests: a browser that interrupts
+// the download (Chrome blocking an "insecure" file type until the user allows
+// it) can then tell the file is incomplete and resume from where it stopped
+// instead of keeping the truncated bytes as the final file.
 func (h *DownloadHandler) serveAttachment(w http.ResponseWriter, r *http.Request, s servedFile, storageID uuid.UUID) {
 	ctx, tracker, progress, cleanup := h.trackedDownload(r, storageID)
 	defer cleanup()
-	s.writeHeaders(w, "attachment")
 
-	w.WriteHeader(http.StatusOK)
-	if err := h.svc.DownloadFileToWriter(ctx, s.file, w, progress); err != nil {
+	totalSize, err := h.exactFileSize(ctx, s.file)
+	if err != nil {
+		slog.Error("file size resolution failed", "err", err)
+		h.failTracker(r, tracker, err)
+		writeError(w, domain.ErrInternal("failed to determine exact file size"))
+		return
+	}
+
+	s.writeHeaders(w, "attachment")
+	w.Header().Set("Accept-Ranges", "bytes")
+	w.Header().Set("ETag", fmt.Sprintf(`"%s-%d"`, s.file.ID, totalSize))
+
+	if rangeHeader := r.Header.Get("Range"); rangeHeader != "" {
+		start, end, ok := writeRangeHeaders(w, rangeHeader, totalSize)
+		if !ok {
+			h.finishTracker(tracker, nil)
+			return
+		}
+		if progress != nil {
+			progress.TotalBytes = end - start + 1
+		}
+		err = h.svc.DownloadFileRangeToWriter(ctx, s.file, w, start, end, totalSize, progress)
+	} else {
+		w.Header().Set("Content-Length", fmt.Sprintf("%d", totalSize))
+		w.WriteHeader(http.StatusOK)
+		err = h.svc.DownloadFileToWriter(ctx, s.file, w, progress)
+	}
+	if err != nil {
 		slog.Error("download file failed", "err", err)
 		h.failTracker(r, tracker, err)
 		return
