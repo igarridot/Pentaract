@@ -15,12 +15,57 @@ import (
 	"time"
 
 	"github.com/google/uuid"
-	pgxmock "github.com/pashagolub/pgxmock/v3"
 
 	"github.com/Dominux/Pentaract/internal/domain"
-	"github.com/Dominux/Pentaract/internal/repository"
 	"github.com/Dominux/Pentaract/internal/telegram"
 )
+
+// fakeChunksRepo records what the upload persists.
+type fakeChunksRepo struct {
+	mu      sync.Mutex
+	saved   map[uuid.UUID][]domain.FileChunk
+	chunks  []domain.FileChunk
+	updated map[uuid.UUID]string
+	saveErr error
+}
+
+func newFakeChunksRepo() *fakeChunksRepo {
+	return &fakeChunksRepo{saved: map[uuid.UUID][]domain.FileChunk{}, updated: map[uuid.UUID]string{}}
+}
+
+func (f *fakeChunksRepo) ListChunks(context.Context, uuid.UUID) ([]domain.FileChunk, error) {
+	return f.chunks, nil
+}
+
+func (f *fakeChunksRepo) UpdateChunkTelegramFileID(_ context.Context, chunkID uuid.UUID, telegramFileID string) error {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.updated[chunkID] = telegramFileID
+	return nil
+}
+
+func (f *fakeChunksRepo) CreateChunksAndMarkUploaded(_ context.Context, fileID uuid.UUID, chunks []domain.FileChunk) error {
+	if f.saveErr != nil {
+		return f.saveErr
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.saved[fileID] = chunks
+	return nil
+}
+
+func (f *fakeChunksRepo) savedFor(fileID uuid.UUID) []domain.FileChunk {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return f.saved[fileID]
+}
+
+type fakeStorageGetter struct{ storage domain.Storage }
+
+func (f fakeStorageGetter) GetByID(context.Context, uuid.UUID) (*domain.Storage, error) {
+	s := f.storage
+	return &s, nil
+}
 
 // fakeTelegram is an in-memory Telegram Bot API good enough for the upload
 // pipeline: it stores sent documents and serves them back for verification.
@@ -115,28 +160,16 @@ func (f *fakeTelegram) deletedCount() int {
 	return f.deleted
 }
 
-func newUploadTestManager(t *testing.T, srvURL string, cipher *ChunkCipher) (*StorageManager, pgxmock.PgxPoolIface) {
-	t.Helper()
-	mock, err := pgxmock.NewPool()
-	if err != nil {
-		t.Fatalf("new pgxmock pool: %v", err)
-	}
-	t.Cleanup(mock.Close)
-
+func newUploadTestManager(srvURL string, storageID uuid.UUID, cipher *ChunkCipher) (*StorageManager, *fakeChunksRepo) {
+	repo := newFakeChunksRepo()
 	return &StorageManager{
-		filesRepo:    repository.NewFilesRepo(mock),
-		storagesRepo: repository.NewStoragesRepo(mock),
+		filesRepo:    repo,
+		storagesRepo: fakeStorageGetter{storage: domain.Storage{ID: storageID, Name: "Main", ChatID: 123}},
 		workersRepo:  &fakeWorkersRepo{},
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srvURL),
 		chunkCipher:  cipher,
-	}, mock
-}
-
-func expectStorageLookup(mock pgxmock.PgxPoolIface, storageID uuid.UUID) {
-	mock.ExpectQuery("SELECT id, name, chat_id FROM storages WHERE id = \\$1").
-		WithArgs(storageID).
-		WillReturnRows(pgxmock.NewRows([]string{"id", "name", "chat_id"}).AddRow(storageID, "Main", int64(123)))
+	}, repo
 }
 
 func TestUploadStreamsChunksVerifiesAndPersistsInOrder(t *testing.T) {
@@ -147,15 +180,7 @@ func TestUploadStreamsChunksVerifiesAndPersistsInOrder(t *testing.T) {
 	srv := httptest.NewServer(tg.handler(t))
 	defer srv.Close()
 
-	m, mock := newUploadTestManager(t, srv.URL, cipher)
-	expectStorageLookup(mock, storageID)
-	mock.ExpectBegin()
-	mock.ExpectExec("INSERT INTO file_chunks").
-		WithArgs(fileID, pgxmock.AnyArg(), pgxmock.AnyArg(), int16(0), fileID, pgxmock.AnyArg(), pgxmock.AnyArg(), int16(1)).
-		WillReturnResult(pgxmock.NewResult("INSERT", 2))
-	mock.ExpectExec("UPDATE files SET is_uploaded = true").WithArgs(fileID).WillReturnResult(pgxmock.NewResult("UPDATE", 1))
-	mock.ExpectExec("DELETE FROM files").WithArgs(fileID).WillReturnResult(pgxmock.NewResult("DELETE", 0))
-	mock.ExpectCommit()
+	m, repo := newUploadTestManager(srv.URL, storageID, cipher)
 
 	// Two chunks: one full chunk plus a 5 byte tail.
 	payload := bytes.Repeat([]byte("a"), UploadChunkSize)
@@ -166,8 +191,12 @@ func TestUploadStreamsChunksVerifiesAndPersistsInOrder(t *testing.T) {
 	if err := m.Upload(context.Background(), file, bytes.NewReader(payload), progress); err != nil {
 		t.Fatalf("upload failed: %v", err)
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("db expectations: %v", err)
+	saved := repo.savedFor(fileID)
+	if len(saved) != 2 || saved[0].Position != 0 || saved[1].Position != 1 || saved[0].FileID != fileID {
+		t.Fatalf("expected two chunk records in position order, got %+v", saved)
+	}
+	if saved[0].TelegramFileID == "" || saved[0].TelegramMessageID == 0 {
+		t.Fatalf("chunk records must carry telegram ids, got %+v", saved[0])
 	}
 	if progress.TotalChunks != 2 || progress.UploadedChunks.Load() != 2 || progress.VerifiedChunks.Load() != 2 {
 		t.Fatalf("unexpected progress: total=%d uploaded=%d verified=%d", progress.TotalChunks, progress.UploadedChunks.Load(), progress.VerifiedChunks.Load())
@@ -212,16 +241,15 @@ func TestUploadHashMismatchFailsAndCleansUpTelegram(t *testing.T) {
 	srv := httptest.NewServer(tg.handler(t))
 	defer srv.Close()
 
-	m, mock := newUploadTestManager(t, srv.URL, cipher)
-	expectStorageLookup(mock, storageID)
+	m, repo := newUploadTestManager(srv.URL, storageID, cipher)
 
 	file := &domain.File{ID: fileID, Path: "docs/small.bin", StorageID: storageID}
 	err := m.Upload(context.Background(), file, strings.NewReader("hello"), &UploadProgress{TotalBytes: 5})
 	if err == nil || !isHashMismatch(err) {
 		t.Fatalf("expected hash mismatch failure, got %v", err)
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("no chunk records must be written on failure: %v", err)
+	if saved := repo.savedFor(fileID); saved != nil {
+		t.Fatalf("no chunk records must be written on failure, got %+v", saved)
 	}
 
 	deadline := time.Now().Add(3 * time.Second)
@@ -248,16 +276,15 @@ func TestUploadCancelledContextAbortsWithoutPersisting(t *testing.T) {
 	srv := httptest.NewServer(tg.handler(t))
 	defer srv.Close()
 
-	m, mock := newUploadTestManager(t, srv.URL, cipher)
-	expectStorageLookup(mock, storageID)
+	m, repo := newUploadTestManager(srv.URL, storageID, cipher)
 
 	file := &domain.File{ID: fileID, Path: "docs/cancel.bin", StorageID: storageID}
 	err := m.Upload(ctx, file, strings.NewReader("hello"), nil)
 	if !errors.Is(err, context.Canceled) {
 		t.Fatalf("expected context cancellation, got %v", err)
 	}
-	if err := mock.ExpectationsWereMet(); err != nil {
-		t.Fatalf("cancelled upload must not touch chunk records: %v", err)
+	if saved := repo.savedFor(fileID); saved != nil {
+		t.Fatalf("cancelled upload must not touch chunk records, got %+v", saved)
 	}
 }
 
@@ -295,5 +322,31 @@ func TestChunkVerifierSubmitDoesNotBlockOnceStopped(t *testing.T) {
 	}
 	if err := v.stop(); err != nil {
 		t.Fatalf("stop must be idempotent, got %v", err)
+	}
+}
+
+func TestUploadPersistFailureCleansUpTelegram(t *testing.T) {
+	fileID := uuid.New()
+	storageID := uuid.New()
+	cipher := NewChunkCipher("secret")
+	tg := newFakeTelegram()
+	srv := httptest.NewServer(tg.handler(t))
+	defer srv.Close()
+
+	m, repo := newUploadTestManager(srv.URL, storageID, cipher)
+	repo.saveErr = errors.New("db down")
+
+	file := &domain.File{ID: fileID, Path: "docs/small.bin", StorageID: storageID}
+	err := m.Upload(context.Background(), file, strings.NewReader("hello"), nil)
+	if err == nil || !strings.Contains(err.Error(), "saving verified chunks") {
+		t.Fatalf("expected persistence error, got %v", err)
+	}
+
+	deadline := time.Now().Add(3 * time.Second)
+	for tg.deletedCount() < 1 {
+		if time.Now().After(deadline) {
+			t.Fatalf("expected uploaded chunk to be deleted from telegram after a persistence failure")
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
 }

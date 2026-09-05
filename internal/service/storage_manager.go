@@ -17,14 +17,24 @@ import (
 	"github.com/Dominux/Pentaract/internal/telegram"
 )
 
-// workersLister is the subset of StorageWorkersRepo used by StorageManager.
-type workersLister interface {
-	ListTokensByStorage(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error)
-}
+// Repository subsets used by StorageManager, so tests can use small fakes.
+type (
+	workersLister interface {
+		ListTokensByStorage(ctx context.Context, storageID uuid.UUID) ([]repository.WorkerToken, error)
+	}
+	chunksRepository interface {
+		ListChunks(ctx context.Context, fileID uuid.UUID) ([]domain.FileChunk, error)
+		UpdateChunkTelegramFileID(ctx context.Context, chunkID uuid.UUID, telegramFileID string) error
+		CreateChunksAndMarkUploaded(ctx context.Context, fileID uuid.UUID, chunks []domain.FileChunk) error
+	}
+	storageGetter interface {
+		GetByID(ctx context.Context, id uuid.UUID) (*domain.Storage, error)
+	}
+)
 
 type StorageManager struct {
-	filesRepo          *repository.FilesRepo
-	storagesRepo       *repository.StoragesRepo
+	filesRepo          chunksRepository
+	storagesRepo       storageGetter
 	workersRepo        workersLister
 	scheduler          *WorkerScheduler
 	tgClient           *telegram.Client
@@ -35,9 +45,9 @@ type StorageManager struct {
 }
 
 func NewStorageManager(
-	filesRepo *repository.FilesRepo,
-	storagesRepo *repository.StoragesRepo,
-	workersRepo *repository.StorageWorkersRepo,
+	filesRepo chunksRepository,
+	storagesRepo storageGetter,
+	workersRepo workersLister,
 	scheduler *WorkerScheduler,
 	tgClient *telegram.Client,
 	encryptionSecret string,
