@@ -6,23 +6,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 type UsersRepo struct {
-	pool usersDB
+	pool DB
 }
 
-type usersDB interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
-func NewUsersRepo(pool usersDB) *UsersRepo {
+func NewUsersRepo(pool DB) *UsersRepo {
 	return &UsersRepo{pool: pool}
 }
 
@@ -71,25 +63,18 @@ func (r *UsersRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, er
 	return user, nil
 }
 
+func scanUserSummary(rows pgx.Rows) (domain.User, error) {
+	var u domain.User
+	err := rows.Scan(&u.ID, &u.Email)
+	return u, err
+}
+
 func (r *UsersRepo) ListNonAdmin(ctx context.Context, adminEmail string) ([]domain.User, error) {
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, email FROM users WHERE LOWER(email) <> LOWER($1) ORDER BY email`,
 		adminEmail,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	users := make([]domain.User, 0)
-	for rows.Next() {
-		var u domain.User
-		if err := rows.Scan(&u.ID, &u.Email); err != nil {
-			return nil, err
-		}
-		users = append(users, u)
-	}
-	return users, rows.Err()
+	return collectRows(rows, err, scanUserSummary)
 }
 
 func (r *UsersRepo) UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error {
@@ -144,18 +129,5 @@ func (r *UsersRepo) ListGrantCandidates(ctx context.Context, storageID, callerID
 		ORDER BY u.email`,
 		storageID, callerID,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	users := make([]domain.User, 0)
-	for rows.Next() {
-		var u domain.User
-		if err := rows.Scan(&u.ID, &u.Email); err != nil {
-			return nil, err
-		}
-		users = append(users, u)
-	}
-	return users, rows.Err()
+	return collectRows(rows, err, scanUserSummary)
 }

@@ -3,7 +3,7 @@ import API from '../../api'
 import { createOperationId } from '../../common/operation_id'
 import { isActiveUploadStatus, createUploadState, applyUploadProgressUpdate } from '../../common/progress'
 import { buildUploadEntries, findSkippedEntries, resolveUploadEntries } from './upload_conflicts'
-import { createUploadCompletionRegistry } from './upload_completion'
+import { createCompletionRegistry } from '../../common/completion_registry'
 import { createBulkOperation, runUploadPipeline } from './operations'
 import { useUploadConflicts } from './useUploadConflicts'
 
@@ -18,13 +18,16 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
   const uploadStatesRef = useRef([])
   const uploadProgressCancelsRef = useRef(new Map())
   const uploadAbortControllersRef = useRef(new Map())
-  const uploadCompletionRegistryRef = useRef(createUploadCompletionRegistry())
-  const conflicts = useUploadConflicts()
+  const uploadCompletionRegistryRef = useRef(createCompletionRegistry())
+  const {
+    conflictDialog, setConflictDialog, askConflictDecision, handleConflictDecision,
+    hasConflict, updateDirCache: cacheDirListing, invalidateDir,
+  } = useUploadConflicts()
 
   // Called when the tree is loaded, so conflict checks reuse the listing.
   const updateDirCache = useCallback((path, data) => {
-    conflicts.updateDirCache(storageId, path, data)
-  }, [conflicts.updateDirCache, storageId])
+    cacheDirListing(storageId, path, data)
+  }, [cacheDirListing, storageId])
 
   useEffect(() => {
     uploadStatesRef.current = uploadStates
@@ -126,26 +129,23 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
   }, [addAlert, applyUploadTerminalState, loadTree, markBulkTransferTerminal, releaseUploadTracking, scheduleUploadStateRemoval, storageId, updateUploadState])
 
   const hasUploadConflict = useCallback((targetPath, filename) => (
-    conflicts.hasConflict(storageId, targetPath, filename)
-  ), [conflicts.hasConflict, storageId])
+    hasConflict(storageId, targetPath, filename)
+  ), [hasConflict, storageId])
 
   const runUploadBatch = useCallback(async (entries) => {
     const showBulkProgress = entries.length > 1
     const bulkCancelledRef = { current: false }
     let defaultConflictMode = 'keep_both'
-    const askConflictDecision = async (filename, targetPath) => {
-      const decision = await conflicts.askConflictDecision(filename, targetPath)
+    // A "skip all" answer also becomes the server-side policy for the batch.
+    const askAndRememberDecision = async (filename, targetPath) => {
+      const decision = await askConflictDecision(filename, targetPath)
       if (decision.applyForAll && decision.action === 'skip') {
         defaultConflictMode = 'skip'
       }
       return decision
     }
 
-    const entriesToUpload = await resolveUploadEntries(
-      entries,
-      hasUploadConflict,
-      askConflictDecision,
-    )
+    const entriesToUpload = await resolveUploadEntries(entries, hasUploadConflict, askAndRememberDecision)
 
     if (showBulkProgress) {
       setBulkOperation(createBulkOperation('upload', entriesToUpload.length))
@@ -175,7 +175,7 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
         if (showBulkProgress) registerBulkTransfer('upload', uploadId)
 
         const transfer = launchUpload(entry.file, entry.targetPath, defaultConflictMode, uploadId)
-        conflicts.invalidateDir(storageId, entry.targetPath)
+        invalidateDir(storageId, entry.targetPath)
         return transfer
       })
 
@@ -191,7 +191,7 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
       loadTree()
       if (showBulkProgress) bulkCancelRef.current = null
     }
-  }, [addAlert, conflicts.askConflictDecision, conflicts.invalidateDir, finalizeBulkTransferLaunch, hasUploadConflict, launchUpload, loadTree, markBulkTransferTerminal, registerBulkTransfer, releaseUploadTracking, setBulkOperation, storageId])
+  }, [addAlert, askConflictDecision, bulkCancelRef, finalizeBulkTransferLaunch, hasUploadConflict, invalidateDir, launchUpload, loadTree, markBulkTransferTerminal, registerBulkTransfer, releaseUploadTracking, setBulkOperation, storageId])
 
   const startUpload = async (e) => {
     const files = Array.from(e.target.files || [])
@@ -234,9 +234,9 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
     startUpload,
     cancelUpload,
     cleanupUploads,
-    uploadConflictDialog: conflicts.conflictDialog,
-    setUploadConflictDialog: conflicts.setConflictDialog,
-    handleUploadConflictDecision: conflicts.handleConflictDecision,
+    uploadConflictDialog: conflictDialog,
+    setUploadConflictDialog: setConflictDialog,
+    handleUploadConflictDecision: handleConflictDecision,
     updateDirCache,
   }
 }

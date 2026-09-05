@@ -5,10 +5,20 @@ export function getRawToken() {
   return localStorage.getItem('access_token')
 }
 
+// ApiError carries the HTTP status so callers can branch on it instead of
+// matching text in the message.
+export class ApiError extends Error {
+  constructor(message, status) {
+    super(message)
+    this.name = 'ApiError'
+    this.status = status
+  }
+}
+
 async function parseResponse(resp) {
   if (!resp.ok) {
     const data = await resp.json().catch(() => ({ error: 'Unknown error' }))
-    throw new Error(data.error || `Request failed with status ${resp.status}`)
+    throw new ApiError(data.error || `Request failed with status ${resp.status}`, resp.status)
   }
   if (resp.status === 204 || resp.headers.get('Content-Length') === '0') return null
   const text = await resp.text()

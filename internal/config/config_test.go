@@ -46,8 +46,11 @@ func TestLoadDefaultsAndURLs(t *testing.T) {
 
 	cfg := Load()
 
-	if cfg.Port != 8000 || cfg.Workers != 4 {
-		t.Fatalf("unexpected defaults: port=%d workers=%d", cfg.Port, cfg.Workers)
+	if cfg.Port != 8000 || cfg.DBMaxConns != 32 {
+		t.Fatalf("unexpected defaults: port=%d db_max_conns=%d", cfg.Port, cfg.DBMaxConns)
+	}
+	if secret, legacy := cfg.ChunkCipherSecrets(); secret != "abc123" || legacy != "" {
+		t.Fatalf("without ENCRYPTION_KEY the chunk cipher must derive from SECRET_KEY only, got %q/%q", secret, legacy)
 	}
 	if cfg.TelegramAPIBaseURL != "https://api.telegram.org" {
 		t.Fatalf("unexpected TelegramAPIBaseURL: %q", cfg.TelegramAPIBaseURL)
@@ -69,7 +72,8 @@ func TestLoadDefaultsAndURLs(t *testing.T) {
 func TestLoadEnvOverrides(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("PORT", "9001")
-	t.Setenv("WORKERS", "7")
+	t.Setenv("DB_MAX_CONNS", "12")
+	t.Setenv("ENCRYPTION_KEY", "chunks-only")
 	t.Setenv("ACCESS_TOKEN_EXPIRE_IN_SECS", "1234")
 	t.Setenv("TELEGRAM_API_BASE_URL", "https://example.test")
 	t.Setenv("TELEGRAM_RATE_LIMIT", "11")
@@ -78,8 +82,11 @@ func TestLoadEnvOverrides(t *testing.T) {
 
 	cfg := Load()
 
-	if cfg.Port != 9001 || cfg.Workers != 7 || cfg.AccessTokenExpireInSec != 1234 {
+	if cfg.Port != 9001 || cfg.DBMaxConns != 12 || cfg.AccessTokenExpireInSec != 1234 {
 		t.Fatalf("unexpected env overrides: %+v", cfg)
+	}
+	if secret, legacy := cfg.ChunkCipherSecrets(); secret != "chunks-only" || legacy != "abc123" {
+		t.Fatalf("ENCRYPTION_KEY must seal new chunks with SECRET_KEY kept as fallback, got %q/%q", secret, legacy)
 	}
 	if cfg.TelegramAPIBaseURL != "https://example.test" || cfg.TelegramRateLimit != 11 {
 		t.Fatalf("unexpected telegram overrides: %+v", cfg)
@@ -99,4 +106,17 @@ func TestLoadPanicsOnInvalidInteger(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("PORT", "not-an-int")
 	mustPanicContains(t, func() { Load() }, "environment variable PORT must be an integer")
+}
+
+func TestLoadHonoursDeprecatedWorkersForPoolSize(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("WORKERS", "3")
+	if cfg := Load(); cfg.DBMaxConns != 24 {
+		t.Fatalf("expected WORKERS*8 connections, got %d", cfg.DBMaxConns)
+	}
+
+	t.Setenv("DB_MAX_CONNS", "10")
+	if cfg := Load(); cfg.DBMaxConns != 10 {
+		t.Fatalf("DB_MAX_CONNS must win over WORKERS, got %d", cfg.DBMaxConns)
+	}
 }

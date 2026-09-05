@@ -22,7 +22,7 @@ The API and UI provide file management, access control, progress tracking, and w
 
 - Chunked upload/download to Telegram (20 MB-safe encrypted chunks)
 - Chunk encryption with **AES-256-GCM** and per-chunk random nonce
-- Encryption key derived from `SECRET_KEY` using **PBKDF2-HMAC-SHA256** (600000 iterations)
+- Encryption key derived from `ENCRYPTION_KEY` (or `SECRET_KEY`) using **PBKDF2-HMAC-SHA256** (600000 iterations)
 - Real-time progress via SSE (upload/download/delete), including upload verification
 - Upload/download cancellation
 - Downloads survive browser "insecure download" blocks (plain HTTP): allow the file in the browser and the same progress card resumes
@@ -149,11 +149,12 @@ From `.env`:
 | Variable | Default | Notes |
 |---|---|---|
 | `PORT` | `8000` | API + UI port |
-| `WORKERS` | `4` | app worker goroutines |
+| `DB_MAX_CONNS` | `32` | Postgres connection pool size (`WORKERS` is still read as `WORKERS * 8`) |
 | `SUPERUSER_EMAIL` | required | bootstrap admin |
 | `SUPERUSER_PASS` | required | bootstrap admin password |
 | `ACCESS_TOKEN_EXPIRE_IN_SECS` | `1800` | JWT TTL |
-| `SECRET_KEY` | required | JWT + chunk encryption secret |
+| `SECRET_KEY` | required | JWT signing secret; also the chunk encryption secret unless `ENCRYPTION_KEY` is set |
+| `ENCRYPTION_KEY` | unset | Dedicated chunk encryption secret. Chunks sealed with `SECRET_KEY` before it was set keep decrypting, so never change `SECRET_KEY` while such chunks exist |
 | `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Telegram API |
 | `TELEGRAM_RATE_LIMIT` | `18` | per-worker requests/min guard |
 | `DATABASE_USER` | `pentaract` | postgres user |

@@ -1,35 +1,13 @@
-import { Breadcrumbs, Link as MuiLink } from '@mui/material'
+import PathBreadcrumbs from '../../components/PathBreadcrumbs'
 
-const linkSx = { cursor: 'pointer', fontSize: '0.8125rem' }
-
-// Renders the Root → … path navigation. onNavigate receives the absolute path
-// to navigate to.
+// Path navigation for the file browser. onNavigate receives the absolute
+// route to navigate to.
 export default function FileBreadcrumbs({ prefix, pathParts, onNavigate }) {
   return (
-    <Breadcrumbs sx={{ mb: 2 }}>
-      <MuiLink
-        key="root"
-        underline="hover"
-        color="inherit"
-        sx={linkSx}
-        onClick={() => onNavigate(prefix)}
-      >
-        Root
-      </MuiLink>
-      {pathParts.map((part, i) => {
-        const pathTo = prefix + pathParts.slice(0, i + 1).join('/') + '/'
-        return (
-          <MuiLink
-            key={pathTo}
-            underline="hover"
-            color="inherit"
-            sx={linkSx}
-            onClick={() => onNavigate(pathTo)}
-          >
-            {part}
-          </MuiLink>
-        )
-      })}
-    </Breadcrumbs>
+    <PathBreadcrumbs
+      parts={pathParts}
+      sx={{ mb: 2 }}
+      onSelect={(parts) => onNavigate(parts.length ? `${prefix}${parts.join('/')}/` : prefix)}
+    />
   )
 }

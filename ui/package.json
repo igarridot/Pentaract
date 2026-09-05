@@ -7,6 +7,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
+    "lint": "eslint .",
     "test": "node --test \"src/**/*.test.js\"",
     "test:coverage": "node --test --experimental-test-coverage \"src/**/*.test.js\""
   },
@@ -20,9 +21,13 @@
     "react-router-dom": "^7.18.2"
   },
   "devDependencies": {
+    "@eslint/js": "^10.0.1",
     "@types/react": "^19.2.18",
     "@types/react-dom": "^19.2.5",
     "@vitejs/plugin-react": "^6.1.0",
+    "eslint": "^10.10.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.12.0",
     "vite": "^8.2.2"
   }
 }

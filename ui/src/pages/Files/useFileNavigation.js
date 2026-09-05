@@ -1,34 +1,31 @@
 import { useState, useEffect, useCallback } from 'react'
 import { useParams, useLocation } from 'react-router-dom'
 import API from '../../api'
+import { useApiAction } from '../../common/use_api_action'
+
+function decodePath(path) {
+  try {
+    return decodeURIComponent(path)
+  } catch {
+    return path
+  }
+}
 
 export function useFileNavigation(addAlert) {
   const { id: storageId } = useParams()
   const location = useLocation()
+  const run = useApiAction(addAlert)
 
   const prefix = `/storages/${storageId}/files/`
-  const currentPathFromUrl = location.pathname.startsWith(prefix)
-    ? location.pathname.slice(prefix.length)
-    : ''
-  let currentPath = currentPathFromUrl
-  try {
-    currentPath = decodeURIComponent(currentPathFromUrl)
-  } catch {
-    currentPath = currentPathFromUrl
-  }
+  const currentPath = decodePath(location.pathname.startsWith(prefix) ? location.pathname.slice(prefix.length) : '')
 
   const [items, setItems] = useState([])
   const [search, setSearch] = useState('')
   const [searchResults, setSearchResults] = useState(null)
 
-  const loadTree = useCallback(async () => {
-    try {
-      const data = await API.files.tree(storageId, currentPath)
-      setItems(data || [])
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }, [storageId, currentPath])
+  const loadTree = useCallback(() => (
+    run(() => API.files.tree(storageId, currentPath), { onSuccess: (data) => setItems(data || []) })
+  ), [run, storageId, currentPath])
 
   useEffect(() => {
     loadTree()
@@ -42,12 +39,7 @@ export function useFileNavigation(addAlert) {
       setSearchResults(null)
       return
     }
-    try {
-      const data = await API.files.search(storageId, currentPath, search)
-      setSearchResults(data || [])
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
+    await run(() => API.files.search(storageId, currentPath, search), { onSuccess: (data) => setSearchResults(data || []) })
   }
 
   const pathParts = currentPath.split('/').filter(Boolean)

@@ -78,7 +78,8 @@ func (w *flushWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-var inlineVideoContentTypesByExtension = map[string]string{
+// videoContentTypesByExtension covers video formats Go's mime table misses.
+var videoContentTypesByExtension = map[string]string{
 	".avi":  "video/x-msvideo",
 	".flv":  "video/x-flv",
 	".m2ts": "video/mp2t",
@@ -134,6 +135,9 @@ func uploadProgressStatus(progress *service.UploadProgress, done bool, err error
 	}
 }
 
+// ssePollingInterval is a variable so tests can run the SSE loops faster.
+var ssePollingInterval = service.SSEPollingInterval
+
 // setupSSE configures response headers for Server-Sent Events and returns the flusher.
 func setupSSE(w http.ResponseWriter) (http.Flusher, bool) {
 	flusher, ok := w.(http.Flusher)
@@ -178,7 +182,7 @@ func pollSSE(w http.ResponseWriter, r *http.Request, idParam string, placeholder
 		return
 	}
 
-	ticker := time.NewTicker(service.SSEPollingInterval)
+	ticker := time.NewTicker(ssePollingInterval)
 	defer ticker.Stop()
 	waitStart := time.Now()
 
@@ -211,20 +215,12 @@ func sanitizeFilename(name string) string {
 	return strings.NewReplacer(`"`, `'`, "\n", "", "\r", "").Replace(name)
 }
 
-func isInlineVideo(contentType, filename string) bool {
-	if strings.HasPrefix(strings.ToLower(contentType), "video/") {
-		return true
-	}
-	_, ok := inlineVideoContentTypesByExtension[strings.ToLower(filepath.Ext(filename))]
-	return ok
-}
-
 func contentTypeForFilename(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
 	if contentType := mime.TypeByExtension(ext); contentType != "" {
 		return contentType
 	}
-	if contentType, ok := inlineVideoContentTypesByExtension[ext]; ok {
+	if contentType, ok := videoContentTypesByExtension[ext]; ok {
 		return contentType
 	}
 	return "application/octet-stream"

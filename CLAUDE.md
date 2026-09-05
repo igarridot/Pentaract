@@ -20,6 +20,7 @@ make down
 make test                # Go + UI tests in container
 go test ./...            # Go tests locally
 cd ui && pnpm test       # UI tests locally (node:test, not vitest)
+cd ui && pnpm lint       # ESLint (rules-of-hooks + exhaustive-deps); CI runs it
 
 # Single Go test
 go test -run TestName ./internal/service/
@@ -57,24 +58,30 @@ Repositories → Telegram Client → WorkerScheduler → StorageManager → Serv
 ### Packages
 
 - `internal/telegram/` — Telegram Bot API client with rate-limit retry (`doWithRateLimitRetry`), transient error backoff
-- `internal/service/` — Business logic. `StorageManager` is the core: `chunk_uploader.go`, `chunk_downloader.go`, `chunk_deleter.go`, `chunk_crypto.go`
-- `internal/handler/` — HTTP handlers. Upload/download split into `upload_handler.go`, `download_handler.go`. SSE polling unified in `progress_tracker.go`
+- `internal/service/` — Business logic. `StorageManager` is a facade over `ChunkUploader` (`chunk_uploader.go`), `ChunkDownloader` (`chunk_downloader.go`) and `ChunkDeleter` (`chunk_deleter.go`), which share a `chunkTransport` (scheduler, Telegram client, `ChunkCipher`). Build it with `NewStorageManager` (or `newStorageManager(storageDeps{...})` in tests)
+- `internal/handler/` — HTTP handlers. `FilesHandler` embeds `UploadHandler` (`upload_handler.go`, `local_fs.go`) and `DownloadHandler` (`download_handler.go`) and adds tree/search/move/delete. SSE polling unified in `progress_tracker.go`. `DeleteTrackers` (delete progress registry) is injected into both the files and storages handlers. Inline previews (`?inline=1`) of any type are served through the chunk range path and never tracked
 - `internal/repository/` — PostgreSQL queries. `files.go` has the complex path-based queries (ListDir, Search, CreateFileAnyway with dedup)
 
 ### Frontend
 
 - `ui/src/api/` — API client with shared SSE subscription (`subscribeAuthSSE`)
-- `ui/src/pages/Files/` — Main file browser, split into hooks: `useUploads`, `useDownloads`, `useDeleteOperation`, `useBulkOperations`, `useFileNavigation`. `useUploadConflicts` (conflict dialog + directory cache) is shared with `pages/LocalUpload`; `common/use_delete_progress.js` is shared with `pages/Storages`
-- Pure, node-tested modules hold the logic hooks and components lean on: `common/progress.js`, `pages/Files/operations.js`, `pages/Files/upload_conflicts.js`, `pages/LocalUpload/local_upload_paths.js`
+- `ui/src/pages/Files/` — Main file browser, split into hooks: `useUploads`, `useDownloads`, `useDeleteOperation`, `useBulkOperations`, `useFileNavigation`, `useFileSelection`. `useUploadConflicts` (conflict dialog + directory cache) is shared with `pages/LocalUpload`; `common/use_delete_progress.js` is shared with `pages/Storages`
+- `common/use_api_action.js` — `run(action, { success, onSuccess, onError })` replaces the try/await/addAlert boilerplate in pages. API failures are `ApiError` with a `status` (`api/request.js`)
+- `common/completion_registry.js` — awaitable terminal status per transfer; bulk uploads and bulk downloads use it to run one file at a time
+- Dialogs that edit an entity (`EditWorkerDialog`, `GrantAccess`, `RenameFolderDialog`) initialise state from props and are reset by the parent through `key`, not by effects
+- Shared components: `Panel` (bordered surface), `PathBreadcrumbs` (Root > a > b), `ProgressCard`
+- Pure, node-tested modules hold the logic hooks and components lean on: `common/progress.js`, `common/api_action.js`, `pages/Files/operations.js`, `pages/Files/upload_conflicts.js`, `pages/LocalUpload/local_upload_paths.js`
+- Storage paths inside URLs go through `encodePath` in `ui/src/api/index.js` (per-segment `encodeURIComponent`); the server decodes with `url.PathUnescape`
 - `ui/src/components/ProgressCard.jsx` — Shared progress UI used by all 4 progress components
 
 ## Configuration
 
 All via environment variables (see `.env.example`). Key ones:
 
-- `SECRET_KEY` — Used for both JWT signing AND chunk encryption key derivation (PBKDF2, 600k iterations). Changing it breaks all existing encrypted files.
+- `SECRET_KEY` — JWT signing secret. Also derives the chunk encryption key (PBKDF2, 600k iterations) unless `ENCRYPTION_KEY` is set. Changing it breaks files encrypted with it.
+- `ENCRYPTION_KEY` — Optional dedicated chunk encryption secret. `ChunkCipher` keeps `SECRET_KEY` as a decrypt-only fallback so files uploaded before the switch stay readable (`NewChunkCipherWithFallback`).
 - `TELEGRAM_RATE_LIMIT` — Requests per minute per worker (default 18)
-- `WORKERS` — DB connection pool size multiplier
+- `DB_MAX_CONNS` — Postgres pool size (default 32). The legacy `WORKERS` variable is still read as `WORKERS * 8`.
 
 ## Testing patterns
 
@@ -82,7 +89,7 @@ All via environment variables (see `.env.example`). Key ones:
 
 **Go handlers**: Mock service interfaces with function fields (`mockFilesService`), use `httptest`. See `internal/handler/files_handler_test.go`.
 
-**Go services**: Fake repository interfaces. See `internal/service/files_test.go`.
+**Go services**: Fake repository interfaces. See `internal/service/files_test.go`; `StorageManager` takes `chunksRepository`/`storageGetter` interfaces so upload tests use in-memory fakes (`chunk_uploader_flow_test.go`).
 
 **Frontend**: Node.js built-in `test` module (NOT vitest). Run with `pnpm test` which calls `node --test`.
 
@@ -110,7 +117,8 @@ Push to `master` → Go tests + UI tests → auto-tag (semver patch bump) → mu
 
 - `crypto.randomUUID()` not available in insecure HTTP contexts — `ui/src/common/operation_id.js` has a fallback using `crypto.getRandomValues()`
 - No HTTP read/write timeouts on the server (large transfers can take hours) — per-request context cancellation instead
-- Download auth via `?access_token=` query param (for iframe-based downloads) — only allowed on `/files/download/` and `/files/download_dir/` paths
+- Download auth via `?access_token=` query param (for iframe-based downloads) — only allowed on `/files/download/` and `/files/download_dir/` paths; the access log redacts it
+- Progress SSE subscriptions stop on 401/403/404 (`SSE_FATAL_STATUSES` in `ui/src/api/index.js`) and keep reconnecting on other failures
 - Over plain HTTP, Chrome blocks downloads of file types outside its safe list (e.g. `.funscript`, `.zip`, `.pdf`) as "insecure" and closes the connection; it re-requests the same URL when the user allows the file. `failTracker` in `download_handler.go` keeps such downloads in an `interrupted` state (SSE status `interrupted`) instead of failing them, so the resumed request continues the same progress card
 - DB migrations run automatically on startup (`internal/startup/startup.go`)
 - `ui/dist/` is gitignored — Docker builds it fresh; local dev uses Vite dev server

@@ -25,7 +25,7 @@ import (
 // newTestFilesHandlerWithBase creates a FilesHandler with a custom localBasePath
 // for testing (the production constructor auto-detects from /mnt/data).
 func newTestFilesHandlerWithBase(svc filesService, basePath string) *FilesHandler {
-	h := NewFilesHandler(svc)
+	h := newTestFilesHandler(svc)
 	h.localBasePath = basePath
 	return h
 }
@@ -412,14 +412,14 @@ func TestUploadLocalBatchCancelledQueuedItemIsNeverStarted(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		h.mu.RLock()
+		h.uploadsMu.RLock()
 		second := h.uploads[resp.Uploads[1].UploadID]
 		done := second != nil && second.done
 		err := error(nil)
 		if second != nil {
 			err = second.err
 		}
-		h.mu.RUnlock()
+		h.uploadsMu.RUnlock()
 		if done {
 			if !errors.Is(err, context.Canceled) {
 				t.Fatalf("queued item should finish with context.Canceled, got %v", err)

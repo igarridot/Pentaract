@@ -43,9 +43,29 @@ func safePath(basePath, requestedPath string) (string, error) {
 	return resolved, nil
 }
 
+// resolveLocalFile validates a local upload source: it must stay inside the
+// mount and be a regular file.
+func resolveLocalFile(basePath, localPath string) (string, os.FileInfo, error) {
+	if localPath == "" {
+		return "", nil, domain.ErrBadRequest("local_path is required")
+	}
+	resolved, err := safePath(basePath, localPath)
+	if err != nil {
+		return "", nil, domain.ErrBadRequest(fmt.Sprintf("invalid local_path %q: %s", localPath, err.Error()))
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		return "", nil, domain.ErrBadRequest(fmt.Sprintf("cannot stat %q: %s", localPath, err.Error()))
+	}
+	if info.IsDir() {
+		return "", nil, domain.ErrBadRequest(fmt.Sprintf("%q is a directory, not a file", localPath))
+	}
+	return resolved, info, nil
+}
+
 // BrowseLocalFS lists files and directories at the given path on the local
 // filesystem (relative to the configured base path).
-func (h *FilesHandler) BrowseLocalFS(w http.ResponseWriter, r *http.Request) {
+func (h *UploadHandler) BrowseLocalFS(w http.ResponseWriter, r *http.Request) {
 	if h.localBasePath == "" {
 		writeError(w, domain.ErrForbidden())
 		return
@@ -103,9 +123,8 @@ type uploadLocalRequest struct {
 // UploadLocal uploads a single file from the container's local filesystem to
 // Telegram storage. It returns immediately with a 202 and an upload_id that
 // can be used to track progress via /api/upload_progress.
-func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+func (h *UploadHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -122,24 +141,9 @@ func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	if req.LocalPath == "" {
-		writeError(w, domain.ErrBadRequest("local_path is required"))
-		return
-	}
-
-	resolvedPath, err := safePath(h.localBasePath, req.LocalPath)
+	resolvedPath, info, err := resolveLocalFile(h.localBasePath, req.LocalPath)
 	if err != nil {
-		writeError(w, domain.ErrBadRequest(err.Error()))
-		return
-	}
-
-	info, err := os.Stat(resolvedPath)
-	if err != nil {
-		writeError(w, domain.ErrBadRequest("cannot stat file: "+err.Error()))
-		return
-	}
-	if info.IsDir() {
-		writeError(w, domain.ErrBadRequest("local_path must be a file, not a directory"))
+		writeError(w, err)
 		return
 	}
 
@@ -166,7 +170,7 @@ func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
 }
 
 // uploadLocalFile opens a file from the local mount and runs a tracked upload.
-func (h *FilesHandler) uploadLocalFile(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, localPath, fullPath string, fileSize int64, onConflict string) {
+func (h *UploadHandler) uploadLocalFile(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, localPath, fullPath string, fileSize int64, onConflict string) {
 	f, err := os.Open(localPath)
 	if err != nil {
 		slog.Error("local upload: failed to open file", "file", localPath, "err", err)
@@ -187,9 +191,8 @@ type uploadLocalBatchRequest struct {
 }
 
 // UploadLocalBatch starts multiple local file uploads at once.
-func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) {
-	user := GetAuthUser(r.Context())
-	storageID, err := parseUUIDParam(r, "storageID")
+func (h *UploadHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) {
+	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -228,22 +231,9 @@ func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) 
 	}
 	resolved := make([]resolvedItem, 0, len(req.Items))
 	for _, item := range req.Items {
-		if item.LocalPath == "" {
-			writeError(w, domain.ErrBadRequest("local_path is required for each item"))
-			return
-		}
-		rp, err := safePath(h.localBasePath, item.LocalPath)
+		rp, info, err := resolveLocalFile(h.localBasePath, item.LocalPath)
 		if err != nil {
-			writeError(w, domain.ErrBadRequest(fmt.Sprintf("invalid local_path %q: %s", item.LocalPath, err.Error())))
-			return
-		}
-		info, err := os.Stat(rp)
-		if err != nil {
-			writeError(w, domain.ErrBadRequest(fmt.Sprintf("cannot stat %q: %s", item.LocalPath, err.Error())))
-			return
-		}
-		if info.IsDir() {
-			writeError(w, domain.ErrBadRequest(fmt.Sprintf("%q is a directory, not a file", item.LocalPath)))
+			writeError(w, err)
 			return
 		}
 		resolved = append(resolved, resolvedItem{

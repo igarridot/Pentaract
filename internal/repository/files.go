@@ -15,17 +15,10 @@ import (
 )
 
 type FilesRepo struct {
-	pool filesDB
+	pool DB
 }
 
-type filesDB interface {
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Begin(ctx context.Context) (pgx.Tx, error)
-}
-
-func NewFilesRepo(pool filesDB) *FilesRepo {
+func NewFilesRepo(pool DB) *FilesRepo {
 	return &FilesRepo{pool: pool}
 }
 
@@ -185,40 +178,20 @@ func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, s
 		ORDER BY path`,
 		storageID, basePath, pattern,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var results []domain.FSElement
-	for rows.Next() {
-		var el domain.FSElement
+	return collectRows(rows, err, func(rows pgx.Rows) (domain.FSElement, error) {
+		el := domain.FSElement{IsFile: true}
 		if err := rows.Scan(&el.Path, &el.Size); err != nil {
-			return nil, err
+			return el, err
 		}
-		el.IsFile = true
-		// Derive name from the last segment of the path
-		if idx := strings.LastIndex(el.Path, "/"); idx >= 0 {
-			el.Name = el.Path[idx+1:]
-		} else {
-			el.Name = el.Path
-		}
-		results = append(results, el)
-	}
-	return results, rows.Err()
+		_, el.Name = pathutil.SplitDirAndFile(el.Path)
+		return el, nil
+	})
 }
 
-func scanChunks(rows pgx.Rows) ([]domain.FileChunk, error) {
-	defer rows.Close()
-	var chunks []domain.FileChunk
-	for rows.Next() {
-		var c domain.FileChunk
-		if err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.TelegramMessageID, &c.Position); err != nil {
-			return nil, err
-		}
-		chunks = append(chunks, c)
-	}
-	return chunks, rows.Err()
+func scanChunk(rows pgx.Rows) (domain.FileChunk, error) {
+	var c domain.FileChunk
+	err := rows.Scan(&c.ID, &c.FileID, &c.TelegramFileID, &c.TelegramMessageID, &c.Position)
+	return c, err
 }
 
 // ListChunksByPath returns all chunks for files matching an exact path or folder prefix.
@@ -231,10 +204,7 @@ func (r *FilesRepo) ListChunksByPath(ctx context.Context, storageID uuid.UUID, p
 		ORDER BY fc.file_id, fc.position`,
 		storageID, path, path+"/%",
 	)
-	if err != nil {
-		return nil, err
-	}
-	return scanChunks(rows)
+	return collectRows(rows, err, scanChunk)
 }
 
 // ListChunksByStorage returns all chunks for uploaded files in a storage.
@@ -247,10 +217,7 @@ func (r *FilesRepo) ListChunksByStorage(ctx context.Context, storageID uuid.UUID
 		ORDER BY fc.file_id, fc.position`,
 		storageID,
 	)
-	if err != nil {
-		return nil, err
-	}
-	return scanChunks(rows)
+	return collectRows(rows, err, scanChunk)
 }
 
 // DeleteByID removes a single file record by its primary key.
@@ -344,10 +311,7 @@ func (r *FilesRepo) ListChunks(ctx context.Context, fileID uuid.UUID) ([]domain.
 		`SELECT id, file_id, telegram_file_id, telegram_message_id, position FROM file_chunks WHERE file_id = $1 ORDER BY position`,
 		fileID,
 	)
-	if err != nil {
-		return nil, err
-	}
-	return scanChunks(rows)
+	return collectRows(rows, err, scanChunk)
 }
 
 func (r *FilesRepo) UpdateChunkTelegramFileID(ctx context.Context, chunkID uuid.UUID, telegramFileID string) error {
@@ -370,20 +334,11 @@ func (r *FilesRepo) ListFilesUnderPath(ctx context.Context, storageID uuid.UUID,
 		ORDER BY path`,
 		storageID, path,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var files []domain.File
-	for rows.Next() {
+	return collectRows(rows, err, func(rows pgx.Rows) (domain.File, error) {
 		var f domain.File
-		if err := rows.Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded); err != nil {
-			return nil, err
-		}
-		files = append(files, f)
-	}
-	return files, rows.Err()
+		err := rows.Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded)
+		return f, err
+	})
 }
 
 // DirStats returns total uploaded file bytes and exact Telegram chunk count under a directory prefix.

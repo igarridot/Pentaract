@@ -71,21 +71,6 @@ func TestParseSingleByteRange(t *testing.T) {
 	}
 }
 
-func TestIsInlineVideo(t *testing.T) {
-	if !isInlineVideo("video/mp4", "x.bin") {
-		t.Fatalf("expected video by content-type")
-	}
-	if !isInlineVideo("application/octet-stream", "movie.m4v") {
-		t.Fatalf("expected video by extension")
-	}
-	if !isInlineVideo("application/octet-stream", "movie.mkv") {
-		t.Fatalf("expected mkv video by extension")
-	}
-	if isInlineVideo("application/octet-stream", "doc.txt") {
-		t.Fatalf("unexpected video detection")
-	}
-}
-
 func TestContentTypeForFilename(t *testing.T) {
 	if got := contentTypeForFilename("movie.mkv"); got != "video/x-matroska" {
 		t.Fatalf("unexpected mkv content type: %q", got)
@@ -107,7 +92,7 @@ func TestExtractWildcardPath(t *testing.T) {
 }
 
 func TestSetupDownloadTrackerAndFinish(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := newTestFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 	req := httptest.NewRequest(http.MethodGet, "/?download_id=d1", nil)
 
@@ -117,26 +102,26 @@ func TestSetupDownloadTrackerAndFinish(t *testing.T) {
 		t.Fatalf("expected tracker context and tracker")
 	}
 
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	_, ok := h.downloads["d1"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !ok {
 		t.Fatalf("expected tracker to be registered")
 	}
 
 	expectedErr := errors.New("x")
 	h.finishTracker(tracker, expectedErr)
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	done := tracker.done
 	gotErr := tracker.err
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !done || gotErr != expectedErr {
 		t.Fatalf("unexpected tracker final state: done=%v err=%v", done, gotErr)
 	}
 }
 
 func TestSetupDownloadTrackerReplacesExistingTracker(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := newTestFilesHandler(&mockFilesService{})
 	storageID := uuid.New()
 
 	req1 := httptest.NewRequest(http.MethodGet, "/?download_id=d1", nil)
@@ -157,11 +142,11 @@ func TestSetupDownloadTrackerReplacesExistingTracker(t *testing.T) {
 		t.Fatalf("expected previous tracker context to be canceled")
 	}
 
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	firstCanceled := tracker1.canceled
 	firstDone := tracker1.done
 	current := h.downloads["d1"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 
 	if !firstCanceled || !firstDone {
 		t.Fatalf("expected previous tracker to be marked canceled/done, got canceled=%v done=%v", firstCanceled, firstDone)
@@ -171,17 +156,17 @@ func TestSetupDownloadTrackerReplacesExistingTracker(t *testing.T) {
 	}
 
 	h.cleanupDownloadTracker("d1", tracker1)
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	current = h.downloads["d1"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if current != tracker2 {
 		t.Fatalf("expected old tracker cleanup to keep latest tracker registered")
 	}
 
 	h.cleanupDownloadTracker("d1", tracker2)
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	_, ok := h.downloads["d1"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if ok {
 		t.Fatalf("expected current tracker cleanup to remove download entry")
 	}
@@ -215,27 +200,27 @@ func TestClientDisconnected(t *testing.T) {
 }
 
 func TestCleanupDownloadTrackerKeepsInterruptedTrackerUntilDone(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{})
+	h := newTestFilesHandler(&mockFilesService{})
 	req := httptest.NewRequest(http.MethodGet, "/?download_id=d-int", nil)
 	_, tracker, _ := h.setupDownloadTracker(req, uuid.New())
 
-	h.mu.Lock()
+	h.downloadsMu.Lock()
 	tracker.interrupted = true
-	h.mu.Unlock()
+	h.downloadsMu.Unlock()
 
 	h.cleanupDownloadTracker("d-int", tracker)
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	_, stillThere := h.downloads["d-int"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !stillThere {
 		t.Fatalf("interrupted tracker must survive the request-end cleanup")
 	}
 
 	h.finishTracker(tracker, nil)
 	h.cleanupDownloadTracker("d-int", tracker)
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	_, stillThere = h.downloads["d-int"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if stillThere {
 		t.Fatalf("finished tracker should be removed")
 	}

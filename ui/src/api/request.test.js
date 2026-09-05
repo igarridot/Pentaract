@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import { apiMultipartRequest, apiRequest, getRawToken } from './request.js'
+import { ApiError, apiMultipartRequest, apiRequest, getRawToken } from './request.js'
 
 function mockHeaders(contentLength = null) {
   return {
@@ -121,4 +121,39 @@ test('apiMultipartRequest sends form data without content-type header', async ()
 
   const data = await apiMultipartRequest('/upload', 'POST', fd)
   assert.deepEqual(data, { uploaded: 1 })
+})
+
+test('apiRequest throws an ApiError carrying the status and server message', async () => {
+  setLocalStorage('tok')
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 403,
+    headers: mockHeaders(),
+    async json() {
+      return { error: 'forbidden' }
+    },
+  })
+  await assert.rejects(apiRequest('/users/manage'), (err) => {
+    assert.ok(err instanceof ApiError)
+    assert.equal(err.status, 403)
+    assert.equal(err.message, 'forbidden')
+    return true
+  })
+})
+
+test('apiRequest falls back to a status message when the error body is not JSON', async () => {
+  setLocalStorage('tok')
+  globalThis.fetch = async () => ({
+    ok: false,
+    status: 502,
+    headers: mockHeaders(),
+    async json() {
+      throw new Error('not json')
+    },
+  })
+  await assert.rejects(apiRequest('/x'), (err) => {
+    assert.equal(err.status, 502)
+    assert.equal(err.message, 'Unknown error')
+    return true
+  })
 })

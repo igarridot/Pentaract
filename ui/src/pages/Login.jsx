@@ -1,5 +1,5 @@
 import { useState } from 'react'
-import { useNavigate, Link } from 'react-router-dom'
+import { useNavigate, Link, Navigate } from 'react-router-dom'
 import { TextField, Button, Typography, Stack, Link as MuiLink } from '@mui/material'
 import API from '../api'
 import { isAuthenticated, getRedirectPath } from '../common/auth_guard'
@@ -12,8 +12,7 @@ export default function Login() {
   const [error, setError] = useState('')
 
   if (isAuthenticated()) {
-    navigate('/storages', { replace: true })
-    return null
+    return <Navigate to="/storages" replace />
   }
 
   const handleSubmit = async (e) => {

@@ -63,3 +63,45 @@ func TestChunkCipherRejectsWrongAAD(t *testing.T) {
 		t.Fatalf("expected decrypt to fail with different file ID")
 	}
 }
+
+func TestChunkCipherFallbackOpensChunksSealedWithLegacySecret(t *testing.T) {
+	fileID := uuid.New()
+	legacy := NewChunkCipher("old-secret-key")
+	sealedWithLegacy, _, err := legacy.EncryptChunk(fileID, 3, []byte("written before the key change"))
+	if err != nil {
+		t.Fatalf("encrypt with legacy: %v", err)
+	}
+
+	rotated := NewChunkCipherWithFallback("new-encryption-key", "old-secret-key")
+	plain, err := rotated.DecryptChunk(fileID, 3, sealedWithLegacy)
+	if err != nil || string(plain) != "written before the key change" {
+		t.Fatalf("expected legacy chunk to decrypt, got %q %v", plain, err)
+	}
+
+	sealedWithNew, _, err := rotated.EncryptChunk(fileID, 4, []byte("written after"))
+	if err != nil {
+		t.Fatalf("encrypt with rotated: %v", err)
+	}
+	if _, err := legacy.DecryptChunk(fileID, 4, sealedWithNew); err == nil {
+		t.Fatalf("new chunks must be sealed with the new key only")
+	}
+	plain, err = rotated.DecryptChunk(fileID, 4, sealedWithNew)
+	if err != nil || string(plain) != "written after" {
+		t.Fatalf("expected new chunk to decrypt with the primary key, got %q %v", plain, err)
+	}
+}
+
+func TestChunkCipherFallbackIgnoresEmptyOrIdenticalLegacySecret(t *testing.T) {
+	if c := NewChunkCipherWithFallback("s", ""); c.legacy != nil {
+		t.Fatalf("empty legacy secret must not add a fallback")
+	}
+	if c := NewChunkCipherWithFallback("s", "s"); c.legacy != nil {
+		t.Fatalf("identical legacy secret must not add a fallback")
+	}
+	wrong := NewChunkCipherWithFallback("a", "b")
+	other := NewChunkCipher("c")
+	sealed, _, _ := other.EncryptChunk(uuid.New(), 0, []byte("x"))
+	if _, err := wrong.DecryptChunk(uuid.New(), 0, sealed); err == nil {
+		t.Fatalf("a chunk sealed with an unrelated key must still fail")
+	}
+}

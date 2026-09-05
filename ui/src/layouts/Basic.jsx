@@ -13,7 +13,7 @@ export default function BasicLayout() {
 
   useEffect(() => {
     checkAuth(navigate, location)
-  }, [])
+  }, [navigate, location])
 
   return (
     <AlertProvider>

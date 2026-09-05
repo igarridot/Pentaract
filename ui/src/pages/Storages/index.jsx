@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { useNavigate, Link } from 'react-router-dom'
 import {
   Typography, List, ListItem, ListItemButton, ListItemIcon, ListItemText,
@@ -12,94 +12,36 @@ import {
 } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
-import { getCurrentUserId } from '../../common/auth_guard'
+import { useApiAction } from '../../common/use_api_action'
 import { useDeleteProgress } from '../../common/use_delete_progress'
 import { convertSize } from '../../common/size_converter'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
-import Access from '../../components/Access'
-import GrantAccess from '../../components/GrantAccess'
 import DeleteProgress from '../../components/DeleteProgress'
+import Panel from '../../components/Panel'
+import StorageAccessPanel from './StorageAccessPanel'
 
 export default function Storages() {
   const navigate = useNavigate()
   const addAlert = useAlert()
+  const run = useApiAction(addAlert)
   const [storages, setStorages] = useState([])
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [accessStorageId, setAccessStorageId] = useState(null)
-  const [accessUsers, setAccessUsers] = useState([])
-  const [grantOpen, setGrantOpen] = useState(false)
-  const [grantCandidates, setGrantCandidates] = useState([])
-  const [editUser, setEditUser] = useState(null)
   const { deleteState, runTrackedDelete } = useDeleteProgress()
 
-  const load = async () => {
-    try {
-      const data = await API.storages.list()
-      setStorages(data || [])
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
+  const load = useCallback(() => (
+    run(() => API.storages.list(), { onSuccess: (data) => setStorages(data || []) })
+  ), [run])
+
+  useEffect(() => { load() }, [load])
+
+  const handleDelete = () => {
+    const target = deleteTarget
+    return run(
+      () => runTrackedDelete(target?.name || 'storage', (deleteId) => API.storages.delete(target.id, deleteId)),
+      { success: 'Storage deleted', onSuccess: () => { setDeleteTarget(null); load() } },
+    )
   }
-
-  useEffect(() => { load() }, [])
-
-  const handleDelete = async () => {
-    try {
-      await runTrackedDelete(
-        deleteTarget?.name || 'storage',
-        (deleteId) => API.storages.delete(deleteTarget.id, deleteId),
-      )
-      setDeleteTarget(null)
-      addAlert('Storage deleted', 'success')
-      load()
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
-
-  const loadAccess = async (storageId) => {
-    try {
-      const data = await API.access.list(storageId)
-      setAccessUsers(data || [])
-      setAccessStorageId(storageId)
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
-
-  const handleGrant = async (email, accessType) => {
-    try {
-      await API.access.grant(accessStorageId, email, accessType)
-      addAlert('Access granted', 'success')
-      loadAccess(accessStorageId)
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
-
-  const openGrantDialog = async () => {
-    if (!accessStorageId) return
-    try {
-      const data = await API.access.candidates(accessStorageId)
-      setGrantCandidates(data || [])
-      setEditUser(null)
-      setGrantOpen(true)
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
-
-  const handleRevokeAccess = async (user) => {
-    try {
-      await API.access.revoke(accessStorageId, user.id)
-      addAlert('Access revoked', 'success')
-      loadAccess(accessStorageId)
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
-
-  const currentUserId = getCurrentUserId()
 
   return (
     <Box>
@@ -114,13 +56,7 @@ export default function Storages() {
         />
       )}
 
-      <Box sx={{
-        bgcolor: 'background.paper',
-        borderRadius: 3,
-        border: '1px solid',
-        borderColor: 'divider',
-        overflow: 'hidden',
-      }}>
+      <Panel>
         <List disablePadding>
           {storages.map((s, i) => (
             <Box key={s.id}>
@@ -131,7 +67,7 @@ export default function Storages() {
                   <Box sx={{ display: 'flex', gap: 0.25 }}>
                     <IconButton
                       size="small"
-                      onClick={() => loadAccess(s.id)}
+                      onClick={() => setAccessStorageId(s.id)}
                       title="Manage access"
                       sx={{ opacity: 0.4, '&:hover': { opacity: 1 } }}
                     >
@@ -173,7 +109,7 @@ export default function Storages() {
             </Box>
           )}
         </List>
-      </Box>
+      </Panel>
 
       <Fab
         color="primary"
@@ -194,34 +130,8 @@ export default function Storages() {
       />
 
       {accessStorageId && (
-        <Box sx={{ mt: 3 }}>
-          <Box sx={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', mb: 1.5 }}>
-            <Typography variant="h6" sx={{ fontSize: '1rem' }}>Access Control</Typography>
-            <Box>
-              <IconButton size="small" onClick={openGrantDialog}>
-                <AddIcon sx={{ fontSize: 18 }} />
-              </IconButton>
-              <IconButton size="small" onClick={() => setAccessStorageId(null)}>
-                <DeleteIcon sx={{ fontSize: 18 }} />
-              </IconButton>
-            </Box>
-          </Box>
-          <Access
-            users={accessUsers}
-            currentUserId={currentUserId}
-            onEdit={(user) => { setEditUser(user); setGrantOpen(true) }}
-            onDelete={handleRevokeAccess}
-          />
-        </Box>
+        <StorageAccessPanel storageId={accessStorageId} onClose={() => setAccessStorageId(null)} />
       )}
-
-      <GrantAccess
-        open={grantOpen}
-        onClose={() => { setGrantOpen(false); setEditUser(null); setGrantCandidates([]) }}
-        onGrant={handleGrant}
-        editUser={editUser}
-        candidates={grantCandidates}
-      />
     </Box>
   )
 }

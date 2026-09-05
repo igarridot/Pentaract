@@ -12,6 +12,7 @@ import {
 } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
+import { useApiAction } from '../../common/use_api_action'
 import FileInfo from '../../components/FileInfo'
 import CreateFolderDialog from '../../components/CreateFolderDialog'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
@@ -31,11 +32,13 @@ import { useUploads } from './useUploads'
 import { useDownloads } from './useDownloads'
 import { useDeleteOperation } from './useDeleteOperation'
 import { useBulkOperations } from './useBulkOperations'
+import { useFileSelection } from './useFileSelection'
 import { useNavigationBlock } from './useNavigationBlock'
 
 export default function Files() {
   const navigate = useNavigate()
   const addAlert = useAlert()
+  const run = useApiAction(addAlert)
 
   const [infoFile, setInfoFile] = useState(null)
   const [previewFile, setPreviewFile] = useState(null)
@@ -43,20 +46,22 @@ export default function Files() {
   const [moveTarget, setMoveTarget] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
 
-  // Hook 1: File navigation (path, items, search)
-  // We pass onPathChange later via updateDirCache from uploads
-  const nav = useFileNavigation(addAlert)
+  // Navigation: current path, listing and search.
   const {
     storageId, prefix, currentPath, pathParts,
     items, search, setSearch, searchResults, setSearchResults,
     loadTree, handleSearch,
-  } = nav
+  } = useFileNavigation(addAlert)
 
-  // Hook 4: Bulk operations (needs uploadStates/downloadStates for metrics — passed each render)
-  // Callbacks are stable and don't depend on transfer states.
-  const bulk = useBulkOperations(addAlert, storageId, loadTree)
+  const displayItems = searchResults || items
   const {
-    selectedFilePaths, setSelectedFilePaths,
+    selectedFilePaths, selectableFiles, selectedFiles, allFilesSelected,
+    clearSelection, toggleFileSelection, toggleSelectAllFiles,
+  } = useFileSelection(displayItems, loadTree)
+
+  // Bulk operations read upload/download states for metrics each render.
+  const bulk = useBulkOperations(addAlert, storageId, loadTree, clearSelection)
+  const {
     bulkDeleteOpen, setBulkDeleteOpen,
     bulkMoveOpen, setBulkMoveOpen,
     bulkOperation, setBulkOperation, bulkCancelRef,
@@ -65,7 +70,6 @@ export default function Files() {
     handleBulkDownload, handleBulkDelete, handleBulkMove,
   } = bulk
 
-  // Hook 2: Uploads
   const uploads = useUploads(addAlert, storageId, currentPath, loadTree, {
     registerBulkTransfer,
     markBulkTransferTerminal,
@@ -80,16 +84,14 @@ export default function Files() {
     updateDirCache,
   } = uploads
 
-  // Hook 3: Downloads
   const downloads = useDownloads(addAlert, storageId, loadTree, {
     markBulkTransferTerminal,
   })
   const {
     downloadStates, downloadStatesRef, isDownloading,
-    startDownload, cancelDownload, cleanupDownloads, releaseDownloadTracking,
+    startDownload, waitForDownload, cancelDownload, cleanupDownloads, releaseDownloadTracking,
   } = downloads
 
-  // Hook 5: Delete
   const del = useDeleteOperation(addAlert, storageId, loadTree)
   const {
     deleteTarget, setDeleteTarget,
@@ -101,33 +103,20 @@ export default function Files() {
   // Derived flags
   const hasActiveFileOperation = isUploading || isDownloading || isDeleting || isBulkOperating
 
-  // Hook 6: Navigation blocking
   const { blocker } = useNavigationBlock({ hasActiveFileOperation, isDeleting, isBulkDelete })
 
-  // Wire navigation's onPathChange to upload's dir cache
-  // (useFileNavigation calls onPathChange on loadTree; we update cache + reset selection)
-  // Since we can't change the callback ref after hook init, we use an effect approach:
-  // The navigation hook passes data via loadTree -> setItems. We handle cache update here.
+  // The current listing doubles as the upload conflict cache for this directory.
   useEffect(() => {
-    if (items.length > 0 || currentPath !== undefined) {
-      updateDirCache(currentPath, items)
-    }
+    updateDirCache(currentPath, items)
   }, [items, currentPath, updateDirCache])
 
-  // Reset selection on path change
-  useEffect(() => {
-    setSelectedFilePaths([])
-  }, [loadTree])
-
-  // Cleanup on unmount
-  useEffect(() => {
-    return () => {
-      bulk.cleanupBulk()
-      cleanupUploads()
-      cleanupDownloads()
-      cleanupDelete()
-    }
-  }, [])
+  // Cancel whatever is still running when leaving the page.
+  useEffect(() => () => {
+    bulk.cleanupBulk()
+    cleanupUploads()
+    cleanupDownloads()
+    cleanupDelete()
+  }, []) // eslint-disable-line react-hooks/exhaustive-deps -- unmount only
 
   // Compute bulk metrics with actual current transfer states
   const {
@@ -138,16 +127,10 @@ export default function Files() {
     workersStatus: bulkWorkersStatus,
   } = getBulkOperationMetrics(bulkOperation, uploadStates, downloadStates)
 
-  // --- Local handlers that compose hooks ---
-  const handleCreateFolder = async (name) => {
-    try {
-      await API.files.createFolder(storageId, currentPath, name)
-      addAlert('Folder created', 'success')
-      loadTree()
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
+  const handleCreateFolder = (name) => run(
+    () => API.files.createFolder(storageId, currentPath, name),
+    { success: 'Folder created', onSuccess: loadTree },
+  )
 
   const handlePreview = (item) => {
     const mediaType = getMediaType(item.name)
@@ -158,63 +141,15 @@ export default function Files() {
     setPreviewFile(item)
   }
 
-  const handleMove = async (item, newPath) => {
-    try {
-      await API.files.move(storageId, getItemPath(item), newPath)
-      addAlert('Moved successfully', 'success')
-      setMoveTarget(null)
-      loadTree()
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
+  const handleMove = (item, newPath) => run(
+    () => API.files.move(storageId, getItemPath(item), newPath),
+    { success: 'Moved successfully', onSuccess: () => { setMoveTarget(null); loadTree() } },
+  )
 
-  const handleRename = async (item, newName) => {
-    try {
-      const sourcePath = getItemPath(item)
-      const targetPath = buildRenamedPath(item, newName)
-      await API.files.move(storageId, sourcePath, targetPath)
-      addAlert('Folder renamed', 'success')
-      setRenameTarget(null)
-      loadTree()
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
-
-  // --- Display items and selection ---
-  const displayItems = searchResults || items
-  const selectableFiles = displayItems.filter((item) => item.is_file)
-  const selectedFiles = selectableFiles.filter((item) => selectedFilePaths.includes(item.path))
-  const allFilesSelected = selectableFiles.length > 0 && selectedFiles.length === selectableFiles.length
-
-  useEffect(() => {
-    const visiblePaths = new Set(selectableFiles.map((item) => item.path))
-    setSelectedFilePaths((prev) => {
-      const next = prev.filter((path) => visiblePaths.has(path))
-      if (next.length === prev.length && next.every((path, i) => path === prev[i])) {
-        return prev
-      }
-      return next
-    })
-  }, [selectableFiles])
-
-  const toggleFileSelection = (item) => {
-    if (!item?.is_file || !item.path) return
-    setSelectedFilePaths((prev) => (
-      prev.includes(item.path)
-        ? prev.filter((path) => path !== item.path)
-        : [...prev, item.path]
-    ))
-  }
-
-  const toggleSelectAllFiles = () => {
-    if (allFilesSelected) {
-      setSelectedFilePaths([])
-      return
-    }
-    setSelectedFilePaths(selectableFiles.map((item) => item.path))
-  }
+  const handleRename = (item, newName) => run(
+    () => API.files.move(storageId, getItemPath(item), buildRenamedPath(item, newName)),
+    { success: 'Folder renamed', onSuccess: () => { setRenameTarget(null); loadTree() } },
+  )
 
   return (
     <Box>
@@ -270,9 +205,9 @@ export default function Files() {
           allSelected={allFilesSelected}
           isBulkOperating={isBulkOperating}
           onToggleSelectAll={toggleSelectAllFiles}
-          onClear={() => setSelectedFilePaths([])}
+          onClear={clearSelection}
           onMove={() => setBulkMoveOpen(true)}
-          onDownload={() => handleBulkDownload(selectedFiles, { startDownload, downloadStatesRef, releaseDownloadTracking })}
+          onDownload={() => handleBulkDownload(selectedFiles, { startDownload, waitForDownload, downloadStatesRef, releaseDownloadTracking })}
           onDelete={() => setBulkDeleteOpen(true)}
         />
       )}
@@ -397,6 +332,7 @@ export default function Files() {
       />
 
       <RenameFolderDialog
+        key={renameTarget?.path ?? 'closed'}
         open={!!renameTarget}
         folder={renameTarget}
         onRename={handleRename}

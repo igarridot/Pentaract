@@ -45,9 +45,13 @@ func makeStorageReq(method, body string, storageID string) *http.Request {
 	return req.WithContext(context.WithValue(req.Context(), authUserKey, &appjwt.AuthUser{ID: uuid.New(), Email: "u@example.com"}))
 }
 
+func newTestStoragesHandler(svc storagesService) *StoragesHandler {
+	return NewStoragesHandler(svc, NewDeleteTrackers())
+}
+
 func TestStoragesHandlerFlows(t *testing.T) {
 	id := uuid.New()
-	h := NewStoragesHandler(&mockStoragesService{
+	h := newTestStoragesHandler(&mockStoragesService{
 		createFn: func(ctx context.Context, userID uuid.UUID, name string, chatID int64) (*domain.Storage, error) {
 			return &domain.Storage{ID: id, Name: name}, nil
 		},
@@ -85,7 +89,7 @@ func TestStoragesHandlerFlows(t *testing.T) {
 }
 
 func TestStoragesHandlerValidationErrors(t *testing.T) {
-	h := NewStoragesHandler(&mockStoragesService{
+	h := newTestStoragesHandler(&mockStoragesService{
 		createFn: func(ctx context.Context, userID uuid.UUID, name string, chatID int64) (*domain.Storage, error) {
 			return nil, nil
 		},
@@ -119,7 +123,7 @@ func TestStoragesHandlerValidationErrors(t *testing.T) {
 
 func TestStoragesHandlerServiceErrors(t *testing.T) {
 	id := uuid.New()
-	h := NewStoragesHandler(&mockStoragesService{
+	h := newTestStoragesHandler(&mockStoragesService{
 		createFn: func(ctx context.Context, userID uuid.UUID, name string, chatID int64) (*domain.Storage, error) {
 			return nil, domain.ErrForbidden()
 		},

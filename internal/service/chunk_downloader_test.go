@@ -57,7 +57,7 @@ func TestDownloadChunkWorkerFallbackPrimaryFailsFallbackSucceeds(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: fakeWorkers,
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -66,7 +66,7 @@ func TestDownloadChunkWorkerFallbackPrimaryFailsFallbackSucceeds(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: NewChunkCipher("secret"),
-	}
+	})
 
 	data, err := m.downloadChunk(context.Background(), domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID:    "FILE_ID",
@@ -108,7 +108,7 @@ func TestDownloadChunkContextCancellationDuringFallback(t *testing.T) {
 		},
 	}
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: fakeWorkers,
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -117,7 +117,7 @@ func TestDownloadChunkContextCancellationDuringFallback(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: NewChunkCipher("secret"),
-	}
+	})
 
 	_, err := m.downloadChunk(ctx, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
@@ -235,11 +235,11 @@ func TestDownloadAndDecryptChunkRoundTrip(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		scheduler:   NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	data, err := m.downloadAndDecryptChunk(context.Background(), fileID, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
@@ -278,11 +278,11 @@ func TestDownloadAndDecryptChunkDecryptionFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		scheduler:   NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	_, err = m.downloadAndDecryptChunk(context.Background(), fileID, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
@@ -321,7 +321,7 @@ func TestDownloadChunkWithRetrySucceedsAfterTransientFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: &fakeWorkersRepo{},
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -330,7 +330,7 @@ func TestDownloadChunkWithRetrySucceedsAfterTransientFailure(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: NewChunkCipher("secret"),
-	}
+	})
 
 	data, err := m.downloadChunkWithRetry(context.Background(), domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
@@ -362,7 +362,7 @@ func TestDownloadChunkWithRetryExhaustsAttempts(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: &fakeWorkersRepo{},
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -371,7 +371,7 @@ func TestDownloadChunkWithRetryExhaustsAttempts(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: NewChunkCipher("secret"),
-	}
+	})
 
 	_, err := m.downloadChunkWithRetry(context.Background(), domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
@@ -401,7 +401,7 @@ func TestDownloadChunkWithRetryContextCancellation(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: &fakeWorkersRepo{},
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -410,7 +410,7 @@ func TestDownloadChunkWithRetryContextCancellation(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: NewChunkCipher("secret"),
-	}
+	})
 
 	_, err := m.downloadChunkWithRetry(ctx, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",

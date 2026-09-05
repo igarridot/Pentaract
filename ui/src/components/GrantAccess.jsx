@@ -1,22 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, FormControl, InputLabel, Select, MenuItem, Typography,
 } from '@mui/material'
 
+// The parent keys this dialog per opening (and per edited user), so the
+// initial state below is recomputed every time it opens.
 export default function GrantAccess({ open, onClose, onGrant, editUser, candidates = [] }) {
-  const [email, setEmail] = useState('')
-  const [accessType, setAccessType] = useState('r')
-
-  useEffect(() => {
-    if (editUser) {
-      setEmail(editUser.email)
-      setAccessType(editUser.access_type)
-    } else {
-      setEmail(candidates[0]?.email || '')
-      setAccessType('r')
-    }
-  }, [editUser, open, candidates])
+  const [email, setEmail] = useState(editUser ? editUser.email : candidates[0]?.email || '')
+  const [accessType, setAccessType] = useState(editUser ? editUser.access_type : 'r')
 
   const handleSubmit = () => {
     onGrant(email, accessType)

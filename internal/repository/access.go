@@ -5,22 +5,15 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 type AccessRepo struct {
-	pool accessDB
+	pool DB
 }
 
-type accessDB interface {
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
-	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
-}
-
-func NewAccessRepo(pool accessDB) *AccessRepo {
+func NewAccessRepo(pool DB) *AccessRepo {
 	return &AccessRepo{pool: pool}
 }
 
@@ -42,20 +35,11 @@ func (r *AccessRepo) List(ctx context.Context, storageID uuid.UUID) ([]domain.Us
 		ORDER BY u.email`,
 		storageID,
 	)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	var users []domain.UserWithAccess
-	for rows.Next() {
+	return collectRows(rows, err, func(rows pgx.Rows) (domain.UserWithAccess, error) {
 		var u domain.UserWithAccess
-		if err := rows.Scan(&u.ID, &u.Email, &u.AccessType); err != nil {
-			return nil, err
-		}
-		users = append(users, u)
-	}
-	return users, rows.Err()
+		err := rows.Scan(&u.ID, &u.Email, &u.AccessType)
+		return u, err
+	})
 }
 
 func (r *AccessRepo) Delete(ctx context.Context, userID, storageID uuid.UUID) error {

@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Link } from 'react-router-dom'
 import {
   Typography, List, ListItem, ListItemText, Box, Fab, Divider,
@@ -7,66 +7,48 @@ import {
 import { Add as AddIcon, Delete as DeleteIcon, Edit as EditIcon } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
+import { useApiAction } from '../../common/use_api_action'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
+import Panel from '../../components/Panel'
 import EditWorkerDialog from '../../components/EditWorkerDialog'
 
 export default function StorageWorkers() {
   const addAlert = useAlert()
+  const run = useApiAction(addAlert)
   const [workers, setWorkers] = useState([])
   const [storages, setStorages] = useState([])
   const [deleteTarget, setDeleteTarget] = useState(null)
   const [editTarget, setEditTarget] = useState(null)
 
-  const load = async () => {
-    try {
-      const [workersData, storagesData] = await Promise.all([
-        API.storageWorkers.list(),
-        API.storages.list(),
-      ])
-      setWorkers(workersData || [])
-      setStorages(storagesData || [])
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
+  const load = useCallback(() => run(
+    () => Promise.all([API.storageWorkers.list(), API.storages.list()]),
+    {
+      onSuccess: ([workersData, storagesData]) => {
+        setWorkers(workersData || [])
+        setStorages(storagesData || [])
+      },
+    },
+  ), [run])
 
-  useEffect(() => { load() }, [])
+  useEffect(() => { load() }, [load])
 
   const storageMap = Object.fromEntries(storages.map((s) => [s.id, s.name]))
 
-  const handleDelete = async () => {
-    try {
-      await API.storageWorkers.delete(deleteTarget.id)
-      setDeleteTarget(null)
-      addAlert('Worker deleted', 'success')
-      load()
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
+  const handleDelete = () => run(() => API.storageWorkers.delete(deleteTarget.id), {
+    success: 'Worker deleted',
+    onSuccess: () => { setDeleteTarget(null); load() },
+  })
 
-  const handleEdit = async (id, name, storageId) => {
-    try {
-      await API.storageWorkers.update(id, name, storageId)
-      setEditTarget(null)
-      addAlert('Worker updated', 'success')
-      load()
-    } catch (err) {
-      addAlert(err.message, 'error')
-    }
-  }
+  const handleEdit = (id, name, storageId) => run(() => API.storageWorkers.update(id, name, storageId), {
+    success: 'Worker updated',
+    onSuccess: () => { setEditTarget(null); load() },
+  })
 
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 3 }}>Storage Workers</Typography>
 
-      <Box sx={{
-        bgcolor: 'background.paper',
-        borderRadius: 3,
-        border: '1px solid',
-        borderColor: 'divider',
-        overflow: 'hidden',
-      }}>
+      <Panel>
         <List disablePadding>
           {workers.map((w, i) => (
             <Box key={w.id}>
@@ -116,7 +98,7 @@ export default function StorageWorkers() {
             </Box>
           )}
         </List>
-      </Box>
+      </Panel>
 
       <Fab
         color="primary"
@@ -137,6 +119,7 @@ export default function StorageWorkers() {
       />
 
       <EditWorkerDialog
+        key={editTarget?.id ?? 'closed'}
         open={!!editTarget}
         worker={editTarget}
         storages={storages}

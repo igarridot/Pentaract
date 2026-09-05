@@ -1,46 +1,59 @@
 package handler
 
 import (
+	"errors"
 	"testing"
 	"time"
 
 	"github.com/google/uuid"
 )
 
-func TestDeleteTrackerRegistry(t *testing.T) {
-	id := "del-" + uuid.NewString()
-	storageID := uuid.New()
-	tracker := startDeleteTracker(id, storageID)
-	if tracker == nil {
-		t.Fatalf("expected tracker")
+func TestDeleteTrackersTrackReportsProgressAndOutcome(t *testing.T) {
+	d := NewDeleteTrackers()
+	d.afterFunc = func(time.Duration, func()) *time.Timer { return &time.Timer{} } // never clean up
+
+	progress, finish := d.track("del-1", uuid.New())
+	if progress == nil {
+		t.Fatalf("expected progress for a tracked delete")
 	}
-	got, ok := getDeleteTracker(id)
-	if !ok || got != tracker {
-		t.Fatalf("expected tracker in registry")
+	tracker, ok := d.get("del-1")
+	if !ok || tracker.progress != progress {
+		t.Fatalf("expected tracker registered under its id")
 	}
 
-	tracker.progress.TotalChunks = 10
-	tracker.progress.DeletedChunks.Store(3)
-	markDeleteTrackerDone(tracker, nil)
-	done, err, total, deleted := getDeleteTrackerStatus(tracker)
-	if !done || err != nil || total != 10 || deleted != 3 {
-		t.Fatalf("unexpected tracker status: done=%v err=%v total=%d deleted=%d", done, err, total, deleted)
+	progress.TotalChunks = 10
+	progress.DeletedChunks.Store(3)
+	boom := errors.New("boom")
+	finish(boom)
+
+	done, err, total, deleted := tracker.status()
+	if !done || !errors.Is(err, boom) || total != 10 || deleted != 3 {
+		t.Fatalf("unexpected status: done=%v err=%v total=%d deleted=%d", done, err, total, deleted)
 	}
 }
 
-func TestScheduleDeleteTrackerCleanup(t *testing.T) {
-	id := "cleanup-" + uuid.NewString()
-	startDeleteTracker(id, uuid.New())
+func TestDeleteTrackersTrackWithoutIDIsNoop(t *testing.T) {
+	d := NewDeleteTrackers()
+	progress, finish := d.track("", uuid.New())
+	if progress != nil {
+		t.Fatalf("expected nil progress without a delete id")
+	}
+	finish(nil) // must not panic
+	if len(d.m) != 0 {
+		t.Fatalf("nothing should be registered without a delete id")
+	}
+}
 
-	orig := deleteTrackerAfterFunc
-	deleteTrackerAfterFunc = func(d time.Duration, fn func()) *time.Timer {
+func TestDeleteTrackersFinishSchedulesCleanup(t *testing.T) {
+	d := NewDeleteTrackers()
+	d.afterFunc = func(_ time.Duration, fn func()) *time.Timer {
 		fn()
 		return &time.Timer{}
 	}
-	t.Cleanup(func() { deleteTrackerAfterFunc = orig })
 
-	scheduleDeleteTrackerCleanup(id)
-	if _, ok := getDeleteTracker(id); ok {
-		t.Fatalf("expected tracker to be cleaned")
+	_, finish := d.track("del-2", uuid.New())
+	finish(nil)
+	if _, ok := d.get("del-2"); ok {
+		t.Fatalf("expected tracker to be removed once cleanup runs")
 	}
 }
