@@ -88,11 +88,27 @@ export async function runUploadPipeline(items, startUpload) {
   }
 }
 
+export function getFileExtension(name) {
+  return name?.split('.').pop()?.toLowerCase() || ''
+}
+
 export function getMediaType(name) {
-  const ext = name?.split('.').pop()?.toLowerCase() || ''
+  const ext = getFileExtension(name)
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image'
   if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext)) return 'video'
   return null
+}
+
+const VIDEO_MIME_BY_EXTENSION = {
+  mp4: 'video/mp4',
+  m4v: 'video/mp4',
+  webm: 'video/webm',
+  ogg: 'video/ogg',
+  mov: 'video/quicktime',
+}
+
+export function getVideoMime(name) {
+  return VIDEO_MIME_BY_EXTENSION[getFileExtension(name)]
 }
 
 export function getItemPath(item) {

@@ -1,7 +1,11 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { calculatePercent, isTerminalTransferStatus, isActiveUploadStatus, isActiveDownloadStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from './progress.js'
+import {
+  calculatePercent, isTerminalTransferStatus, isActiveUploadStatus, isActiveDownloadStatus,
+  summarizeTerminalStatuses, resolveBulkTransferStatus, workersStatusText,
+  createUploadState, applyUploadProgressUpdate,
+} from './progress.js'
 
 test('calculatePercent clamps values into 0..100', () => {
   assert.equal(calculatePercent(0, 0), 0)
@@ -59,4 +63,44 @@ test('resolveBulkTransferStatus prioritizes error then cancelled then done', () 
   assert.equal(resolveBulkTransferStatus({ errorCount: 1, cancelledCount: 0 }), 'error')
   assert.equal(resolveBulkTransferStatus({ errorCount: 0, cancelledCount: 2 }), 'cancelled')
   assert.equal(resolveBulkTransferStatus({ errorCount: 0, cancelledCount: 0 }), 'done')
+})
+
+test('workersStatusText maps the rate limit state and defaults to active', () => {
+  assert.equal(workersStatusText('waiting_rate_limit'), 'Workers waiting (rate limit)')
+  assert.equal(workersStatusText('active'), 'Workers active')
+  assert.equal(workersStatusText(undefined), 'Workers active')
+})
+
+test('createUploadState starts an in-flight card with the known size', () => {
+  assert.deepEqual(createUploadState('u1', 'a.bin', 42), {
+    id: 'u1',
+    filename: 'a.bin',
+    totalBytes: 42,
+    uploadedBytes: 0,
+    totalChunks: 0,
+    uploadedChunks: 0,
+    verificationTotal: 0,
+    verifiedChunks: 0,
+    status: 'uploading',
+    workersStatus: 'active',
+  })
+  assert.equal(createUploadState('u2', 'b.bin').totalBytes, 0)
+})
+
+test('applyUploadProgressUpdate merges events and keeps known totals', () => {
+  const initial = createUploadState('u1', 'a.bin', 100)
+  const partial = applyUploadProgressUpdate(initial, { uploaded_bytes: 10, uploaded: 1, status: 'uploading' })
+  assert.equal(partial.totalBytes, 100)
+  assert.equal(partial.uploadedBytes, 10)
+  assert.equal(partial.workersStatus, 'active')
+
+  const verifying = applyUploadProgressUpdate(partial, {
+    total_bytes: 100, uploaded_bytes: 100, total: 5, uploaded: 5,
+    verification_total: 5, verified: 2, status: 'verifying', workers_status: 'waiting_rate_limit',
+  })
+  assert.equal(verifying.status, 'verifying')
+  assert.equal(verifying.verificationTotal, 5)
+  assert.equal(verifying.verifiedChunks, 2)
+  assert.equal(verifying.workersStatus, 'waiting_rate_limit')
+  assert.equal(verifying.filename, 'a.bin')
 })

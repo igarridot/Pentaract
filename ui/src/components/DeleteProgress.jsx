@@ -1,5 +1,5 @@
 import { Typography } from '@mui/material'
-import { calculatePercent } from '../common/progress'
+import { calculatePercent, workersStatusText } from '../common/progress'
 import ProgressCard from './ProgressCard'
 
 export default function DeleteProgress({ label, totalChunks, deletedChunks, status, workersStatus }) {
@@ -7,7 +7,7 @@ export default function DeleteProgress({ label, totalChunks, deletedChunks, stat
   const isError = status === 'error'
   const percent = calculatePercent(deletedChunks, totalChunks)
   const pending = totalChunks > 0 ? Math.max(totalChunks - deletedChunks, 0) : 0
-  const workersText = workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
+  const workersText = workersStatusText(workersStatus)
 
   const title = isError ? 'Delete failed' : isActive ? 'Deleting' : 'Delete complete'
 

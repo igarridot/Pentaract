@@ -19,6 +19,42 @@ export function isActiveDownloadStatus(status) {
   return status === 'downloading' || status === 'interrupted'
 }
 
+export function workersStatusText(workersStatus) {
+  return workersStatus === 'waiting_rate_limit' ? 'Workers waiting (rate limit)' : 'Workers active'
+}
+
+// Initial card state for an upload, before the first SSE event arrives.
+export function createUploadState(id, filename, totalBytes = 0) {
+  return {
+    id,
+    filename,
+    totalBytes,
+    uploadedBytes: 0,
+    totalChunks: 0,
+    uploadedChunks: 0,
+    verificationTotal: 0,
+    verifiedChunks: 0,
+    status: 'uploading',
+    workersStatus: 'active',
+  }
+}
+
+// Merges an upload_progress SSE event into the card state. Totals fall back
+// to what we already knew so a sparse event never blanks the bar.
+export function applyUploadProgressUpdate(previous, data) {
+  return {
+    ...previous,
+    totalBytes: data.total_bytes ?? previous?.totalBytes ?? 0,
+    uploadedBytes: data.uploaded_bytes ?? 0,
+    totalChunks: data.total ?? previous?.totalChunks ?? 0,
+    uploadedChunks: data.uploaded ?? 0,
+    verificationTotal: data.verification_total ?? previous?.verificationTotal ?? 0,
+    verifiedChunks: data.verified ?? 0,
+    status: data.status,
+    workersStatus: data.workers_status ?? previous?.workersStatus ?? 'active',
+  }
+}
+
 export function summarizeTerminalStatuses(terminalStatuses = {}) {
   const summary = {
     completed: 0,
