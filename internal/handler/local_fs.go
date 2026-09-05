@@ -65,7 +65,7 @@ func resolveLocalFile(basePath, localPath string) (string, os.FileInfo, error) {
 
 // BrowseLocalFS lists files and directories at the given path on the local
 // filesystem (relative to the configured base path).
-func (h *FilesHandler) BrowseLocalFS(w http.ResponseWriter, r *http.Request) {
+func (h *UploadHandler) BrowseLocalFS(w http.ResponseWriter, r *http.Request) {
 	if h.localBasePath == "" {
 		writeError(w, domain.ErrForbidden())
 		return
@@ -123,7 +123,7 @@ type uploadLocalRequest struct {
 // UploadLocal uploads a single file from the container's local filesystem to
 // Telegram storage. It returns immediately with a 202 and an upload_id that
 // can be used to track progress via /api/upload_progress.
-func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
+func (h *UploadHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
 	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
@@ -170,7 +170,7 @@ func (h *FilesHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
 }
 
 // uploadLocalFile opens a file from the local mount and runs a tracked upload.
-func (h *FilesHandler) uploadLocalFile(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, localPath, fullPath string, fileSize int64, onConflict string) {
+func (h *UploadHandler) uploadLocalFile(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, localPath, fullPath string, fileSize int64, onConflict string) {
 	f, err := os.Open(localPath)
 	if err != nil {
 		slog.Error("local upload: failed to open file", "file", localPath, "err", err)
@@ -191,7 +191,7 @@ type uploadLocalBatchRequest struct {
 }
 
 // UploadLocalBatch starts multiple local file uploads at once.
-func (h *FilesHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) {
+func (h *UploadHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) {
 	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)

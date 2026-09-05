@@ -254,9 +254,9 @@ func TestFilesHandlerDownloadAttachmentWithTrackingCompletesWithoutCancellation(
 		t.Fatalf("expected tracked UI download to receive progress object")
 	}
 
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	tracker, ok := h.downloads["ui-download-1"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !ok || tracker == nil {
 		t.Fatalf("expected tracked download to remain registered for progress polling")
 	}
@@ -295,9 +295,9 @@ func TestFilesHandlerDownloadInlineVideoWithDownloadIDSkipsTracking(t *testing.T
 		t.Fatalf("expected inline video stream to skip download progress tracking")
 	}
 
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	tracker := h.downloads["kodi-stream-1"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if tracker != nil {
 		t.Fatalf("expected inline video stream not to register a download tracker")
 	}
@@ -978,9 +978,9 @@ func TestFilesHandlerDownloadDirWithTrackingCompletesWithoutCancellation(t *test
 		t.Fatalf("download dir expected 200/zipdata, got %d/%q", w.Code, w.Body.String())
 	}
 
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	tracker, ok := h.downloads["ui-dir-1"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !ok || tracker == nil {
 		t.Fatalf("expected tracked directory download to remain registered for progress polling")
 	}
@@ -1077,15 +1077,15 @@ func TestFilesHandlerDownloadBrowserDisconnectKeepsTrackerInterrupted(t *testing
 
 	h.Download(httptest.NewRecorder(), req)
 
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	tracker := h.downloads["dl-blocked"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if tracker == nil {
 		t.Fatalf("expected tracker to stay registered while waiting for the browser")
 	}
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	interrupted, done, canceled, err := tracker.interrupted, tracker.done, tracker.canceled, tracker.err
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !interrupted || done || canceled || err != nil {
 		t.Fatalf("expected interrupted tracker, got interrupted=%v done=%v canceled=%v err=%v", interrupted, done, canceled, err)
 	}
@@ -1120,9 +1120,9 @@ func TestFilesHandlerDownloadResumedRequestReplacesInterruptedTracker(t *testing
 	})
 
 	h.Download(httptest.NewRecorder(), blockedReq)
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	first := h.downloads["dl-resume"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 
 	// The user allowed the download in the browser, which re-requests the same URL.
 	blocked = false
@@ -1132,15 +1132,15 @@ func TestFilesHandlerDownloadResumedRequestReplacesInterruptedTracker(t *testing
 		t.Fatalf("resumed download expected 200/abc, got %d/%q", w.Code, w.Body.String())
 	}
 
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	current := h.downloads["dl-resume"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if current == nil || current == first {
 		t.Fatalf("expected resumed request to register a fresh tracker")
 	}
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	done, err, interrupted := current.done, current.err, current.interrupted
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !done || err != nil || interrupted {
 		t.Fatalf("unexpected resumed tracker state: done=%v err=%v interrupted=%v", done, err, interrupted)
 	}
@@ -1174,14 +1174,14 @@ func TestFilesHandlerDownloadInterruptedTrackerExpiresAsError(t *testing.T) {
 
 	deadline := time.Now().Add(2 * time.Second)
 	for {
-		h.mu.RLock()
+		h.downloadsMu.RLock()
 		tracker := h.downloads["dl-expire"]
 		var done bool
 		var err error
 		if tracker != nil {
 			done, err = tracker.done, tracker.err
 		}
-		h.mu.RUnlock()
+		h.downloadsMu.RUnlock()
 		if tracker == nil {
 			t.Fatalf("tracker must stay registered so the SSE stream can deliver the final status")
 		}
@@ -1248,15 +1248,15 @@ func TestFilesHandlerDownloadRealFailureStillReportsError(t *testing.T) {
 
 	h.Download(httptest.NewRecorder(), makeFilesReq(http.MethodGet, "/?download_id=dl-fail", "", storageID, "clips/scene.funscript"))
 
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	tracker := h.downloads["dl-fail"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if tracker == nil {
 		t.Fatalf("expected tracker to be registered")
 	}
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	done, interrupted, err := tracker.done, tracker.interrupted, tracker.err
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !done || interrupted || !errors.Is(err, domain.ErrDecryptionFailed) {
 		t.Fatalf("expected a real failure to finish the tracker with its error, got done=%v interrupted=%v err=%v", done, interrupted, err)
 	}
@@ -1276,15 +1276,15 @@ func TestFilesHandlerDownloadDirBrowserDisconnectKeepsTrackerInterrupted(t *test
 
 	h.DownloadDir(httptest.NewRecorder(), req)
 
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	tracker := h.downloads["dir-blocked"]
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if tracker == nil {
 		t.Fatalf("expected dir download tracker to stay registered")
 	}
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	interrupted, done := tracker.interrupted, tracker.done
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !interrupted || done {
 		t.Fatalf("expected interrupted dir download tracker, got interrupted=%v done=%v", interrupted, done)
 	}

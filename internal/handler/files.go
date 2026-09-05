@@ -5,10 +5,8 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"os"
 	"strconv"
 	"strings"
-	"sync"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -18,55 +16,52 @@ import (
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
+// FilesHandler serves the file browser API. Uploads and downloads live in
+// their own handlers; this type embeds them so routing and tests see one
+// object, and adds the metadata operations (tree, search, move, delete).
 type FilesHandler struct {
-	svc filesService
+	*UploadHandler
+	*DownloadHandler
 
-	mu        sync.RWMutex
-	uploads   map[string]*uploadTracker
-	downloads map[string]*downloadTracker
-	deletes   *DeleteTrackers
-
-	fileSizes     *fileSizeCache
-	localBasePath string
+	svc     filesService
+	deletes *DeleteTrackers
 }
 
-type filesService interface {
-	Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error
-	CreateFolder(ctx context.Context, userID, storageID uuid.UUID, path, folderName string) error
-	Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error)
-	Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error
-	CleanupCancelledUpload(ctx context.Context, userID, storageID uuid.UUID, fileID uuid.UUID) error
-	WorkersStatus(storageID uuid.UUID) string
-	GetFileForDownload(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error)
-	ExactFileSize(ctx context.Context, file *domain.File) (int64, error)
-	DownloadFileRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error
-	DownloadFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
-	StreamFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
-	DownloadDir(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error)
-	ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error)
-	Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
-}
-
-// LocalUploadMountPath is the fixed mount point inside the container where
-// the host directory specified by LOCAL_UPLOAD_BASE_PATH is mounted.
-const LocalUploadMountPath = "/mnt/data"
+// Service slices per handler, so each one only sees what it uses.
+type (
+	uploadService interface {
+		Upload(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error)
+		CleanupCancelledUpload(ctx context.Context, userID, storageID uuid.UUID, fileID uuid.UUID) error
+		WorkersStatus(storageID uuid.UUID) string
+	}
+	downloadService interface {
+		GetFileForDownload(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error)
+		ExactFileSize(ctx context.Context, file *domain.File) (int64, error)
+		DownloadFileRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error
+		DownloadFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
+		StreamFileToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error
+		DownloadDir(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error)
+		WorkersStatus(storageID uuid.UUID) string
+	}
+	filesService interface {
+		uploadService
+		downloadService
+		Move(ctx context.Context, userID, storageID uuid.UUID, oldPath, newPath string) error
+		CreateFolder(ctx context.Context, userID, storageID uuid.UUID, path, folderName string) error
+		Delete(ctx context.Context, userID, storageID uuid.UUID, path string, progress *service.DeleteProgress, forceDelete bool) error
+		ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error)
+		Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
+	}
+)
 
 // NewFilesHandler builds the files handler. deletes is shared with the
 // storages handler so both report through the same delete progress stream.
 func NewFilesHandler(svc filesService, deletes *DeleteTrackers) *FilesHandler {
-	// Auto-detect local upload support: enabled when the mount point exists.
-	basePath := ""
-	if info, err := os.Stat(LocalUploadMountPath); err == nil && info.IsDir() {
-		basePath = LocalUploadMountPath
-	}
-
 	return &FilesHandler{
-		svc:           svc,
-		uploads:       make(map[string]*uploadTracker),
-		downloads:     make(map[string]*downloadTracker),
-		deletes:       deletes,
-		fileSizes:     newFileSizeCache(),
-		localBasePath: basePath,
+		UploadHandler:   NewUploadHandler(svc),
+		DownloadHandler: NewDownloadHandler(svc),
+		svc:             svc,
+		deletes:         deletes,
 	}
 }
 
@@ -207,4 +202,43 @@ func extractWildcardPath(r *http.Request) string {
 		path = decoded
 	}
 	return path
+}
+
+// DeleteProgress returns an SSE stream with delete progress updates.
+func (h *FilesHandler) DeleteProgress(w http.ResponseWriter, r *http.Request) {
+	deleteID := r.URL.Query().Get("delete_id")
+
+	pollSSE(w, r, "delete_id",
+		map[string]any{
+			"total": 0, "deleted": 0, "pending": 0, "status": "deleting",
+		},
+		map[string]any{"status": "error"},
+		func() (map[string]any, bool, bool) {
+			tracker, exists := h.deletes.get(deleteID)
+			if !exists {
+				return nil, false, false
+			}
+
+			done, trackerErr, total, deleted := tracker.status()
+			status := "deleting"
+			if done && trackerErr != nil {
+				status = "error"
+			} else if done {
+				status = "done"
+			}
+
+			pending := total - deleted
+			if pending < 0 {
+				pending = 0
+			}
+
+			return map[string]any{
+				"total":          total,
+				"deleted":        deleted,
+				"pending":        pending,
+				"status":         status,
+				"workers_status": h.svc.WorkersStatus(tracker.storageID),
+			}, done, true
+		},
+	)
 }

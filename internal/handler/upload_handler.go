@@ -6,6 +6,7 @@ import (
 	"io"
 	"log/slog"
 	"net/http"
+	"os"
 	"strconv"
 	"sync"
 	"time"
@@ -18,11 +19,40 @@ import (
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
-func (h *FilesHandler) scheduleUploadTrackerCleanup(uploadID string) {
+// LocalUploadMountPath is the fixed mount point inside the container where
+// the host directory specified by LOCAL_UPLOAD_BASE_PATH is mounted.
+const LocalUploadMountPath = "/mnt/data"
+
+// UploadHandler receives browser uploads and local-mount uploads, tracks
+// their progress and answers the upload SSE stream.
+type UploadHandler struct {
+	svc uploadService
+
+	uploadsMu sync.RWMutex
+	uploads   map[string]*uploadTracker
+
+	// localBasePath is set when the local upload mount exists; empty disables
+	// the local upload endpoints.
+	localBasePath string
+}
+
+func NewUploadHandler(svc uploadService) *UploadHandler {
+	basePath := ""
+	if info, err := os.Stat(LocalUploadMountPath); err == nil && info.IsDir() {
+		basePath = LocalUploadMountPath
+	}
+	return &UploadHandler{
+		svc:           svc,
+		uploads:       make(map[string]*uploadTracker),
+		localBasePath: basePath,
+	}
+}
+
+func (h *UploadHandler) scheduleUploadTrackerCleanup(uploadID string) {
 	time.AfterFunc(service.TrackerCleanupDelay, func() {
-		h.mu.Lock()
+		h.uploadsMu.Lock()
 		delete(h.uploads, uploadID)
-		h.mu.Unlock()
+		h.uploadsMu.Unlock()
 	})
 }
 
@@ -33,7 +63,7 @@ var cancelUploadSettleDelay = time.Second
 // registerUpload creates and registers the tracker for an upload so its
 // upload_id can be subscribed to immediately, before any byte is transferred.
 // The returned context is cancelled by CancelUpload.
-func (h *FilesHandler) registerUpload(uploadID string, storageID uuid.UUID, fullPath string, fileSize int64) (*uploadTracker, context.Context) {
+func (h *UploadHandler) registerUpload(uploadID string, storageID uuid.UUID, fullPath string, fileSize int64) (*uploadTracker, context.Context) {
 	uploadCtx, cancel := context.WithCancel(context.Background())
 	tracker := &uploadTracker{
 		progress:  &service.UploadProgress{TotalBytes: fileSize},
@@ -41,9 +71,9 @@ func (h *FilesHandler) registerUpload(uploadID string, storageID uuid.UUID, full
 		storageID: storageID,
 		filePath:  fullPath,
 	}
-	h.mu.Lock()
+	h.uploadsMu.Lock()
 	h.uploads[uploadID] = tracker
-	h.mu.Unlock()
+	h.uploadsMu.Unlock()
 	return tracker, uploadCtx
 }
 
@@ -51,7 +81,7 @@ func (h *FilesHandler) registerUpload(uploadID string, storageID uuid.UUID, full
 // service and records the outcome on the tracker. Buffering one chunk ahead
 // lets the source reader race ahead of the encryption/upload pipeline, which
 // smooths throughput. src is always closed.
-func (h *FilesHandler) runTrackedUpload(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, fullPath string, fileSize int64, src io.ReadCloser, onConflict string) {
+func (h *UploadHandler) runTrackedUpload(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, fullPath string, fileSize int64, src io.ReadCloser, onConflict string) {
 	pr, pw := io.Pipe()
 	go func() {
 		bw := bufio.NewWriterSize(pw, service.UploadChunkSize)
@@ -70,22 +100,22 @@ func (h *FilesHandler) runTrackedUpload(ctx context.Context, tracker *uploadTrac
 	h.finishUpload(tracker, file, skipped, uploadErr)
 }
 
-func (h *FilesHandler) finishUpload(tracker *uploadTracker, file *domain.File, skipped bool, uploadErr error) {
-	h.mu.Lock()
+func (h *UploadHandler) finishUpload(tracker *uploadTracker, file *domain.File, skipped bool, uploadErr error) {
+	h.uploadsMu.Lock()
 	tracker.done = true
 	tracker.err = uploadErr
 	tracker.skipped = skipped
 	if file != nil {
 		tracker.fileID = file.ID
 	}
-	h.mu.Unlock()
+	h.uploadsMu.Unlock()
 
 	if uploadErr != nil {
 		slog.Error("upload failed", "file", tracker.filePath, "err", uploadErr)
 	}
 }
 
-func (h *FilesHandler) Upload(w http.ResponseWriter, r *http.Request) {
+func (h *UploadHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
@@ -184,13 +214,13 @@ func (s *signalOnClose) Close() error {
 }
 
 // CancelUpload cancels an in-flight upload and cleans up.
-func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
+func (h *UploadHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
 	uploadID := chi.URLParam(r, "uploadID")
 
-	h.mu.RLock()
+	h.uploadsMu.RLock()
 	tracker, exists := h.uploads[uploadID]
-	h.mu.RUnlock()
+	h.uploadsMu.RUnlock()
 
 	if !exists {
 		writeError(w, domain.ErrNotFound("upload"))
@@ -205,9 +235,9 @@ func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 		// Wait for the upload goroutine to finish so tracker.fileID is set.
 		time.Sleep(cancelUploadSettleDelay)
 
-		h.mu.RLock()
+		h.uploadsMu.RLock()
 		fileID := tracker.fileID
-		h.mu.RUnlock()
+		h.uploadsMu.RUnlock()
 
 		if fileID == uuid.Nil {
 			// File record was never created (cancelled before DB insert).
@@ -226,7 +256,7 @@ func (h *FilesHandler) CancelUpload(w http.ResponseWriter, r *http.Request) {
 }
 
 // UploadProgress returns an SSE stream with upload progress updates.
-func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
+func (h *UploadHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 	uploadID := r.URL.Query().Get("upload_id")
 
 	pollSSE(w, r, "upload_id",
@@ -236,19 +266,19 @@ func (h *FilesHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		},
 		map[string]any{"status": "error"},
 		func() (map[string]any, bool, bool) {
-			h.mu.RLock()
+			h.uploadsMu.RLock()
 			tracker, exists := h.uploads[uploadID]
-			h.mu.RUnlock()
+			h.uploadsMu.RUnlock()
 			if !exists {
 				return nil, false, false
 			}
 
 			p := tracker.progress
-			h.mu.RLock()
+			h.uploadsMu.RLock()
 			isDone := tracker.done
 			uploadErr := tracker.err
 			isSkipped := tracker.skipped
-			h.mu.RUnlock()
+			h.uploadsMu.RUnlock()
 			status := uploadProgressStatus(p, isDone, uploadErr, isSkipped)
 
 			return map[string]any{

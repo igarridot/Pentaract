@@ -12,6 +12,7 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-chi/chi/v5"
@@ -22,9 +23,28 @@ import (
 	"github.com/Dominux/Pentaract/internal/service"
 )
 
+// DownloadHandler streams files and directory archives, tracks download
+// progress for the UI and answers the download SSE stream.
+type DownloadHandler struct {
+	svc downloadService
+
+	downloadsMu sync.RWMutex
+	downloads   map[string]*downloadTracker
+
+	fileSizes *fileSizeCache
+}
+
+func NewDownloadHandler(svc downloadService) *DownloadHandler {
+	return &DownloadHandler{
+		svc:       svc,
+		downloads: make(map[string]*downloadTracker),
+		fileSizes: newFileSizeCache(),
+	}
+}
+
 // setupDownloadTracker creates a download tracker from the request's download_id param.
 // Returns the context to use, the tracker (may be nil), and a cleanup function to defer.
-func (h *FilesHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID) (context.Context, *downloadTracker, func()) {
+func (h *DownloadHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID) (context.Context, *downloadTracker, func()) {
 	downloadID := r.URL.Query().Get("download_id")
 	if downloadID == "" {
 		return r.Context(), nil, func() {}
@@ -35,7 +55,7 @@ func (h *FilesHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID
 		progress:  &service.DownloadProgress{},
 		cancel:    cancel,
 	}
-	h.mu.Lock()
+	h.downloadsMu.Lock()
 	if previous, ok := h.downloads[downloadID]; ok {
 		previous.canceled = true
 		previous.done = true
@@ -44,7 +64,7 @@ func (h *FilesHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID
 		}
 	}
 	h.downloads[downloadID] = tracker
-	h.mu.Unlock()
+	h.downloadsMu.Unlock()
 	return ctx, tracker, func() {
 		h.scheduleDownloadTrackerCleanup(downloadID, tracker)
 	}
@@ -53,9 +73,9 @@ func (h *FilesHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID
 // downloadInterruptedGracePeriod is a variable so tests can shorten the wait.
 var downloadInterruptedGracePeriod = service.DownloadInterruptedGracePeriod
 
-func (h *FilesHandler) cleanupDownloadTracker(downloadID string, tracker *downloadTracker) {
-	h.mu.Lock()
-	defer h.mu.Unlock()
+func (h *DownloadHandler) cleanupDownloadTracker(downloadID string, tracker *downloadTracker) {
+	h.downloadsMu.Lock()
+	defer h.downloadsMu.Unlock()
 	current, ok := h.downloads[downloadID]
 	if !ok || current != tracker {
 		return
@@ -68,21 +88,21 @@ func (h *FilesHandler) cleanupDownloadTracker(downloadID string, tracker *downlo
 	delete(h.downloads, downloadID)
 }
 
-func (h *FilesHandler) scheduleDownloadTrackerCleanup(downloadID string, tracker *downloadTracker) {
+func (h *DownloadHandler) scheduleDownloadTrackerCleanup(downloadID string, tracker *downloadTracker) {
 	time.AfterFunc(service.TrackerCleanupDelay, func() {
 		h.cleanupDownloadTracker(downloadID, tracker)
 	})
 }
 
 // finishTracker marks a download tracker as done with an optional error.
-func (h *FilesHandler) finishTracker(tracker *downloadTracker, err error) {
+func (h *DownloadHandler) finishTracker(tracker *downloadTracker, err error) {
 	if tracker == nil {
 		return
 	}
-	h.mu.Lock()
+	h.downloadsMu.Lock()
 	tracker.done = true
 	tracker.err = err
-	h.mu.Unlock()
+	h.downloadsMu.Unlock()
 }
 
 // failTracker records a failed download request. When the failure is just the
@@ -91,13 +111,13 @@ func (h *FilesHandler) finishTracker(tracker *downloadTracker, err error) {
 // the user allows the download from its download list), the tracker is kept
 // alive as "interrupted" instead of being reported as an error, so the resumed
 // request with the same download_id can carry on with the same progress stream.
-func (h *FilesHandler) failTracker(r *http.Request, tracker *downloadTracker, err error) {
+func (h *DownloadHandler) failTracker(r *http.Request, tracker *downloadTracker, err error) {
 	if tracker == nil {
 		return
 	}
-	h.mu.RLock()
+	h.downloadsMu.RLock()
 	canceled := tracker.canceled
-	h.mu.RUnlock()
+	h.downloadsMu.RUnlock()
 	if !canceled && clientDisconnected(r, err) {
 		h.interruptTracker(r.URL.Query().Get("download_id"), tracker)
 		return
@@ -109,19 +129,19 @@ func (h *FilesHandler) failTracker(r *http.Request, tracker *downloadTracker, er
 // the grace period runs out. On expiry the tracker is failed with
 // domain.ErrClientDisconnected and scheduled for removal, unless a newer
 // request already replaced it.
-func (h *FilesHandler) interruptTracker(downloadID string, tracker *downloadTracker) {
-	h.mu.Lock()
+func (h *DownloadHandler) interruptTracker(downloadID string, tracker *downloadTracker) {
+	h.downloadsMu.Lock()
 	tracker.interrupted = true
-	h.mu.Unlock()
+	h.downloadsMu.Unlock()
 
 	time.AfterFunc(downloadInterruptedGracePeriod, func() {
-		h.mu.Lock()
+		h.downloadsMu.Lock()
 		current := h.downloads[downloadID] == tracker
 		if current && !tracker.done {
 			tracker.done = true
 			tracker.err = domain.ErrClientDisconnected
 		}
-		h.mu.Unlock()
+		h.downloadsMu.Unlock()
 		if current {
 			h.scheduleDownloadTrackerCleanup(downloadID, tracker)
 		}
@@ -146,7 +166,7 @@ func clientDisconnected(r *http.Request, err error) bool {
 // exactFileSize returns the byte size needed for Range responses. It trusts
 // the stored size and falls back to measuring the last chunk for legacy
 // records without one, caching the result.
-func (h *FilesHandler) exactFileSize(ctx context.Context, file *domain.File) (int64, error) {
+func (h *DownloadHandler) exactFileSize(ctx context.Context, file *domain.File) (int64, error) {
 	if totalSize, ok := h.fileSizes.get(file.ID); ok {
 		return totalSize, nil
 	}
@@ -164,7 +184,7 @@ func (h *FilesHandler) exactFileSize(ctx context.Context, file *domain.File) (in
 	return totalSize, nil
 }
 
-func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
+func (h *DownloadHandler) Download(w http.ResponseWriter, r *http.Request) {
 	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
@@ -210,7 +230,7 @@ func (s servedFile) writeHeaders(w http.ResponseWriter, disposition string) {
 
 // trackedDownload sets up progress tracking for downloads the UI follows via
 // download_id. The returned cleanup must be deferred by the caller.
-func (h *FilesHandler) trackedDownload(r *http.Request, storageID uuid.UUID) (context.Context, *downloadTracker, *service.DownloadProgress, func()) {
+func (h *DownloadHandler) trackedDownload(r *http.Request, storageID uuid.UUID) (context.Context, *downloadTracker, *service.DownloadProgress, func()) {
 	ctx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
 	var progress *service.DownloadProgress
 	if tracker != nil {
@@ -224,7 +244,7 @@ func (h *FilesHandler) trackedDownload(r *http.Request, storageID uuid.UUID) (co
 // fans out into several concurrent range requests that share one download_id,
 // so inline requests are deliberately not tracked: tracking them would make
 // newer range requests cancel older ones.
-func (h *FilesHandler) serveInline(w http.ResponseWriter, r *http.Request, s servedFile) {
+func (h *DownloadHandler) serveInline(w http.ResponseWriter, r *http.Request, s servedFile) {
 	ctx := r.Context()
 	s.writeHeaders(w, "inline")
 	w.Header().Set("Accept-Ranges", "bytes")
@@ -262,7 +282,7 @@ func (h *FilesHandler) serveInline(w http.ResponseWriter, r *http.Request, s ser
 }
 
 // serveAttachment streams the file straight to the response as a download.
-func (h *FilesHandler) serveAttachment(w http.ResponseWriter, r *http.Request, s servedFile, storageID uuid.UUID) {
+func (h *DownloadHandler) serveAttachment(w http.ResponseWriter, r *http.Request, s servedFile, storageID uuid.UUID) {
 	ctx, tracker, progress, cleanup := h.trackedDownload(r, storageID)
 	defer cleanup()
 	s.writeHeaders(w, "attachment")
@@ -321,7 +341,7 @@ func parseSingleByteRange(header string, size int64) (int64, int64, error) {
 	return start, end, nil
 }
 
-func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
+func (h *DownloadHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 	user, storageID, err := storageRequest(r)
 	if err != nil {
 		writeError(w, err)
@@ -353,13 +373,13 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 	h.finishTracker(tracker, nil)
 }
 
-func (h *FilesHandler) CancelDownload(w http.ResponseWriter, r *http.Request) {
+func (h *DownloadHandler) CancelDownload(w http.ResponseWriter, r *http.Request) {
 	downloadID := chi.URLParam(r, "downloadID")
 
-	h.mu.Lock()
+	h.downloadsMu.Lock()
 	tracker, exists := h.downloads[downloadID]
 	if !exists {
-		h.mu.Unlock()
+		h.downloadsMu.Unlock()
 		writeError(w, domain.ErrNotFound("download"))
 		return
 	}
@@ -368,13 +388,13 @@ func (h *FilesHandler) CancelDownload(w http.ResponseWriter, r *http.Request) {
 	if tracker.cancel != nil {
 		tracker.cancel()
 	}
-	h.mu.Unlock()
+	h.downloadsMu.Unlock()
 
 	w.WriteHeader(http.StatusNoContent)
 }
 
 // DownloadProgress returns an SSE stream with directory download progress updates.
-func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) {
+func (h *DownloadHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) {
 	downloadID := r.URL.Query().Get("download_id")
 
 	pollSSE(w, r, "download_id",
@@ -386,9 +406,9 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 			"error_message": "Download did not start on the server. Please try again.",
 		},
 		func() (map[string]any, bool, bool) {
-			h.mu.RLock()
+			h.downloadsMu.RLock()
 			tracker, exists := h.downloads[downloadID]
-			h.mu.RUnlock()
+			h.downloadsMu.RUnlock()
 			if !exists {
 				return nil, false, false
 			}
@@ -396,12 +416,12 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 			p := tracker.progress
 			status := "downloading"
 
-			h.mu.RLock()
+			h.downloadsMu.RLock()
 			isDone := tracker.done
 			downloadErr := tracker.err
 			isCanceled := tracker.canceled
 			isInterrupted := tracker.interrupted
-			h.mu.RUnlock()
+			h.downloadsMu.RUnlock()
 
 			if isDone && isCanceled {
 				status = "cancelled"
@@ -422,45 +442,6 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 				"workers_status":   h.svc.WorkersStatus(tracker.storageID),
 				"error_message":    downloadErrorMessage(downloadErr),
 			}, isDone, true
-		},
-	)
-}
-
-// DeleteProgress returns an SSE stream with delete progress updates.
-func (h *FilesHandler) DeleteProgress(w http.ResponseWriter, r *http.Request) {
-	deleteID := r.URL.Query().Get("delete_id")
-
-	pollSSE(w, r, "delete_id",
-		map[string]any{
-			"total": 0, "deleted": 0, "pending": 0, "status": "deleting",
-		},
-		map[string]any{"status": "error"},
-		func() (map[string]any, bool, bool) {
-			tracker, exists := h.deletes.get(deleteID)
-			if !exists {
-				return nil, false, false
-			}
-
-			done, trackerErr, total, deleted := tracker.status()
-			status := "deleting"
-			if done && trackerErr != nil {
-				status = "error"
-			} else if done {
-				status = "done"
-			}
-
-			pending := total - deleted
-			if pending < 0 {
-				pending = 0
-			}
-
-			return map[string]any{
-				"total":          total,
-				"deleted":        deleted,
-				"pending":        pending,
-				"status":         status,
-				"workers_status": h.svc.WorkersStatus(tracker.storageID),
-			}, done, true
 		},
 	)
 }
