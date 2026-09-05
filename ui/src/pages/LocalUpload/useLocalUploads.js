@@ -11,14 +11,17 @@ export function useLocalUploads(addAlert) {
   const [uploadStates, setUploadStates] = useState([])
   const progressCancelsRef = useRef(new Map())
   const mountedRef = useRef(true)
-  const conflicts = useUploadConflicts()
+  const {
+    conflictDialog, setConflictDialog, askConflictDecision, handleConflictDecision, hasConflict, invalidateDir,
+  } = useUploadConflicts()
 
   useEffect(() => {
     mountedRef.current = true
+    const cancels = progressCancelsRef.current
     return () => {
       mountedRef.current = false
-      progressCancelsRef.current.forEach((cancel) => cancel())
-      progressCancelsRef.current.clear()
+      cancels.forEach((cancel) => cancel())
+      cancels.clear()
     }
   }, [])
 
@@ -79,17 +82,17 @@ export function useLocalUploads(addAlert) {
 
     const resolved = await resolveUploadEntries(
       entries,
-      (targetPath, filename) => conflicts.hasConflict(storageId, targetPath, filename),
-      conflicts.askConflictDecision,
+      (targetPath, filename) => hasConflict(storageId, targetPath, filename),
+      askConflictDecision,
     )
 
     findSkippedEntries(entries, resolved).forEach((entry) => {
       addAlert(`Skipped "${entry.filename}"`, 'info', { persistent: false })
     })
-    resolved.forEach((entry) => conflicts.invalidateDir(storageId, entry.targetPath))
+    resolved.forEach((entry) => invalidateDir(storageId, entry.targetPath))
 
     return resolved
-  }, [addAlert, conflicts.askConflictDecision, conflicts.hasConflict, conflicts.invalidateDir])
+  }, [addAlert, askConflictDecision, hasConflict, invalidateDir])
 
   const launchLocalUpload = useCallback(async (storageId, localPath, destPath, onConflict) => {
     const uploadId = createOperationId()
@@ -148,8 +151,8 @@ export function useLocalUploads(addAlert) {
     launchLocalBatch,
     cancelUpload,
     resolveLocalConflicts,
-    conflictDialog: conflicts.conflictDialog,
-    setConflictDialog: conflicts.setConflictDialog,
-    handleConflictDecision: conflicts.handleConflictDecision,
+    conflictDialog,
+    setConflictDialog,
+    handleConflictDecision,
   }
 }

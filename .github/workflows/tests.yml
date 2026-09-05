@@ -55,5 +55,8 @@ jobs:
       - name: Install dependencies
         run: pnpm install --frozen-lockfile
 
+      - name: Lint UI
+        run: pnpm lint
+
       - name: Run UI tests
         run: pnpm test
