@@ -16,7 +16,7 @@ import (
 func testCfg() *config.Config {
 	return &config.Config{
 		Port:                   8080,
-		Workers:                1,
+		DBMaxConns:             8,
 		SuperuserEmail:         "admin@example.com",
 		SuperuserPass:          "secret",
 		AccessTokenExpireInSec: 3600,

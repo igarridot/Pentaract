@@ -50,7 +50,7 @@ func NewStorageManager(
 	workersRepo workersLister,
 	scheduler *WorkerScheduler,
 	tgClient *telegram.Client,
-	encryptionSecret string,
+	chunkCipher *ChunkCipher,
 ) *StorageManager {
 	return &StorageManager{
 		filesRepo:    filesRepo,
@@ -58,7 +58,7 @@ func NewStorageManager(
 		workersRepo:  workersRepo,
 		scheduler:    scheduler,
 		tgClient:     tgClient,
-		chunkCipher:  NewChunkCipher(encryptionSecret),
+		chunkCipher:  chunkCipher,
 	}
 }
 

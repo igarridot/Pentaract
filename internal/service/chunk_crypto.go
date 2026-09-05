@@ -30,11 +30,30 @@ const (
 // ChunkCipher encrypts and decrypts file chunks transparently.
 // Encrypted payload format:
 // magic(5) + nonce(12) + gcm(ciphertext+tag).
+//
+// New chunks are always sealed with aead. legacy, when set, is tried when
+// aead cannot open a chunk: it decrypts chunks written before the deployment
+// moved from SECRET_KEY to a dedicated ENCRYPTION_KEY.
 type ChunkCipher struct {
-	aead cipher.AEAD
+	aead   cipher.AEAD
+	legacy cipher.AEAD
 }
 
 func NewChunkCipher(secret string) *ChunkCipher {
+	return &ChunkCipher{aead: deriveAEAD(secret)}
+}
+
+// NewChunkCipherWithFallback seals with secret and can still open chunks
+// sealed with legacySecret. An empty or identical legacySecret adds nothing.
+func NewChunkCipherWithFallback(secret, legacySecret string) *ChunkCipher {
+	c := NewChunkCipher(secret)
+	if legacySecret != "" && legacySecret != secret {
+		c.legacy = deriveAEAD(legacySecret)
+	}
+	return c
+}
+
+func deriveAEAD(secret string) cipher.AEAD {
 	key := pbkdf2.Key(
 		[]byte(secret),
 		[]byte(chunkCipherKDFSaltContext),
@@ -50,8 +69,7 @@ func NewChunkCipher(secret string) *ChunkCipher {
 	if err != nil {
 		panic(fmt.Sprintf("creating GCM: %v", err))
 	}
-
-	return &ChunkCipher{aead: aead}
+	return aead
 }
 
 func (c *ChunkCipher) aad(fileID uuid.UUID, position int16) []byte {
@@ -108,7 +126,13 @@ func (c *ChunkCipher) DecryptChunk(fileID uuid.UUID, position int16, payload []b
 	nonce := payload[nonceOffset : nonceOffset+nonceSize]
 	ciphertext := payload[nonceOffset+nonceSize:]
 
-	plain, err := c.aead.Open(nil, nonce, ciphertext, c.aad(fileID, position))
+	aad := c.aad(fileID, position)
+	plain, err := c.aead.Open(nil, nonce, ciphertext, aad)
+	if err != nil && c.legacy != nil {
+		if legacyPlain, legacyErr := c.legacy.Open(nil, nonce, ciphertext, aad); legacyErr == nil {
+			return legacyPlain, nil
+		}
+	}
 	if err != nil {
 		return nil, fmt.Errorf("%w: %v", domain.ErrDecryptionFailed, err)
 	}

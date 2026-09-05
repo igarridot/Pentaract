@@ -34,7 +34,8 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 
 	// Services
 	scheduler := service.NewWorkerScheduler(workersRepo, cfg.TelegramRateLimit)
-	storageManager := service.NewStorageManager(filesRepo, storagesRepo, workersRepo, scheduler, tgClient, cfg.SecretKey)
+	chunkCipher := service.NewChunkCipherWithFallback(cfg.ChunkCipherSecrets())
+	storageManager := service.NewStorageManager(filesRepo, storagesRepo, workersRepo, scheduler, tgClient, chunkCipher)
 
 	authSvc := service.NewAuthService(usersRepo, cfg.SecretKey, cfg.AccessTokenExpireInSec)
 	usersSvc := service.NewUsersService(usersRepo, cfg.SuperuserEmail)

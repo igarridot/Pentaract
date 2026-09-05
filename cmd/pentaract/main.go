@@ -63,7 +63,7 @@ func run(ctx context.Context, deps runDeps) error {
 	if err != nil {
 		return fmt.Errorf("parsing database config: %w", err)
 	}
-	poolCfg.MaxConns = int32(cfg.Workers * 8)
+	poolCfg.MaxConns = int32(cfg.DBMaxConns)
 
 	pool, err := deps.newPoolWithConfig(ctx, poolCfg)
 	if err != nil {

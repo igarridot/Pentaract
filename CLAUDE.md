@@ -76,9 +76,10 @@ Repositories → Telegram Client → WorkerScheduler → StorageManager → Serv
 
 All via environment variables (see `.env.example`). Key ones:
 
-- `SECRET_KEY` — Used for both JWT signing AND chunk encryption key derivation (PBKDF2, 600k iterations). Changing it breaks all existing encrypted files.
+- `SECRET_KEY` — JWT signing secret. Also derives the chunk encryption key (PBKDF2, 600k iterations) unless `ENCRYPTION_KEY` is set. Changing it breaks files encrypted with it.
+- `ENCRYPTION_KEY` — Optional dedicated chunk encryption secret. `ChunkCipher` keeps `SECRET_KEY` as a decrypt-only fallback so files uploaded before the switch stay readable (`NewChunkCipherWithFallback`).
 - `TELEGRAM_RATE_LIMIT` — Requests per minute per worker (default 18)
-- `WORKERS` — DB connection pool size multiplier
+- `DB_MAX_CONNS` — Postgres pool size (default 32). The legacy `WORKERS` variable is still read as `WORKERS * 8`.
 
 ## Testing patterns
 
