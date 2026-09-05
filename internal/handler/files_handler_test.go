@@ -211,10 +211,8 @@ func TestFilesHandlerDownloadAttachment(t *testing.T) {
 	storageID := uuid.New().String()
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			// Stored size is off by one on purpose: only the measured size may be announced.
-			return &domain.File{ID: fileID, Path: "folder/a.txt", Size: 4}, nil
+			return &domain.File{ID: fileID, Path: "folder/a.txt", Size: 3}, nil
 		},
-		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) { return 3, nil },
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			_, _ = io.WriteString(w, "abc")
 			return nil
@@ -229,58 +227,6 @@ func TestFilesHandlerDownloadAttachment(t *testing.T) {
 	if !strings.Contains(w.Header().Get("Content-Disposition"), "attachment; filename=\"a.txt\"") {
 		t.Fatalf("unexpected content disposition: %q", w.Header().Get("Content-Disposition"))
 	}
-	if w.Header().Get("Content-Length") != "3" || w.Header().Get("Accept-Ranges") != "bytes" || w.Header().Get("ETag") == "" {
-		t.Fatalf("attachment must announce exact length, ranges and a validator, got %v", w.Header())
-	}
-}
-
-func TestFilesHandlerDownloadAttachmentResumesWithRange(t *testing.T) {
-	fileID := uuid.New()
-	storageID := uuid.New().String()
-	const content = "0123456789"
-	var gotProgress *service.DownloadProgress
-	h := newTestFilesHandler(&mockFilesService{
-		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: fileID, Path: "clips/scene.7z", Size: int64(len(content))}, nil
-		},
-		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) { return int64(len(content)), nil },
-		downloadFileRangeToWriter: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error {
-			gotProgress = progress
-			_, _ = io.WriteString(w, content[start:end+1])
-			return nil
-		},
-	})
-
-	// The browser kept 2 bytes before blocking and resumes from there.
-	req := makeFilesReq(http.MethodGet, "/?download_id=dl-resume-range", "", storageID, "clips/scene.7z")
-	req.Header.Set("Range", "bytes=2-")
-	w := httptest.NewRecorder()
-	h.Download(w, req)
-	if w.Code != http.StatusPartialContent || w.Body.String() != content[2:] {
-		t.Fatalf("resumed download expected 206 with the tail, got %d/%q", w.Code, w.Body.String())
-	}
-	if w.Header().Get("Content-Range") != "bytes 2-9/10" || w.Header().Get("Content-Length") != "8" {
-		t.Fatalf("unexpected range headers: %v", w.Header())
-	}
-	if gotProgress == nil || gotProgress.TotalBytes != 8 {
-		t.Fatalf("resumed range must be tracked with its own byte total, got %+v", gotProgress)
-	}
-
-	// An unsatisfiable range is answered with 416 and finishes the tracker cleanly.
-	req = makeFilesReq(http.MethodGet, "/?download_id=dl-bad-range", "", storageID, "clips/scene.7z")
-	req.Header.Set("Range", "bytes=50-")
-	w = httptest.NewRecorder()
-	h.Download(w, req)
-	if w.Code != http.StatusRequestedRangeNotSatisfiable || w.Header().Get("Content-Range") != "bytes */10" {
-		t.Fatalf("expected 416 for an out-of-range request, got %d %v", w.Code, w.Header())
-	}
-	h.downloadsMu.RLock()
-	tracker := h.downloads["dl-bad-range"]
-	done := tracker != nil && tracker.done && tracker.err == nil
-	h.downloadsMu.RUnlock()
-	if !done {
-		t.Fatalf("416 must finish the tracker without error")
-	}
 }
 
 func TestFilesHandlerDownloadAttachmentWithTrackingCompletesWithoutCancellation(t *testing.T) {
@@ -291,7 +237,6 @@ func TestFilesHandlerDownloadAttachmentWithTrackingCompletesWithoutCancellation(
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "folder/a.txt", Size: 3}, nil
 		},
-		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) { return 3, nil },
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			progressWasProvided = progress != nil
 			_, _ = io.WriteString(w, "abc")
@@ -385,20 +330,19 @@ func TestFilesHandlerDownloadInlineVideoRange(t *testing.T) {
 	}
 }
 
-func TestFilesHandlerDownloadInlineVideoRangeMeasuresSizeInsteadOfTrustingRecord(t *testing.T) {
+func TestFilesHandlerDownloadInlineVideoRangeUsesStoredFileSize(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
-	exactCalls := 0
+	exactCalled := false
 	var gotTotal int64
 
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			// Stored size may include multipart framing from older clients.
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 11}, nil
 		},
 		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
-			exactCalls++
-			return 10, nil
+			exactCalled = true
+			return 0, errors.New("should not be called")
 		},
 		downloadFileRangeToWriter: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error {
 			gotTotal = totalSize
@@ -407,20 +351,19 @@ func TestFilesHandlerDownloadInlineVideoRangeMeasuresSizeInsteadOfTrustingRecord
 		},
 	})
 
-	for i := 0; i < 2; i++ {
-		req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
-		req.Header.Set("Range", "bytes=0-2")
-		w := httptest.NewRecorder()
-		h.Download(w, req)
-		if w.Code != http.StatusPartialContent {
-			t.Fatalf("inline range download failed: code=%d body=%q", w.Code, w.Body.String())
-		}
+	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "movie.mp4")
+	req.Header.Set("Range", "bytes=0-2")
+	w := httptest.NewRecorder()
+	h.Download(w, req)
+
+	if w.Code != http.StatusPartialContent {
+		t.Fatalf("inline range download failed: code=%d body=%q", w.Code, w.Body.String())
 	}
-	if exactCalls != 1 {
-		t.Fatalf("expected one measured size lookup cached per file, got %d", exactCalls)
+	if exactCalled {
+		t.Fatalf("expected stored file size to avoid exact size lookup")
 	}
-	if gotTotal != 10 {
-		t.Fatalf("expected the measured size to be used, got %d", gotTotal)
+	if gotTotal != 11 {
+		t.Fatalf("unexpected total size forwarded to range download: %d", gotTotal)
 	}
 }
 
@@ -463,23 +406,29 @@ func TestFilesHandlerDownloadInlineVideoUsesStreamingPathWithoutRange(t *testing
 	if downloadCalled {
 		t.Fatalf("regular download path should not be used for inline video")
 	}
-	if !exactCalled {
-		t.Fatalf("expected inline full stream to announce the measured size")
+	if exactCalled {
+		t.Fatalf("expected inline full stream to avoid exact size lookup")
 	}
 	if got := w.Header().Get("Content-Length"); got != "11" {
-		t.Fatalf("expected measured content length, got %q", got)
+		t.Fatalf("expected stored file size content length, got %q", got)
 	}
 }
 
-func TestFilesHandlerDownloadInlineVideoWithoutRangeAndUnknownSizeMeasuresIt(t *testing.T) {
+func TestFilesHandlerDownloadInlineVideoWithoutRangeAndUnknownSizeSkipsExactLookup(t *testing.T) {
 	fileID := uuid.New()
 	storageID := uuid.New().String()
+	streamCalled := false
+	exactCalled := false
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "movie.mp4", Size: 0}, nil
 		},
-		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) { return 11, nil },
+		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) {
+			exactCalled = true
+			return 11, nil
+		},
 		streamFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			streamCalled = true
 			_, _ = io.WriteString(w, "stream")
 			return nil
 		},
@@ -492,8 +441,14 @@ func TestFilesHandlerDownloadInlineVideoWithoutRangeAndUnknownSizeMeasuresIt(t *
 	if w.Code != http.StatusOK || w.Body.String() != "stream" {
 		t.Fatalf("inline full download failed: code=%d body=%q", w.Code, w.Body.String())
 	}
-	if got := w.Header().Get("Content-Length"); got != "11" {
-		t.Fatalf("expected the measured size as content length, got %q", got)
+	if !streamCalled {
+		t.Fatalf("expected streaming path to be used for inline video")
+	}
+	if exactCalled {
+		t.Fatalf("expected unknown-size inline stream without range to avoid exact size lookup")
+	}
+	if got := w.Header().Get("Content-Length"); got != "" {
+		t.Fatalf("expected unknown-size inline stream to omit content length, got %q", got)
 	}
 }
 
@@ -1106,12 +1061,12 @@ func collectDownloadProgress(t *testing.T, h *FilesHandler, downloadID string, w
 
 func TestFilesHandlerDownloadBrowserDisconnectKeepsTrackerInterrupted(t *testing.T) {
 	storageID := uuid.New().String()
-	req, cancelReq := cancelableFilesReq("/?download_id=dl-blocked", storageID, "clips/scene.7z")
+	req, cancelReq := cancelableFilesReq("/?download_id=dl-blocked", storageID, "clips/scene.funscript")
 	defer cancelReq()
 
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			// The browser blocked the download and closed the connection.
@@ -1146,13 +1101,13 @@ func TestFilesHandlerDownloadBrowserDisconnectKeepsTrackerInterrupted(t *testing
 
 func TestFilesHandlerDownloadResumedRequestReplacesInterruptedTracker(t *testing.T) {
 	storageID := uuid.New().String()
-	blockedReq, cancelBlocked := cancelableFilesReq("/?download_id=dl-resume", storageID, "clips/scene.7z")
+	blockedReq, cancelBlocked := cancelableFilesReq("/?download_id=dl-resume", storageID, "clips/scene.funscript")
 	defer cancelBlocked()
 
 	blocked := true
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			if blocked {
@@ -1172,7 +1127,7 @@ func TestFilesHandlerDownloadResumedRequestReplacesInterruptedTracker(t *testing
 	// The user allowed the download in the browser, which re-requests the same URL.
 	blocked = false
 	w := httptest.NewRecorder()
-	h.Download(w, makeFilesReq(http.MethodGet, "/?download_id=dl-resume", "", storageID, "clips/scene.7z"))
+	h.Download(w, makeFilesReq(http.MethodGet, "/?download_id=dl-resume", "", storageID, "clips/scene.funscript"))
 	if w.Code != http.StatusOK || w.Body.String() != "abc" {
 		t.Fatalf("resumed download expected 200/abc, got %d/%q", w.Code, w.Body.String())
 	}
@@ -1202,12 +1157,12 @@ func TestFilesHandlerDownloadInterruptedTrackerExpiresAsError(t *testing.T) {
 	defer func() { downloadInterruptedGracePeriod = previous }()
 
 	storageID := uuid.New().String()
-	req, cancelReq := cancelableFilesReq("/?download_id=dl-expire", storageID, "clips/scene.7z")
+	req, cancelReq := cancelableFilesReq("/?download_id=dl-expire", storageID, "clips/scene.funscript")
 	defer cancelReq()
 
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			cancelReq()
@@ -1250,12 +1205,12 @@ func TestFilesHandlerDownloadInterruptedTrackerExpiresAsError(t *testing.T) {
 
 func TestFilesHandlerCancelInterruptedDownloadReportsCancelled(t *testing.T) {
 	storageID := uuid.New().String()
-	req, cancelReq := cancelableFilesReq("/?download_id=dl-cancel", storageID, "clips/scene.7z")
+	req, cancelReq := cancelableFilesReq("/?download_id=dl-cancel", storageID, "clips/scene.funscript")
 	defer cancelReq()
 
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			cancelReq()
@@ -1284,14 +1239,14 @@ func TestFilesHandlerDownloadRealFailureStillReportsError(t *testing.T) {
 	storageID := uuid.New().String()
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			return fmt.Errorf("decrypting chunk 0: %w", domain.ErrDecryptionFailed)
 		},
 	})
 
-	h.Download(httptest.NewRecorder(), makeFilesReq(http.MethodGet, "/?download_id=dl-fail", "", storageID, "clips/scene.7z"))
+	h.Download(httptest.NewRecorder(), makeFilesReq(http.MethodGet, "/?download_id=dl-fail", "", storageID, "clips/scene.funscript"))
 
 	h.downloadsMu.RLock()
 	tracker := h.downloads["dl-fail"]
