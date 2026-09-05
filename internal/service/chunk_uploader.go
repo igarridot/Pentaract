@@ -3,6 +3,7 @@ package service
 import (
 	"context"
 	"crypto/sha256"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -199,16 +200,30 @@ type uploadRun struct {
 // Chunks that fail transiently are collected for retryFailedChunks instead of
 // failing the whole upload.
 func (r *uploadRun) uploadChunks(reader io.Reader, parallelism int) error {
-	g, gctx := errgroup.WithContext(r.ctx)
+	// A cancellable context so a broken source can stop the in-flight chunk
+	// uploads instead of waiting for them.
+	uploadCtx, cancelUploads := context.WithCancel(r.ctx)
+	defer cancelUploads()
+	g, gctx := errgroup.WithContext(uploadCtx)
 	g.SetLimit(parallelism)
 
 	stopWatch := closeOnCancel(r.ctx, reader)
 	defer stopWatch()
 
 	var position int16
+	var sourceErr error
 	for r.ctx.Err() == nil {
 		buf := uploadChunkBufferPool.Get().([]byte)
 		n, readErr := io.ReadFull(reader, buf)
+		if readErr != nil && !errors.Is(readErr, io.EOF) && !errors.Is(readErr, io.ErrUnexpectedEOF) {
+			// Only a clean end of stream ends the file; any other read failure
+			// means the source was cut short, and persisting what arrived so
+			// far would store a truncated file that reports its declared size.
+			uploadChunkBufferPool.Put(buf)
+			sourceErr = fmt.Errorf("reading upload source at chunk %d: %w", position, readErr)
+			cancelUploads()
+			break
+		}
 		if n == 0 && readErr != nil {
 			uploadChunkBufferPool.Put(buf)
 			break
@@ -230,8 +245,14 @@ func (r *uploadRun) uploadChunks(reader io.Reader, parallelism int) error {
 
 	r.progress.setTotalChunks(int32(position))
 
-	if err := g.Wait(); err != nil {
-		return err
+	// Always wait for the in-flight uploads: abort closes the verifier, and a
+	// chunk finishing afterwards would submit to a closed pipeline.
+	waitErr := g.Wait()
+	if sourceErr != nil {
+		return sourceErr
+	}
+	if waitErr != nil {
+		return waitErr
 	}
 	return r.ctx.Err()
 }

@@ -14,6 +14,7 @@ var (
 	ErrTelegramResolveFailed = errors.New("telegram file_id resolution failed")
 	ErrDownloadInterrupted   = errors.New("telegram download stream interrupted")
 	ErrClientDisconnected    = errors.New("browser closed the download connection")
+	ErrUploadInterrupted     = errors.New("upload source stream interrupted before the declared end")
 )
 
 type AppError struct {
