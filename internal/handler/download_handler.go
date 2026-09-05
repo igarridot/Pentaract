@@ -9,7 +9,6 @@ import (
 	"net"
 	"net/http"
 	"net/url"
-	"os"
 	"path/filepath"
 	"strconv"
 	"strings"
@@ -144,7 +143,10 @@ func clientDisconnected(r *http.Request, err error) bool {
 	return errors.As(err, &opErr) && opErr.Op == "write"
 }
 
-func (h *FilesHandler) resolvedInlineVideoSize(ctx context.Context, file *domain.File) (int64, error) {
+// exactFileSize returns the byte size needed for Range responses. It trusts
+// the stored size and falls back to measuring the last chunk for legacy
+// records without one, caching the result.
+func (h *FilesHandler) exactFileSize(ctx context.Context, file *domain.File) (int64, error) {
 	if totalSize, ok := h.fileSizes.get(file.ID); ok {
 		return totalSize, nil
 	}
@@ -186,16 +188,11 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		filename:    filepath.Base(file.Path),
 		contentType: contentTypeForFilename(filepath.Base(file.Path)),
 	}
-	inline := r.URL.Query().Get("inline") == "1"
-
-	switch {
-	case inline && isInlineVideo(served.contentType, served.filename):
-		h.serveInlineVideo(w, r, served)
-	case inline:
-		h.serveInlineFile(w, r, served, storageID)
-	default:
-		h.serveAttachment(w, r, served, storageID)
+	if r.URL.Query().Get("inline") == "1" {
+		h.serveInline(w, r, served)
+		return
 	}
+	h.serveAttachment(w, r, served, storageID)
 }
 
 // servedFile is what the response describes: the record plus the derived
@@ -222,11 +219,12 @@ func (h *FilesHandler) trackedDownload(r *http.Request, storageID uuid.UUID) (co
 	return ctx, tracker, progress, cleanup
 }
 
-// serveInlineVideo streams a video for in-browser playback, honouring Range
-// requests. Playback fans out into several concurrent range requests that
-// share one download_id, so these are deliberately not tracked: tracking them
-// would make newer range requests cancel older ones.
-func (h *FilesHandler) serveInlineVideo(w http.ResponseWriter, r *http.Request, s servedFile) {
+// serveInline serves a file for in-browser preview or playback, honouring
+// Range requests by fetching only the chunks that cover the window. Playback
+// fans out into several concurrent range requests that share one download_id,
+// so inline requests are deliberately not tracked: tracking them would make
+// newer range requests cancel older ones.
+func (h *FilesHandler) serveInline(w http.ResponseWriter, r *http.Request, s servedFile) {
 	ctx := r.Context()
 	s.writeHeaders(w, "inline")
 	w.Header().Set("Accept-Ranges", "bytes")
@@ -243,10 +241,10 @@ func (h *FilesHandler) serveInlineVideo(w http.ResponseWriter, r *http.Request, 
 		return
 	}
 
-	totalSize, err := h.resolvedInlineVideoSize(ctx, s.file)
+	totalSize, err := h.exactFileSize(ctx, s.file)
 	if err != nil {
-		slog.Error("video size resolution failed", "err", err)
-		writeError(w, domain.ErrInternal("failed to determine exact video size"))
+		slog.Error("file size resolution failed", "err", err)
+		writeError(w, domain.ErrInternal("failed to determine exact file size"))
 		return
 	}
 	start, end, err := parseSingleByteRange(rangeHeader, totalSize)
@@ -261,44 +259,6 @@ func (h *FilesHandler) serveInlineVideo(w http.ResponseWriter, r *http.Request, 
 	if err := h.svc.DownloadFileRangeToWriter(ctx, s.file, w, start, end, totalSize, nil); err != nil {
 		slog.Error("download file range failed", "err", err)
 	}
-}
-
-// serveInlineFile serves a non-video preview. The file is fully downloaded to
-// a temporary file first so http.ServeContent can answer Range requests.
-func (h *FilesHandler) serveInlineFile(w http.ResponseWriter, r *http.Request, s servedFile, storageID uuid.UUID) {
-	ctx, tracker, progress, cleanup := h.trackedDownload(r, storageID)
-	defer cleanup()
-	s.writeHeaders(w, "inline")
-
-	tmp, err := os.CreateTemp("", "pentaract-file-*")
-	if err != nil {
-		writeError(w, domain.ErrInternal("failed to create temporary file"))
-		return
-	}
-	defer func() {
-		tmp.Close()
-		_ = os.Remove(tmp.Name())
-	}()
-
-	if err := h.svc.DownloadFileToWriter(ctx, s.file, tmp, progress); err != nil {
-		slog.Error("download file failed", "err", err)
-		h.finishTracker(tracker, err)
-		writeError(w, err)
-		return
-	}
-
-	info, err := tmp.Stat()
-	if err != nil {
-		writeError(w, domain.ErrInternal("failed to stat temporary file"))
-		return
-	}
-	if _, err := tmp.Seek(0, io.SeekStart); err != nil {
-		writeError(w, domain.ErrInternal("failed to rewind temporary file"))
-		return
-	}
-	w.Header().Set("Accept-Ranges", "bytes")
-	http.ServeContent(w, r, s.filename, info.ModTime(), tmp)
-	h.finishTracker(tracker, nil)
 }
 
 // serveAttachment streams the file straight to the response as a download.

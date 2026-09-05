@@ -1011,8 +1011,12 @@ func TestFilesHandlerDownloadInlineNonVideo(t *testing.T) {
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
 			return &domain.File{ID: fileID, Path: "doc.txt", Size: 5}, nil
 		},
-		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+		streamFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			_, _ = io.WriteString(w, "hello")
+			return nil
+		},
+		downloadFileRangeToWriter: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error {
+			_, _ = io.WriteString(w, "hello"[start:end+1])
 			return nil
 		},
 	})
@@ -1020,7 +1024,19 @@ func TestFilesHandlerDownloadInlineNonVideo(t *testing.T) {
 	w := httptest.NewRecorder()
 	h.Download(w, makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "doc.txt"))
 	if w.Code != http.StatusOK || w.Body.String() != "hello" {
-		t.Fatalf("inline non-video download expected 200/hello, got %d/%q", w.Code, w.Body.String())
+		t.Fatalf("inline preview expected 200/hello, got %d/%q", w.Code, w.Body.String())
+	}
+	if w.Header().Get("Accept-Ranges") != "bytes" || !strings.Contains(w.Header().Get("Content-Disposition"), "inline") {
+		t.Fatalf("inline preview must advertise ranges, got %v", w.Header())
+	}
+
+	// Non-video previews (PDF viewers, for instance) also issue Range requests.
+	req := makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "doc.txt")
+	req.Header.Set("Range", "bytes=1-3")
+	w = httptest.NewRecorder()
+	h.Download(w, req)
+	if w.Code != http.StatusPartialContent || w.Body.String() != "ell" || w.Header().Get("Content-Range") != "bytes 1-3/5" {
+		t.Fatalf("inline range expected 206/ell, got %d/%q range=%q", w.Code, w.Body.String(), w.Header().Get("Content-Range"))
 	}
 }
 

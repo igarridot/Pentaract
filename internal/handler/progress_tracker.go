@@ -78,7 +78,8 @@ func (w *flushWriter) Write(p []byte) (int, error) {
 	return n, err
 }
 
-var inlineVideoContentTypesByExtension = map[string]string{
+// videoContentTypesByExtension covers video formats Go's mime table misses.
+var videoContentTypesByExtension = map[string]string{
 	".avi":  "video/x-msvideo",
 	".flv":  "video/x-flv",
 	".m2ts": "video/mp2t",
@@ -214,20 +215,12 @@ func sanitizeFilename(name string) string {
 	return strings.NewReplacer(`"`, `'`, "\n", "", "\r", "").Replace(name)
 }
 
-func isInlineVideo(contentType, filename string) bool {
-	if strings.HasPrefix(strings.ToLower(contentType), "video/") {
-		return true
-	}
-	_, ok := inlineVideoContentTypesByExtension[strings.ToLower(filepath.Ext(filename))]
-	return ok
-}
-
 func contentTypeForFilename(filename string) string {
 	ext := strings.ToLower(filepath.Ext(filename))
 	if contentType := mime.TypeByExtension(ext); contentType != "" {
 		return contentType
 	}
-	if contentType, ok := inlineVideoContentTypesByExtension[ext]; ok {
+	if contentType, ok := videoContentTypesByExtension[ext]; ok {
 		return contentType
 	}
 	return "application/octet-stream"
