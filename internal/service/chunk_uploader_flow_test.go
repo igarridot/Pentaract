@@ -24,13 +24,14 @@ import (
 type fakeChunksRepo struct {
 	mu      sync.Mutex
 	saved   map[uuid.UUID][]domain.FileChunk
+	sizes   map[uuid.UUID]int64
 	chunks  []domain.FileChunk
 	updated map[uuid.UUID]string
 	saveErr error
 }
 
 func newFakeChunksRepo() *fakeChunksRepo {
-	return &fakeChunksRepo{saved: map[uuid.UUID][]domain.FileChunk{}, updated: map[uuid.UUID]string{}}
+	return &fakeChunksRepo{saved: map[uuid.UUID][]domain.FileChunk{}, sizes: map[uuid.UUID]int64{}, updated: map[uuid.UUID]string{}}
 }
 
 func (f *fakeChunksRepo) ListChunks(context.Context, uuid.UUID) ([]domain.FileChunk, error) {
@@ -44,13 +45,14 @@ func (f *fakeChunksRepo) UpdateChunkTelegramFileID(_ context.Context, chunkID uu
 	return nil
 }
 
-func (f *fakeChunksRepo) CreateChunksAndMarkUploaded(_ context.Context, fileID uuid.UUID, chunks []domain.FileChunk) error {
+func (f *fakeChunksRepo) CreateChunksAndMarkUploaded(_ context.Context, fileID uuid.UUID, chunks []domain.FileChunk, size int64) error {
 	if f.saveErr != nil {
 		return f.saveErr
 	}
 	f.mu.Lock()
 	defer f.mu.Unlock()
 	f.saved[fileID] = chunks
+	f.sizes[fileID] = size
 	return nil
 }
 
@@ -197,6 +199,9 @@ func TestUploadStreamsChunksVerifiesAndPersistsInOrder(t *testing.T) {
 	}
 	if saved[0].TelegramFileID == "" || saved[0].TelegramMessageID == 0 {
 		t.Fatalf("chunk records must carry telegram ids, got %+v", saved[0])
+	}
+	if got := repo.sizes[fileID]; got != int64(len(payload)) {
+		t.Fatalf("expected the exact plaintext size %d to be stored, got %d", len(payload), got)
 	}
 	if progress.TotalChunks != 2 || progress.UploadedChunks.Load() != 2 || progress.VerifiedChunks.Load() != 2 {
 		t.Fatalf("unexpected progress: total=%d uploaded=%d verified=%d", progress.TotalChunks, progress.UploadedChunks.Load(), progress.VerifiedChunks.Load())

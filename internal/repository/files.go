@@ -272,7 +272,10 @@ func createChunks(ctx context.Context, execer interface {
 	return err
 }
 
-func (r *FilesRepo) CreateChunksAndMarkUploaded(ctx context.Context, fileID uuid.UUID, chunks []domain.FileChunk) error {
+// CreateChunksAndMarkUploaded stores the chunk records, the exact byte size
+// and flips is_uploaded in one transaction, removing stale pending records
+// for the same path.
+func (r *FilesRepo) CreateChunksAndMarkUploaded(ctx context.Context, fileID uuid.UUID, chunks []domain.FileChunk, size int64) error {
 	tx, err := r.pool.Begin(ctx)
 	if err != nil {
 		return err
@@ -284,8 +287,8 @@ func (r *FilesRepo) CreateChunksAndMarkUploaded(ctx context.Context, fileID uuid
 	}
 
 	if _, err := tx.Exec(ctx,
-		`UPDATE files SET is_uploaded = true WHERE id = $1`,
-		fileID,
+		`UPDATE files SET is_uploaded = true, size = $2 WHERE id = $1`,
+		fileID, size,
 	); err != nil {
 		return err
 	}

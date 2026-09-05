@@ -24,7 +24,7 @@ type (
 	chunksRepository interface {
 		ListChunks(ctx context.Context, fileID uuid.UUID) ([]domain.FileChunk, error)
 		UpdateChunkTelegramFileID(ctx context.Context, chunkID uuid.UUID, telegramFileID string) error
-		CreateChunksAndMarkUploaded(ctx context.Context, fileID uuid.UUID, chunks []domain.FileChunk) error
+		CreateChunksAndMarkUploaded(ctx context.Context, fileID uuid.UUID, chunks []domain.FileChunk, size int64) error
 	}
 	storageGetter interface {
 		GetByID(ctx context.Context, id uuid.UUID) (*domain.Storage, error)
