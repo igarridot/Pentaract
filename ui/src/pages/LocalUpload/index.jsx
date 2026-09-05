@@ -21,6 +21,7 @@ import NavigationBlockDialog from '../../components/NavigationBlockDialog'
 import UploadConflictDialog from '../../components/UploadConflictDialog'
 import { useNavigationBlock } from '../Files/useNavigationBlock'
 import { useLocalUploads } from './useLocalUploads'
+import { sortLocalEntries, localEntryKey, buildLocalBatchItems } from './local_upload_paths'
 
 export default function LocalUpload() {
   const addAlert = useAlert()
@@ -78,12 +79,7 @@ export default function LocalUpload() {
     setLoading(true)
     setNotConfigured(false)
     try {
-      const data = await API.localFs.browse(path)
-      const sorted = (data || []).slice().sort((a, b) => {
-        if (a.is_file !== b.is_file) return a.is_file ? 1 : -1
-        return a.name.localeCompare(b.name)
-      })
-      setEntries(sorted)
+      setEntries(sortLocalEntries(await API.localFs.browse(path)))
       setBrowsePath(path)
       setSelected(new Set())
     } catch (err) {
@@ -114,7 +110,7 @@ export default function LocalUpload() {
   const toggleSelect = (entry) => {
     setSelected((prev) => {
       const next = new Set(prev)
-      const key = entry.path || entry.name
+      const key = localEntryKey(entry)
       if (next.has(key)) {
         next.delete(key)
       } else {
@@ -124,63 +120,14 @@ export default function LocalUpload() {
     })
   }
 
-  const allSelected = entries.length > 0 && entries.every((e) => selected.has(e.path || e.name))
+  const allSelected = entries.length > 0 && entries.every((e) => selected.has(localEntryKey(e)))
 
   const toggleSelectAll = () => {
     if (allSelected) {
       setSelected(new Set())
     } else {
-      setSelected(new Set(entries.map((e) => e.path || e.name)))
+      setSelected(new Set(entries.map(localEntryKey)))
     }
-  }
-
-  // Recursively collect all files from a directory
-  const collectFiles = async (dirPath) => {
-    const result = []
-    try {
-      const items = await API.localFs.browse(dirPath)
-      for (const item of (items || [])) {
-        if (!item.is_file) {
-          const subFiles = await collectFiles(item.path)
-          result.push(...subFiles)
-        } else {
-          result.push(item)
-        }
-      }
-    } catch {
-      // skip inaccessible directories
-    }
-    return result
-  }
-
-  // Strip leading/trailing slashes for consistent path comparison.
-  const normPath = (p) => p.replace(/^\/+/, '').replace(/\/+$/, '')
-
-  // Build relative path from base, stripping the base prefix.
-  const relativePath = (filePath, basePath) => {
-    const fp = normPath(filePath)
-    const bp = normPath(basePath)
-    if (!bp) return fp
-    const base = bp + '/'
-    if (fp.startsWith(base)) {
-      return fp.slice(base.length)
-    }
-    return fp
-  }
-
-  // Return the directory portion of a relative path (everything before the last /).
-  // The backend appends the filename itself, so dest_path must be a directory.
-  const dirOf = (rel) => {
-    const idx = rel.lastIndexOf('/')
-    return idx === -1 ? '' : rel.substring(0, idx)
-  }
-
-  // Compute the destination directory for a file given its relative path.
-  const buildDestDir = (rel) => {
-    const relDir = dirOf(rel)
-    const base = destPath ? normPath(destPath) : ''
-    if (base && relDir) return base + '/' + relDir
-    return base || relDir
   }
 
   // Upload selected items
@@ -189,27 +136,8 @@ export default function LocalUpload() {
     setBatchUploading(true)
 
     try {
-      // Collect all files (recursing into directories).
-      // For each selected directory, paths are relative to browsePath so the
-      // directory name itself is preserved (e.g. selecting "test" at
-      // "a/b/test" yields "test/file.txt", not "a/b/test/file.txt").
-      const allFiles = []
-      const base = normPath(browsePath)
-      for (const key of selected) {
-        const entry = entries.find((e) => (e.path || e.name) === key)
-        if (!entry) continue
-
-        if (!entry.is_file) {
-          const dirFiles = await collectFiles(entry.path)
-          for (const f of dirFiles) {
-            const rel = relativePath(f.path, base)
-            allFiles.push({ local_path: f.path, dest_path: buildDestDir(rel) })
-          }
-        } else {
-          const rel = relativePath(entry.path, base)
-          allFiles.push({ local_path: entry.path, dest_path: buildDestDir(rel) })
-        }
-      }
+      const selectedEntries = entries.filter((e) => selected.has(localEntryKey(e)))
+      const allFiles = await buildLocalBatchItems(selectedEntries, browsePath, destPath, API.localFs.browse)
 
       if (allFiles.length === 0) {
         addAlert('No files found in selection', 'info')
@@ -404,7 +332,7 @@ export default function LocalUpload() {
         }}>
           <List disablePadding>
             {entries.map((entry) => {
-              const key = entry.path || entry.name
+              const key = localEntryKey(entry)
               const isDir = !entry.is_file
               return (
                 <ListItem
