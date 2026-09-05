@@ -89,7 +89,7 @@ export default function Files() {
   })
   const {
     downloadStates, downloadStatesRef, isDownloading,
-    startDownload, cancelDownload, cleanupDownloads, releaseDownloadTracking,
+    startDownload, waitForDownload, cancelDownload, cleanupDownloads, releaseDownloadTracking,
   } = downloads
 
   const del = useDeleteOperation(addAlert, storageId, loadTree)
@@ -207,7 +207,7 @@ export default function Files() {
           onToggleSelectAll={toggleSelectAllFiles}
           onClear={clearSelection}
           onMove={() => setBulkMoveOpen(true)}
-          onDownload={() => handleBulkDownload(selectedFiles, { startDownload, downloadStatesRef, releaseDownloadTracking })}
+          onDownload={() => handleBulkDownload(selectedFiles, { startDownload, waitForDownload, downloadStatesRef, releaseDownloadTracking })}
           onDelete={() => setBulkDeleteOpen(true)}
         />
       )}
@@ -332,6 +332,7 @@ export default function Files() {
       />
 
       <RenameFolderDialog
+        key={renameTarget?.path ?? 'closed'}
         open={!!renameTarget}
         folder={renameTarget}
         onRename={handleRename}

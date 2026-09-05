@@ -1,10 +1,10 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { createUploadCompletionRegistry } from './upload_completion.js'
+import { createCompletionRegistry } from './completion_registry.js'
 
-test('upload completion registry resolves pending uploads when settled', async () => {
-  const registry = createUploadCompletionRegistry()
+test('completion registry resolves pending uploads when settled', async () => {
+  const registry = createCompletionRegistry()
 
   const pending = registry.waitFor('u1')
   const settled = registry.settle('u1', 'done')
@@ -13,8 +13,8 @@ test('upload completion registry resolves pending uploads when settled', async (
   assert.equal(await pending, 'done')
 })
 
-test('upload completion registry reuses the same promise per upload id', async () => {
-  const registry = createUploadCompletionRegistry()
+test('completion registry reuses the same promise per upload id', async () => {
+  const registry = createCompletionRegistry()
 
   const first = registry.waitFor('u1')
   const second = registry.waitFor('u1')
@@ -24,8 +24,8 @@ test('upload completion registry reuses the same promise per upload id', async (
   assert.equal(await first, 'skipped')
 })
 
-test('upload completion registry clears all pending uploads', async () => {
-  const registry = createUploadCompletionRegistry()
+test('completion registry clears all pending uploads', async () => {
+  const registry = createCompletionRegistry()
 
   const first = registry.waitFor('u1')
   const second = registry.waitFor('u2')

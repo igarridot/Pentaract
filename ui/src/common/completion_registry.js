@@ -1,9 +1,11 @@
-export function createUploadCompletionRegistry() {
+// Lets callers await the terminal status of an in-flight transfer (upload or
+// download) that reports its outcome asynchronously over SSE.
+export function createCompletionRegistry() {
   const pending = new Map()
 
   return {
-    waitFor(uploadId) {
-      const existing = pending.get(uploadId)
+    waitFor(transferId) {
+      const existing = pending.get(transferId)
       if (existing) return existing.promise
 
       let resolvePromise
@@ -11,22 +13,22 @@ export function createUploadCompletionRegistry() {
         resolvePromise = resolve
       })
 
-      pending.set(uploadId, { promise, resolve: resolvePromise })
+      pending.set(transferId, { promise, resolve: resolvePromise })
       return promise
     },
 
-    settle(uploadId, status = 'done') {
-      const entry = pending.get(uploadId)
+    settle(transferId, status = 'done') {
+      const entry = pending.get(transferId)
       if (!entry) return false
 
-      pending.delete(uploadId)
+      pending.delete(transferId)
       entry.resolve(status)
       return true
     },
 
     clear(status = 'cancelled') {
-      for (const [uploadId, entry] of pending.entries()) {
-        pending.delete(uploadId)
+      for (const [transferId, entry] of pending.entries()) {
+        pending.delete(transferId)
         entry.resolve(status)
       }
     },

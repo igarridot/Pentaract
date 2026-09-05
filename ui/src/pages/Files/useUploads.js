@@ -3,7 +3,7 @@ import API from '../../api'
 import { createOperationId } from '../../common/operation_id'
 import { isActiveUploadStatus, createUploadState, applyUploadProgressUpdate } from '../../common/progress'
 import { buildUploadEntries, findSkippedEntries, resolveUploadEntries } from './upload_conflicts'
-import { createUploadCompletionRegistry } from './upload_completion'
+import { createCompletionRegistry } from '../../common/completion_registry'
 import { createBulkOperation, runUploadPipeline } from './operations'
 import { useUploadConflicts } from './useUploadConflicts'
 
@@ -18,7 +18,7 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
   const uploadStatesRef = useRef([])
   const uploadProgressCancelsRef = useRef(new Map())
   const uploadAbortControllersRef = useRef(new Map())
-  const uploadCompletionRegistryRef = useRef(createUploadCompletionRegistry())
+  const uploadCompletionRegistryRef = useRef(createCompletionRegistry())
   const {
     conflictDialog, setConflictDialog, askConflictDecision, handleConflictDecision,
     hasConflict, updateDirCache: cacheDirListing, invalidateDir,

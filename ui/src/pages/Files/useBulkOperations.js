@@ -81,7 +81,9 @@ export function useBulkOperations(addAlert, storageId, loadTree, clearSelection)
     return () => clearTimeout(timeout)
   }, [bulkOperation])
 
-  const handleBulkDownload = async (selectedFiles, { startDownload, downloadStatesRef, releaseDownloadTracking }) => {
+  // Downloads run one at a time, like bulk uploads: N concurrent downloads
+  // would each fetch chunks in parallel and trip the Telegram rate limit.
+  const handleBulkDownload = async (selectedFiles, { startDownload, waitForDownload, downloadStatesRef, releaseDownloadTracking }) => {
     const targets = [...selectedFiles]
     const bulkCancelledRef = { current: false }
     setBulkOperation(createBulkOperation('download', targets.length))
@@ -104,7 +106,9 @@ export function useBulkOperations(addAlert, storageId, loadTree, clearSelection)
         const startedId = await startDownload(targets[i], downloadId)
         if (!startedId) {
           markBulkTransferTerminal('download', downloadId, 'error')
+          continue
         }
+        await waitForDownload(startedId)
       }
       finalizeBulkTransferLaunch('download', bulkCancelledRef.current)
     } catch (err) {
