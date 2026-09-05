@@ -1,10 +1,11 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import API from '../../api'
 import { createOperationId } from '../../common/operation_id'
-import { isActiveUploadStatus } from '../../common/progress'
-import { buildUploadEntries, normalizeUploadPath, resolveUploadEntries } from './upload_conflicts'
+import { isActiveUploadStatus, createUploadState, applyUploadProgressUpdate } from '../../common/progress'
+import { buildUploadEntries, findSkippedEntries, resolveUploadEntries } from './upload_conflicts'
 import { createUploadCompletionRegistry } from './upload_completion'
 import { createBulkOperation, runUploadPipeline } from './operations'
+import { useUploadConflicts } from './useUploadConflicts'
 
 export function useUploads(addAlert, storageId, currentPath, loadTree, {
   registerBulkTransfer,
@@ -18,20 +19,12 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
   const uploadProgressCancelsRef = useRef(new Map())
   const uploadAbortControllersRef = useRef(new Map())
   const uploadCompletionRegistryRef = useRef(createUploadCompletionRegistry())
-  const uploadConflictResolverRef = useRef(null)
-  const dirFileNamesCacheRef = useRef(new Map())
-  const [uploadConflictDialog, setUploadConflictDialog] = useState({
-    open: false,
-    filename: '',
-    targetPath: '',
-    applyForAll: false,
-  })
+  const conflicts = useUploadConflicts()
 
-  // Called by the navigation hook when the tree is loaded, to populate cache
+  // Called when the tree is loaded, so conflict checks reuse the listing.
   const updateDirCache = useCallback((path, data) => {
-    const filesInPath = new Set((data || []).filter((item) => item.is_file).map((item) => item.name))
-    dirFileNamesCacheRef.current.set(normalizeUploadPath(path), filesInPath)
-  }, [])
+    conflicts.updateDirCache(storageId, path, data)
+  }, [conflicts.updateDirCache, storageId])
 
   useEffect(() => {
     uploadStatesRef.current = uploadStates
@@ -90,33 +83,10 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
     const filename = file.name
     const uploadId = providedUploadId
     const completionPromise = uploadCompletionRegistryRef.current.waitFor(uploadId)
-    const terminalPromise = completionPromise.then((status) => status)
-    setUploadStates((prev) => [...prev, {
-      id: uploadId,
-      filename,
-      totalBytes: file.size,
-      uploadedBytes: 0,
-      totalChunks: 0,
-      uploadedChunks: 0,
-      verificationTotal: 0,
-      verifiedChunks: 0,
-      status: 'uploading',
-      workersStatus: 'active',
-    }])
+    setUploadStates((prev) => [...prev, createUploadState(uploadId, filename, file.size)])
 
     const cancel = API.files.subscribeProgress(uploadId, (data) => {
-      updateUploadState(uploadId, (prev) => ({
-        ...prev,
-        filename,
-        totalBytes: data.total_bytes ?? prev?.totalBytes ?? file.size,
-        uploadedBytes: data.uploaded_bytes ?? 0,
-        totalChunks: data.total ?? prev?.totalChunks ?? 0,
-        uploadedChunks: data.uploaded ?? 0,
-        verificationTotal: data.verification_total ?? prev?.verificationTotal ?? 0,
-        verifiedChunks: data.verified ?? 0,
-        status: data.status,
-        workersStatus: data.workers_status ?? prev?.workersStatus ?? 'active',
-      }))
+      updateUploadState(uploadId, (prev) => applyUploadProgressUpdate(prev, data))
       applyUploadTerminalState(uploadId, filename, data.status)
     })
     uploadProgressCancelsRef.current.set(uploadId, cancel)
@@ -151,53 +121,20 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
     return {
       uploadId,
       requestPromise,
-      completionPromise: terminalPromise,
+      completionPromise,
     }
   }, [addAlert, applyUploadTerminalState, loadTree, markBulkTransferTerminal, releaseUploadTracking, scheduleUploadStateRemoval, storageId, updateUploadState])
 
-  const askUploadConflictDecision = useCallback((filename, targetPath) => (
-    new Promise((resolve) => {
-      uploadConflictResolverRef.current = resolve
-      setUploadConflictDialog({
-        open: true,
-        filename,
-        targetPath: normalizeUploadPath(targetPath),
-        applyForAll: false,
-      })
-    })
-  ), [])
-
-  const handleUploadConflictDecision = useCallback((action, applyForAll) => {
-    const resolve = uploadConflictResolverRef.current
-    uploadConflictResolverRef.current = null
-    setUploadConflictDialog((prev) => ({ ...prev, open: false, applyForAll: false }))
-    if (resolve) {
-      resolve({ action, applyForAll })
-    }
-  }, [])
-
-  const getDirFileNames = useCallback(async (targetPath) => {
-    const normalizedPath = normalizeUploadPath(targetPath)
-    if (dirFileNamesCacheRef.current.has(normalizedPath)) {
-      return dirFileNamesCacheRef.current.get(normalizedPath)
-    }
-    const data = await API.files.tree(storageId, normalizedPath)
-    const fileNames = new Set((data || []).filter((item) => item.is_file).map((item) => item.name))
-    dirFileNamesCacheRef.current.set(normalizedPath, fileNames)
-    return fileNames
-  }, [storageId])
-
-  const hasUploadConflict = useCallback(async (targetPath, filename) => {
-    const fileNames = await getDirFileNames(targetPath)
-    return fileNames.has(filename)
-  }, [getDirFileNames])
+  const hasUploadConflict = useCallback((targetPath, filename) => (
+    conflicts.hasConflict(storageId, targetPath, filename)
+  ), [conflicts.hasConflict, storageId])
 
   const runUploadBatch = useCallback(async (entries) => {
     const showBulkProgress = entries.length > 1
     const bulkCancelledRef = { current: false }
     let defaultConflictMode = 'keep_both'
     const askConflictDecision = async (filename, targetPath) => {
-      const decision = await askUploadConflictDecision(filename, targetPath)
+      const decision = await conflicts.askConflictDecision(filename, targetPath)
       if (decision.applyForAll && decision.action === 'skip') {
         defaultConflictMode = 'skip'
       }
@@ -226,12 +163,8 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
       }
     }
 
-    const uploadedKeys = new Set(entriesToUpload.map((entry) => `${entry.targetPath}::${entry.filename}`))
-    entries.forEach((entry) => {
-      const key = `${entry.targetPath}::${entry.filename}`
-      if (!uploadedKeys.has(key)) {
-        addAlert(`Skipped upload for "${entry.filename}"`, 'info', { persistent: false })
-      }
+    findSkippedEntries(entries, entriesToUpload).forEach((entry) => {
+      addAlert(`Skipped upload for "${entry.filename}"`, 'info', { persistent: false })
     })
 
     try {
@@ -242,7 +175,7 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
         if (showBulkProgress) registerBulkTransfer('upload', uploadId)
 
         const transfer = launchUpload(entry.file, entry.targetPath, defaultConflictMode, uploadId)
-        dirFileNamesCacheRef.current.delete(normalizeUploadPath(entry.targetPath))
+        conflicts.invalidateDir(storageId, entry.targetPath)
         return transfer
       })
 
@@ -258,7 +191,7 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
       loadTree()
       if (showBulkProgress) bulkCancelRef.current = null
     }
-  }, [addAlert, askUploadConflictDecision, finalizeBulkTransferLaunch, hasUploadConflict, launchUpload, loadTree, markBulkTransferTerminal, registerBulkTransfer, releaseUploadTracking, setBulkOperation])
+  }, [addAlert, conflicts.askConflictDecision, conflicts.invalidateDir, finalizeBulkTransferLaunch, hasUploadConflict, launchUpload, loadTree, markBulkTransferTerminal, registerBulkTransfer, releaseUploadTracking, setBulkOperation, storageId])
 
   const startUpload = async (e) => {
     const files = Array.from(e.target.files || [])
@@ -301,9 +234,9 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
     startUpload,
     cancelUpload,
     cleanupUploads,
-    uploadConflictDialog,
-    setUploadConflictDialog,
-    handleUploadConflictDecision,
+    uploadConflictDialog: conflicts.conflictDialog,
+    setUploadConflictDialog: conflicts.setConflictDialog,
+    handleUploadConflictDecision: conflicts.handleConflictDecision,
     updateDirCache,
   }
 }

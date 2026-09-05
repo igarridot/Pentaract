@@ -43,3 +43,22 @@ export async function resolveUploadEntries(entries, hasConflict, askConflictDeci
 
   return resolved
 }
+
+export function fileNameFromPath(path) {
+  return (path || '').split('/').pop() || path || ''
+}
+
+// Set of file names in a directory listing (folders excluded).
+export function fileNamesOf(items) {
+  return new Set((items || []).filter((item) => item.is_file).map((item) => item.name))
+}
+
+export function uploadEntryKey(entry) {
+  return `${entry.targetPath}::${entry.filename}`
+}
+
+// Entries the conflict resolution left out, so callers can tell the user.
+export function findSkippedEntries(entries, resolved) {
+  const kept = new Set(resolved.map(uploadEntryKey))
+  return entries.filter((entry) => !kept.has(uploadEntryKey(entry)))
+}
