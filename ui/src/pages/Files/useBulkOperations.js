@@ -4,8 +4,8 @@ import { createOperationId } from '../../common/operation_id'
 import { isTerminalTransferStatus, isActiveDownloadStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from '../../common/progress'
 import { createBulkOperation, getItemPath, buildBulkMoveTargetPath } from './operations'
 
-export function useBulkOperations(addAlert, storageId, loadTree) {
-  const [selectedFilePaths, setSelectedFilePaths] = useState([])
+// clearSelection is called once a bulk delete or move finishes.
+export function useBulkOperations(addAlert, storageId, loadTree, clearSelection) {
   const [bulkDeleteOpen, setBulkDeleteOpen] = useState(false)
   const [bulkMoveOpen, setBulkMoveOpen] = useState(false)
   const [bulkOperation, setBulkOperation] = useState(null)
@@ -101,8 +101,6 @@ export function useBulkOperations(addAlert, storageId, loadTree) {
         if (bulkCancelledRef.current) break
         const downloadId = createOperationId()
         registerBulkTransfer('download', downloadId)
-        // Keep stable progress state behavior.
-        // eslint-disable-next-line no-await-in-loop
         const startedId = await startDownload(targets[i], downloadId)
         if (!startedId) {
           markBulkTransferTerminal('download', downloadId, 'error')
@@ -132,8 +130,7 @@ export function useBulkOperations(addAlert, storageId, loadTree) {
       let deletedCount = 0
       for (let i = 0; i < targets.length; i += 1) {
         if (bulkCancelledRef.current) break
-        // Keep API calls sequential to avoid overwhelming the backend.
-        // eslint-disable-next-line no-await-in-loop
+        // Sequential to avoid overwhelming the backend.
         await deleteSingleItem(targets[i])
         deletedCount += 1
         setBulkOperation((prev) => (prev ? { ...prev, completed: i + 1 } : prev))
@@ -141,7 +138,7 @@ export function useBulkOperations(addAlert, storageId, loadTree) {
       setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
       setTimeout(() => setBulkOperation(null), 1500)
       addAlert(`Deleted ${deletedCount} file(s)`, 'success')
-      setSelectedFilePaths([])
+      clearSelection()
     } catch (err) {
       setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
       setTimeout(() => setBulkOperation(null), 3000)
@@ -168,8 +165,7 @@ export function useBulkOperations(addAlert, storageId, loadTree) {
         if (bulkCancelledRef.current) break
         const item = targets[i]
         const newPath = buildBulkMoveTargetPath(targetPath, item.name)
-        // Keep move operations sequential for predictable ordering and cancellation.
-        // eslint-disable-next-line no-await-in-loop
+        // Sequential for predictable ordering and cancellation.
         await API.files.move(storageId, item.path, newPath, { signal: moveAbortController.signal })
         movedCount += 1
         setBulkOperation((prev) => (prev ? { ...prev, completed: i + 1 } : prev))
@@ -177,7 +173,7 @@ export function useBulkOperations(addAlert, storageId, loadTree) {
       setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
       setTimeout(() => setBulkOperation(null), 1500)
       addAlert(`Moved ${movedCount} file(s)`, 'success')
-      setSelectedFilePaths([])
+      clearSelection()
     } catch (err) {
       if (err?.name === 'AbortError') {
         setBulkOperation((prev) => (prev ? { ...prev, status: 'cancelled' } : prev))
@@ -199,8 +195,6 @@ export function useBulkOperations(addAlert, storageId, loadTree) {
   }, [])
 
   return {
-    selectedFilePaths,
-    setSelectedFilePaths,
     bulkDeleteOpen,
     setBulkDeleteOpen,
     bulkMoveOpen,
