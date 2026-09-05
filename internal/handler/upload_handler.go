@@ -3,6 +3,7 @@ package handler
 import (
 	"bufio"
 	"context"
+	"fmt"
 	"io"
 	"log/slog"
 	"net/http"
@@ -90,6 +91,12 @@ func (h *UploadHandler) runTrackedUpload(ctx context.Context, tracker *uploadTra
 			err = flushErr
 		}
 		src.Close()
+		if err != nil {
+			// A source that fails mid-stream (browser gone, multipart body cut
+			// short) must not look like a plain short read: io.ErrUnexpectedEOF
+			// is how the uploader recognises the legitimate last chunk.
+			err = fmt.Errorf("%w: %v", domain.ErrUploadInterrupted, err)
+		}
 		pw.CloseWithError(err)
 	}()
 	// Always close the pipe reader so the copy goroutine unblocks, even when
