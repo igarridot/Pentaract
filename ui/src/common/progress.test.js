@@ -1,7 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 
-import { calculatePercent, isTerminalTransferStatus, isActiveUploadStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from './progress.js'
+import { calculatePercent, isTerminalTransferStatus, isActiveUploadStatus, isActiveDownloadStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from './progress.js'
 
 test('calculatePercent clamps values into 0..100', () => {
   assert.equal(calculatePercent(0, 0), 0)
@@ -23,6 +23,18 @@ test('isActiveUploadStatus keeps verification as an active upload phase', () => 
   assert.equal(isActiveUploadStatus('uploading'), true)
   assert.equal(isActiveUploadStatus('verifying'), true)
   assert.equal(isActiveUploadStatus('done'), false)
+})
+
+test('isActiveDownloadStatus keeps a browser-interrupted download alive', () => {
+  assert.equal(isActiveDownloadStatus('downloading'), true)
+  assert.equal(isActiveDownloadStatus('interrupted'), true)
+  assert.equal(isActiveDownloadStatus('done'), false)
+  assert.equal(isActiveDownloadStatus('error'), false)
+  assert.equal(isActiveDownloadStatus('cancelled'), false)
+})
+
+test('interrupted is not a terminal transfer status', () => {
+  assert.equal(isTerminalTransferStatus('interrupted'), false)
 })
 
 test('summarizeTerminalStatuses counts final results reliably', () => {

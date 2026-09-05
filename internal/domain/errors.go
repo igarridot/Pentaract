@@ -13,6 +13,7 @@ var (
 	ErrDecryptionFailed      = errors.New("chunk decryption failed")
 	ErrTelegramResolveFailed = errors.New("telegram file_id resolution failed")
 	ErrDownloadInterrupted   = errors.New("telegram download stream interrupted")
+	ErrClientDisconnected    = errors.New("browser closed the download connection")
 )
 
 type AppError struct {

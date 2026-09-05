@@ -3,13 +3,19 @@ package handler
 import (
 	"context"
 	"errors"
+	"fmt"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/url"
 	"strings"
+	"syscall"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
+
+	"github.com/Dominux/Pentaract/internal/domain"
 )
 
 func TestFileSizeCache(t *testing.T) {
@@ -178,5 +184,59 @@ func TestSetupDownloadTrackerReplacesExistingTracker(t *testing.T) {
 	h.mu.RUnlock()
 	if ok {
 		t.Fatalf("expected current tracker cleanup to remove download entry")
+	}
+}
+
+func TestClientDisconnected(t *testing.T) {
+	live := httptest.NewRequest(http.MethodGet, "/", nil)
+	closedCtx, cancel := context.WithCancel(context.Background())
+	cancel()
+	closed := live.WithContext(closedCtx)
+
+	tests := []struct {
+		name string
+		req  *http.Request
+		err  error
+		want bool
+	}{
+		{"request context cancelled by the browser", closed, errors.New("writing chunk 0: context canceled"), true},
+		{"connection write failure", live, fmt.Errorf("writing chunk 0: %w", &net.OpError{Op: "write", Net: "tcp", Err: syscall.EPIPE}), true},
+		{"telegram transport failure", live, fmt.Errorf("downloading chunk 0: %w", &url.Error{Op: "Get", URL: "https://api.telegram.org", Err: &net.OpError{Op: "write", Err: syscall.EPIPE}}), false},
+		{"transfer failure with live connection", live, fmt.Errorf("decrypting chunk 0: %w", domain.ErrDecryptionFailed), false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := clientDisconnected(tt.req, tt.err); got != tt.want {
+				t.Fatalf("clientDisconnected = %v, want %v", got, tt.want)
+			}
+		})
+	}
+}
+
+func TestCleanupDownloadTrackerKeepsInterruptedTrackerUntilDone(t *testing.T) {
+	h := NewFilesHandler(&mockFilesService{})
+	req := httptest.NewRequest(http.MethodGet, "/?download_id=d-int", nil)
+	_, tracker, _ := h.setupDownloadTracker(req, uuid.New())
+
+	h.mu.Lock()
+	tracker.interrupted = true
+	h.mu.Unlock()
+
+	h.cleanupDownloadTracker("d-int", tracker)
+	h.mu.RLock()
+	_, stillThere := h.downloads["d-int"]
+	h.mu.RUnlock()
+	if !stillThere {
+		t.Fatalf("interrupted tracker must survive the request-end cleanup")
+	}
+
+	h.finishTracker(tracker, nil)
+	h.cleanupDownloadTracker("d-int", tracker)
+	h.mu.RLock()
+	_, stillThere = h.downloads["d-int"]
+	h.mu.RUnlock()
+	if stillThere {
+		t.Fatalf("finished tracker should be removed")
 	}
 }

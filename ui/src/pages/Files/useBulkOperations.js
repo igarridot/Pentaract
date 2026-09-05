@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import API from '../../api'
 import { createOperationId } from '../../common/operation_id'
-import { isTerminalTransferStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from '../../common/progress'
+import { isTerminalTransferStatus, isActiveDownloadStatus, summarizeTerminalStatuses, resolveBulkTransferStatus } from '../../common/progress'
 import { createBulkOperation, getItemPath, buildBulkMoveTargetPath } from './operations'
 
 export function useBulkOperations(addAlert, storageId, loadTree) {
@@ -88,7 +88,7 @@ export function useBulkOperations(addAlert, storageId, loadTree) {
     bulkCancelRef.current = async () => {
       bulkCancelledRef.current = true
       const currentIds = downloadStatesRef.current
-        .filter((d) => d.status === 'downloading')
+        .filter((d) => isActiveDownloadStatus(d.status))
         .map((d) => d.id)
       await Promise.all(currentIds.map(async (downloadId) => {
         await API.files.cancelDownload(downloadId).catch(() => {})

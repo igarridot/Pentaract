@@ -2,10 +2,13 @@ package handler
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strconv"
@@ -48,12 +51,22 @@ func (h *FilesHandler) setupDownloadTracker(r *http.Request, storageID uuid.UUID
 	}
 }
 
+// downloadInterruptedGracePeriod is a variable so tests can shorten the wait.
+var downloadInterruptedGracePeriod = service.DownloadInterruptedGracePeriod
+
 func (h *FilesHandler) cleanupDownloadTracker(downloadID string, tracker *downloadTracker) {
 	h.mu.Lock()
 	defer h.mu.Unlock()
-	if current, ok := h.downloads[downloadID]; ok && current == tracker {
-		delete(h.downloads, downloadID)
+	current, ok := h.downloads[downloadID]
+	if !ok || current != tracker {
+		return
 	}
+	// An interrupted tracker is still waiting for the browser to resume the
+	// download; the grace timer started by interruptTracker owns its cleanup.
+	if tracker.interrupted && !tracker.done {
+		return
+	}
+	delete(h.downloads, downloadID)
 }
 
 func (h *FilesHandler) scheduleDownloadTrackerCleanup(downloadID string, tracker *downloadTracker) {
@@ -71,6 +84,64 @@ func (h *FilesHandler) finishTracker(tracker *downloadTracker, err error) {
 	tracker.done = true
 	tracker.err = err
 	h.mu.Unlock()
+}
+
+// failTracker records a failed download request. When the failure is just the
+// browser dropping the connection (Chrome, for instance, interrupts downloads
+// of uncommon file types served over plain HTTP and only re-requests them once
+// the user allows the download from its download list), the tracker is kept
+// alive as "interrupted" instead of being reported as an error, so the resumed
+// request with the same download_id can carry on with the same progress stream.
+func (h *FilesHandler) failTracker(r *http.Request, tracker *downloadTracker, err error) {
+	if tracker == nil {
+		return
+	}
+	h.mu.RLock()
+	canceled := tracker.canceled
+	h.mu.RUnlock()
+	if !canceled && clientDisconnected(r, err) {
+		h.interruptTracker(r.URL.Query().Get("download_id"), tracker)
+		return
+	}
+	h.finishTracker(tracker, err)
+}
+
+// interruptTracker parks the tracker until the browser resumes the download or
+// the grace period runs out. On expiry the tracker is failed with
+// domain.ErrClientDisconnected and scheduled for removal, unless a newer
+// request already replaced it.
+func (h *FilesHandler) interruptTracker(downloadID string, tracker *downloadTracker) {
+	h.mu.Lock()
+	tracker.interrupted = true
+	h.mu.Unlock()
+
+	time.AfterFunc(downloadInterruptedGracePeriod, func() {
+		h.mu.Lock()
+		current := h.downloads[downloadID] == tracker
+		if current && !tracker.done {
+			tracker.done = true
+			tracker.err = domain.ErrClientDisconnected
+		}
+		h.mu.Unlock()
+		if current {
+			h.scheduleDownloadTrackerCleanup(downloadID, tracker)
+		}
+	})
+}
+
+// clientDisconnected reports whether a failed download ended because the
+// browser closed the connection rather than because the transfer itself failed.
+func clientDisconnected(r *http.Request, err error) bool {
+	if r.Context().Err() != nil {
+		return true
+	}
+	var urlErr *url.Error
+	if errors.As(err, &urlErr) {
+		// Upstream (Telegram) transport failure, not our client.
+		return false
+	}
+	var opErr *net.OpError
+	return errors.As(err, &opErr) && opErr.Op == "write"
 }
 
 func (h *FilesHandler) resolvedInlineVideoSize(ctx context.Context, file *domain.File) (int64, error) {
@@ -213,7 +284,7 @@ func (h *FilesHandler) Download(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusOK)
 		if err := h.svc.DownloadFileToWriter(downloadCtx, file, w, progress); err != nil {
 			slog.Error("download file failed", "err", err)
-			h.finishTracker(tracker, err)
+			h.failTracker(r, tracker, err)
 			return
 		}
 	}
@@ -297,7 +368,7 @@ func (h *FilesHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 
 	if _, err := h.svc.DownloadDir(downloadCtx, user.ID, storageID, path, writer, progress); err != nil {
 		slog.Error("download dir failed", "err", err)
-		h.finishTracker(tracker, err)
+		h.failTracker(r, tracker, err)
 		return
 	}
 
@@ -351,6 +422,7 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 			isDone := tracker.done
 			downloadErr := tracker.err
 			isCanceled := tracker.canceled
+			isInterrupted := tracker.interrupted
 			h.mu.RUnlock()
 
 			if isDone && isCanceled {
@@ -359,6 +431,8 @@ func (h *FilesHandler) DownloadProgress(w http.ResponseWriter, r *http.Request) 
 				status = "error"
 			} else if isDone {
 				status = "done"
+			} else if isInterrupted {
+				status = "interrupted"
 			}
 
 			return map[string]any{

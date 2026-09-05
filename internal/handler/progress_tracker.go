@@ -57,8 +57,12 @@ type downloadTracker struct {
 	progress  *service.DownloadProgress
 	cancel    context.CancelFunc
 	canceled  bool
-	err       error
-	done      bool
+	// interrupted is set when the browser dropped the connection before the
+	// transfer finished (for example after blocking the download as insecure).
+	// The tracker then waits for a resumed request with the same download_id.
+	interrupted bool
+	err         error
+	done        bool
 }
 
 type flushWriter struct {
@@ -106,6 +110,8 @@ func downloadErrorMessage(err error) string {
 		return "Telegram could not resolve at least one chunk with the currently available workers. Check that the original bot still exists and still has access to the channel, or re-upload the file."
 	case errors.Is(err, domain.ErrDownloadInterrupted):
 		return "Telegram interrupted the download stream for one of the chunks. Please try again."
+	case errors.Is(err, domain.ErrClientDisconnected):
+		return "The browser stopped this download and did not resume it. If the browser blocked it as an insecure download, allow it from the browser's download list or open Pentaract over HTTPS."
 	default:
 		return "Download failed unexpectedly. Please try again."
 	}

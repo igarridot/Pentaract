@@ -12,6 +12,13 @@ export function isActiveUploadStatus(status) {
   return status === 'uploading' || status === 'verifying'
 }
 
+// "interrupted" means the browser dropped the connection (typically after
+// blocking the file as an insecure download) and the server is waiting for the
+// browser to re-request it once the user allows the download.
+export function isActiveDownloadStatus(status) {
+  return status === 'downloading' || status === 'interrupted'
+}
+
 export function summarizeTerminalStatuses(terminalStatuses = {}) {
   const summary = {
     completed: 0,

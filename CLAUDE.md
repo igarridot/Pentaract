@@ -99,6 +99,7 @@ All via environment variables (see `.env.example`). Key ones:
 | `VerifyCBMaxRetryRounds` | 3 | Max cooldown+retry rounds for failed verifications |
 | `DeleteParallelism` | 5 | Concurrent Telegram message deletions |
 | `SSEPollingInterval` | 500ms | Progress event frequency |
+| `DownloadInterruptedGracePeriod` | 2m | How long a download whose connection the browser dropped waits for the browser to re-request it |
 
 ## CI/CD
 
@@ -109,5 +110,6 @@ Push to `master` → Go tests + UI tests → auto-tag (semver patch bump) → mu
 - `crypto.randomUUID()` not available in insecure HTTP contexts — `ui/src/common/operation_id.js` has a fallback using `crypto.getRandomValues()`
 - No HTTP read/write timeouts on the server (large transfers can take hours) — per-request context cancellation instead
 - Download auth via `?access_token=` query param (for iframe-based downloads) — only allowed on `/files/download/` and `/files/download_dir/` paths
+- Over plain HTTP, Chrome blocks downloads of file types outside its safe list (e.g. `.funscript`, `.zip`, `.pdf`) as "insecure" and closes the connection; it re-requests the same URL when the user allows the file. `failTracker` in `download_handler.go` keeps such downloads in an `interrupted` state (SSE status `interrupted`) instead of failing them, so the resumed request continues the same progress card
 - DB migrations run automatically on startup (`internal/startup/startup.go`)
 - `ui/dist/` is gitignored — Docker builds it fresh; local dev uses Vite dev server

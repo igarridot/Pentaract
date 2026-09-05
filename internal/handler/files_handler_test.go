@@ -663,6 +663,11 @@ func TestDownloadErrorMessage(t *testing.T) {
 			want: "interrupted the download stream",
 		},
 		{
+			name: "browser dropped the connection",
+			err:  domain.ErrClientDisconnected,
+			want: "did not resume it",
+		},
+		{
 			name: "fallback generic",
 			err:  fmt.Errorf("writing chunk 0: broken pipe"),
 			want: "Download failed unexpectedly",
@@ -1008,5 +1013,255 @@ func TestFilesHandlerDownloadInlineNonVideo(t *testing.T) {
 	h.Download(w, makeFilesReq(http.MethodGet, "/?inline=1", "", storageID, "doc.txt"))
 	if w.Code != http.StatusOK || w.Body.String() != "hello" {
 		t.Fatalf("inline non-video download expected 200/hello, got %d/%q", w.Code, w.Body.String())
+	}
+}
+
+// cancelableFilesReq returns a tracked download request whose context can be
+// cancelled from inside the mocked service, simulating the browser closing the
+// connection mid-transfer.
+func cancelableFilesReq(target, storageID, wildcard string) (*http.Request, context.CancelFunc) {
+	req := makeFilesReq(http.MethodGet, target, "", storageID, wildcard)
+	ctx, cancel := context.WithCancel(req.Context())
+	return req.WithContext(ctx), cancel
+}
+
+func collectDownloadProgress(t *testing.T, h *FilesHandler, downloadID string, wait time.Duration) string {
+	t.Helper()
+	ctx, cancel := context.WithTimeout(context.Background(), wait)
+	defer cancel()
+	req := httptest.NewRequest(http.MethodGet, "/download_progress?download_id="+downloadID, nil).WithContext(ctx)
+	w := httptest.NewRecorder()
+	h.DownloadProgress(w, req)
+	return w.Body.String()
+}
+
+func TestFilesHandlerDownloadBrowserDisconnectKeepsTrackerInterrupted(t *testing.T) {
+	storageID := uuid.New().String()
+	req, cancelReq := cancelableFilesReq("/?download_id=dl-blocked", storageID, "clips/scene.funscript")
+	defer cancelReq()
+
+	h := NewFilesHandler(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+		},
+		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			// The browser blocked the download and closed the connection.
+			cancelReq()
+			return fmt.Errorf("writing chunk 0: %w", ctx.Err())
+		},
+	})
+
+	h.Download(httptest.NewRecorder(), req)
+
+	h.mu.RLock()
+	tracker := h.downloads["dl-blocked"]
+	h.mu.RUnlock()
+	if tracker == nil {
+		t.Fatalf("expected tracker to stay registered while waiting for the browser")
+	}
+	h.mu.RLock()
+	interrupted, done, canceled, err := tracker.interrupted, tracker.done, tracker.canceled, tracker.err
+	h.mu.RUnlock()
+	if !interrupted || done || canceled || err != nil {
+		t.Fatalf("expected interrupted tracker, got interrupted=%v done=%v canceled=%v err=%v", interrupted, done, canceled, err)
+	}
+
+	body := collectDownloadProgress(t, h, "dl-blocked", 2*service.SSEPollingInterval+100*time.Millisecond)
+	if !strings.Contains(body, `"status":"interrupted"`) {
+		t.Fatalf("expected SSE to report interrupted status, got %q", body)
+	}
+	if strings.Contains(body, `"status":"error"`) {
+		t.Fatalf("browser disconnect must not surface as an error: %q", body)
+	}
+}
+
+func TestFilesHandlerDownloadResumedRequestReplacesInterruptedTracker(t *testing.T) {
+	storageID := uuid.New().String()
+	blockedReq, cancelBlocked := cancelableFilesReq("/?download_id=dl-resume", storageID, "clips/scene.funscript")
+	defer cancelBlocked()
+
+	blocked := true
+	h := NewFilesHandler(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+		},
+		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			if blocked {
+				cancelBlocked()
+				return fmt.Errorf("writing chunk 0: %w", ctx.Err())
+			}
+			_, _ = io.WriteString(w, "abc")
+			return nil
+		},
+	})
+
+	h.Download(httptest.NewRecorder(), blockedReq)
+	h.mu.RLock()
+	first := h.downloads["dl-resume"]
+	h.mu.RUnlock()
+
+	// The user allowed the download in the browser, which re-requests the same URL.
+	blocked = false
+	w := httptest.NewRecorder()
+	h.Download(w, makeFilesReq(http.MethodGet, "/?download_id=dl-resume", "", storageID, "clips/scene.funscript"))
+	if w.Code != http.StatusOK || w.Body.String() != "abc" {
+		t.Fatalf("resumed download expected 200/abc, got %d/%q", w.Code, w.Body.String())
+	}
+
+	h.mu.RLock()
+	current := h.downloads["dl-resume"]
+	h.mu.RUnlock()
+	if current == nil || current == first {
+		t.Fatalf("expected resumed request to register a fresh tracker")
+	}
+	h.mu.RLock()
+	done, err, interrupted := current.done, current.err, current.interrupted
+	h.mu.RUnlock()
+	if !done || err != nil || interrupted {
+		t.Fatalf("unexpected resumed tracker state: done=%v err=%v interrupted=%v", done, err, interrupted)
+	}
+
+	body := collectDownloadProgress(t, h, "dl-resume", 2*service.SSEPollingInterval+100*time.Millisecond)
+	if !strings.Contains(body, `"status":"done"`) {
+		t.Fatalf("expected SSE to report the resumed download as done, got %q", body)
+	}
+}
+
+func TestFilesHandlerDownloadInterruptedTrackerExpiresAsError(t *testing.T) {
+	previous := downloadInterruptedGracePeriod
+	downloadInterruptedGracePeriod = 20 * time.Millisecond
+	defer func() { downloadInterruptedGracePeriod = previous }()
+
+	storageID := uuid.New().String()
+	req, cancelReq := cancelableFilesReq("/?download_id=dl-expire", storageID, "clips/scene.funscript")
+	defer cancelReq()
+
+	h := NewFilesHandler(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+		},
+		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			cancelReq()
+			return fmt.Errorf("writing chunk 0: %w", ctx.Err())
+		},
+	})
+
+	h.Download(httptest.NewRecorder(), req)
+
+	deadline := time.Now().Add(2 * time.Second)
+	for {
+		h.mu.RLock()
+		tracker := h.downloads["dl-expire"]
+		var done bool
+		var err error
+		if tracker != nil {
+			done, err = tracker.done, tracker.err
+		}
+		h.mu.RUnlock()
+		if tracker == nil {
+			t.Fatalf("tracker must stay registered so the SSE stream can deliver the final status")
+		}
+		if done {
+			if !errors.Is(err, domain.ErrClientDisconnected) {
+				t.Fatalf("expected ErrClientDisconnected after grace period, got %v", err)
+			}
+			break
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("interrupted tracker did not expire")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+
+	body := collectDownloadProgress(t, h, "dl-expire", 2*service.SSEPollingInterval+100*time.Millisecond)
+	if !strings.Contains(body, `"status":"error"`) || !strings.Contains(body, "did not resume it") {
+		t.Fatalf("expected SSE error explaining the browser interruption, got %q", body)
+	}
+}
+
+func TestFilesHandlerCancelInterruptedDownloadReportsCancelled(t *testing.T) {
+	storageID := uuid.New().String()
+	req, cancelReq := cancelableFilesReq("/?download_id=dl-cancel", storageID, "clips/scene.funscript")
+	defer cancelReq()
+
+	h := NewFilesHandler(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+		},
+		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			cancelReq()
+			return fmt.Errorf("writing chunk 0: %w", ctx.Err())
+		},
+	})
+	h.Download(httptest.NewRecorder(), req)
+
+	cancelHTTP := httptest.NewRequest(http.MethodPost, "/download_cancel/dl-cancel", nil)
+	rctx := chi.NewRouteContext()
+	rctx.URLParams.Add("downloadID", "dl-cancel")
+	cancelHTTP = cancelHTTP.WithContext(context.WithValue(cancelHTTP.Context(), chi.RouteCtxKey, rctx))
+	w := httptest.NewRecorder()
+	h.CancelDownload(w, cancelHTTP)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 cancelling an interrupted download, got %d", w.Code)
+	}
+
+	body := collectDownloadProgress(t, h, "dl-cancel", 2*service.SSEPollingInterval+100*time.Millisecond)
+	if !strings.Contains(body, `"status":"cancelled"`) {
+		t.Fatalf("expected SSE to report cancelled, got %q", body)
+	}
+}
+
+func TestFilesHandlerDownloadRealFailureStillReportsError(t *testing.T) {
+	storageID := uuid.New().String()
+	h := NewFilesHandler(&mockFilesService{
+		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+		},
+		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
+			return fmt.Errorf("decrypting chunk 0: %w", domain.ErrDecryptionFailed)
+		},
+	})
+
+	h.Download(httptest.NewRecorder(), makeFilesReq(http.MethodGet, "/?download_id=dl-fail", "", storageID, "clips/scene.funscript"))
+
+	h.mu.RLock()
+	tracker := h.downloads["dl-fail"]
+	h.mu.RUnlock()
+	if tracker == nil {
+		t.Fatalf("expected tracker to be registered")
+	}
+	h.mu.RLock()
+	done, interrupted, err := tracker.done, tracker.interrupted, tracker.err
+	h.mu.RUnlock()
+	if !done || interrupted || !errors.Is(err, domain.ErrDecryptionFailed) {
+		t.Fatalf("expected a real failure to finish the tracker with its error, got done=%v interrupted=%v err=%v", done, interrupted, err)
+	}
+}
+
+func TestFilesHandlerDownloadDirBrowserDisconnectKeepsTrackerInterrupted(t *testing.T) {
+	storageID := uuid.New().String()
+	req, cancelReq := cancelableFilesReq("/?download_id=dir-blocked", storageID, "clips")
+	defer cancelReq()
+
+	h := NewFilesHandler(&mockFilesService{
+		downloadDirFn: func(ctx context.Context, userID, storageID uuid.UUID, dirPath string, w io.Writer, progress *service.DownloadProgress) (string, error) {
+			cancelReq()
+			return "", fmt.Errorf("writing zip entry: %w", ctx.Err())
+		},
+	})
+
+	h.DownloadDir(httptest.NewRecorder(), req)
+
+	h.mu.RLock()
+	tracker := h.downloads["dir-blocked"]
+	h.mu.RUnlock()
+	if tracker == nil {
+		t.Fatalf("expected dir download tracker to stay registered")
+	}
+	h.mu.RLock()
+	interrupted, done := tracker.interrupted, tracker.done
+	h.mu.RUnlock()
+	if !interrupted || done {
+		t.Fatalf("expected interrupted dir download tracker, got interrupted=%v done=%v", interrupted, done)
 	}
 }

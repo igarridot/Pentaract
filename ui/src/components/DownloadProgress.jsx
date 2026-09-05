@@ -7,6 +7,7 @@ import ProgressCard from './ProgressCard'
 export default function DownloadProgress({ filename, totalBytes, downloadedBytes, totalChunks, downloadedChunks, status, workersStatus, errorMessage, onCancel }) {
   const percent = calculatePercent(downloadedBytes, totalBytes)
   const isActive = status === 'downloading'
+  const isInterrupted = status === 'interrupted'
   const isError = status === 'error'
   const isCancelled = status === 'cancelled'
   const pendingChunks = totalChunks > 0 ? Math.max(totalChunks - downloadedChunks, 0) : null
@@ -21,24 +22,36 @@ export default function DownloadProgress({ filename, totalBytes, downloadedBytes
     ? `${convertSize(downloadedBytes)} / ${convertSize(totalBytes)}`
     : convertSize(downloadedBytes)
 
-  const title = isError ? 'Download failed' : isCancelled ? 'Download cancelled' : isActive ? 'Downloading' : 'Download complete'
+  const title = isError
+    ? 'Download failed'
+    : isCancelled
+      ? 'Download cancelled'
+      : isInterrupted
+        ? 'Waiting for the browser'
+        : isActive
+          ? 'Downloading'
+          : 'Download complete'
 
   return (
     <ProgressCard
       title={title}
       subtitle={filename}
       percent={percent}
-      variant={totalBytes > 0 ? 'determinate' : 'indeterminate'}
-      progressColor={isError ? 'error' : isCancelled ? 'warning' : isActive ? 'primary' : 'success'}
+      variant={totalBytes > 0 || isInterrupted ? 'determinate' : 'indeterminate'}
+      progressColor={isError ? 'error' : isCancelled || isInterrupted ? 'warning' : isActive ? 'primary' : 'success'}
       isError={isError}
-      isWarning={isCancelled}
-      showCancel={isActive}
+      isWarning={isCancelled || isInterrupted}
+      showCancel={isActive || isInterrupted}
       onCancel={onCancel}
       cancelLabel="Cancel download"
       afterBar={
         isError && errorMessage ? (
           <Typography variant="caption" color="error.main" sx={{ display: 'block', mt: 1 }}>
             {errorMessage}
+          </Typography>
+        ) : isInterrupted ? (
+          <Typography variant="caption" color="text.secondary" sx={{ display: 'block', mt: 1 }}>
+            The browser paused this download. If it shows an insecure download warning, choose to keep the file and the download will continue here.
           </Typography>
         ) : null
       }

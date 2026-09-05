@@ -30,4 +30,9 @@ const (
 	TrackerCleanupDelay      = 5 * time.Minute
 	SSEPollingInterval       = 500 * time.Millisecond
 	DownloadProgressWaitTime = 15 * time.Second
+	// DownloadInterruptedGracePeriod is how long a tracked download stays alive
+	// after the browser dropped the connection, so a follow-up request with the
+	// same download_id (the browser resuming a download it had blocked or lost)
+	// can pick the progress stream back up.
+	DownloadInterruptedGracePeriod = 2 * time.Minute
 )
