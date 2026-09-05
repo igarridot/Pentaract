@@ -17,6 +17,8 @@ function sseResponse(chunks) {
   const encoder = new TextEncoder()
   let idx = 0
   return {
+    ok: true,
+    status: 200,
     body: {
       getReader() {
         return {
@@ -337,4 +339,36 @@ test('tree, search and delete encode the storage path', async () => {
 
   const d = API.files.downloadFileUrl('s1', 'clips/#1 (mirrored).funscript', 'd1')
   assert.match(d, /\/download\/clips\/%231%20\(mirrored\)\.funscript\?/)
+})
+
+test('subscribeProgress stops and reports an error on 401 instead of retrying forever', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  let fetches = 0
+  globalThis.fetch = async () => {
+    fetches += 1
+    return { ok: false, status: 401, body: null }
+  }
+  const events = []
+  const cancel = API.files.subscribeProgress('u1', (data) => events.push(data))
+  await new Promise((r) => setTimeout(r, 30))
+  cancel()
+  assert.equal(fetches, 1)
+  assert.equal(events.length, 1)
+  assert.equal(events[0].status, 'error')
+  assert.match(events[0].error_message, /401/)
+})
+
+test('subscribeProgress keeps retrying on server errors', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  let fetches = 0
+  globalThis.fetch = async () => {
+    fetches += 1
+    if (fetches === 1) return { ok: false, status: 500, body: null }
+    return sseResponse(['data: {"status":"done"}\n'])
+  }
+  const events = []
+  API.files.subscribeProgress('u2', (data) => events.push(data))
+  await new Promise((r) => setTimeout(r, 1100))
+  assert.equal(fetches, 2)
+  assert.deepEqual(events, [{ status: 'done' }])
 })

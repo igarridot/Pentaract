@@ -7,6 +7,9 @@ function buildAuthUrl(path, params = {}) {
   return `${API_BASE}${path}?${searchParams.toString()}`
 }
 
+// Responses to a progress subscription that no amount of retrying will fix.
+const SSE_FATAL_STATUSES = new Set([401, 403, 404])
+
 function subscribeSSE(url, token, onProgress) {
   let stopped = false
   let currentController = null
@@ -20,6 +23,15 @@ function subscribeSSE(url, token, onProgress) {
           headers: { Authorization: `Bearer ${token}` },
           signal: controller.signal,
         })
+        if (!resp.ok) {
+          if (SSE_FATAL_STATUSES.has(resp.status)) {
+            // Expired session or unknown endpoint: reconnecting cannot help.
+            stopped = true
+            onProgress({ status: 'error', error_message: `Progress stream unavailable (HTTP ${resp.status})` })
+            return
+          }
+          throw new Error(`progress stream returned ${resp.status}`)
+        }
         const reader = resp.body.getReader()
         const decoder = new TextDecoder()
         let buffer = ''
