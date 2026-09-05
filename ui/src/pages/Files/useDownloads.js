@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import API from '../../api'
 import { createOperationId } from '../../common/operation_id'
+import { isActiveDownloadStatus } from '../../common/progress'
 
 export function useDownloads(addAlert, storageId, loadTree, {
   markBulkTransferTerminal,
@@ -135,7 +136,7 @@ export function useDownloads(addAlert, storageId, loadTree, {
     downloadFramesRef.current.clear()
   }, [])
 
-  const isDownloading = downloadStates.some((d) => d.status === 'downloading')
+  const isDownloading = downloadStates.some((d) => isActiveDownloadStatus(d.status))
 
   return {
     downloadStates,

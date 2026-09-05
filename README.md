@@ -25,6 +25,7 @@ The API and UI provide file management, access control, progress tracking, and w
 - Encryption key derived from `SECRET_KEY` using **PBKDF2-HMAC-SHA256** (600000 iterations)
 - Real-time progress via SSE (upload/download/delete), including upload verification
 - Upload/download cancellation
+- Downloads survive browser "insecure download" blocks (plain HTTP): allow the file in the browser and the same progress card resumes
 - File browser: upload, download, move, create folders, search, preview
 - Directory download as a streamed ZIP archive
 - Multi-worker support (shared or storage-scoped bots)
