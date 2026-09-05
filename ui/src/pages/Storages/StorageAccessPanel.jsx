@@ -62,6 +62,7 @@ export default function StorageAccessPanel({ storageId, onClose }) {
         onDelete={handleRevoke}
       />
       <GrantAccess
+        key={`${grantOpen}:${editUser?.id ?? 'new'}`}
         open={grantOpen}
         onClose={() => { setGrantOpen(false); setEditUser(null); setCandidates([]) }}
         onGrant={handleGrant}

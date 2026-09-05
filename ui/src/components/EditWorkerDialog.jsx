@@ -1,19 +1,14 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, TextField, FormControl, InputLabel, Select, MenuItem,
 } from '@mui/material'
 
+// The parent keys this dialog by worker id so a new worker starts from fresh
+// state instead of syncing props into state.
 export default function EditWorkerDialog({ open, worker, storages, onSave, onClose }) {
-  const [name, setName] = useState('')
-  const [storageId, setStorageId] = useState('')
-
-  useEffect(() => {
-    if (worker) {
-      setName(worker.name || '')
-      setStorageId(worker.storage_id || '')
-    }
-  }, [worker])
+  const [name, setName] = useState(worker?.name || '')
+  const [storageId, setStorageId] = useState(worker?.storage_id || '')
 
   const handleSave = () => {
     onSave(worker.id, name, storageId || null)

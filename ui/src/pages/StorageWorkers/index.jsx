@@ -119,6 +119,7 @@ export default function StorageWorkers() {
       />
 
       <EditWorkerDialog
+        key={editTarget?.id ?? 'closed'}
         open={!!editTarget}
         worker={editTarget}
         storages={storages}

@@ -1,14 +1,12 @@
-import { useEffect, useState } from 'react'
+import { useState } from 'react'
 import {
   Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
 } from '@mui/material'
 
+// The parent keys this dialog by folder path so each folder starts from its
+// current name.
 export default function RenameFolderDialog({ open, folder, onRename, onClose }) {
-  const [name, setName] = useState('')
-
-  useEffect(() => {
-    if (open) setName(folder?.name || '')
-  }, [open, folder])
+  const [name, setName] = useState(folder?.name || '')
 
   const handleRename = () => {
     const trimmed = name.trim()
