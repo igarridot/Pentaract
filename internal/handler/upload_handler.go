@@ -185,19 +185,19 @@ func (h *UploadHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	tracker, uploadCtx := h.registerUpload(uploadID, storageID, fullPath, fileSize)
 
 	// The multipart part is only readable while this handler runs, so the
-	// upload goroutine signals when it has consumed the whole body.
+	// upload goroutine signals when it has consumed the whole body. The
+	// response must wait for that signal: when a handler starts writing while
+	// the request body is unread, net/http discards the rest of a body under
+	// 256 KB (maxPostHandlerReadBytes), so answering early truncated every
+	// small upload to the few KB the multipart parser had already buffered.
 	bodyConsumed := make(chan struct{})
 	go func() {
 		defer h.scheduleUploadTrackerCleanup(uploadID)
 		h.runTrackedUpload(uploadCtx, tracker, user.ID, storageID, fullPath, fileSize, &signalOnClose{ReadCloser: filePart, done: bodyConsumed}, onConflict)
 	}()
 
-	writeJSON(w, http.StatusAccepted, map[string]any{"upload_id": uploadID})
-	if f, ok := w.(http.Flusher); ok {
-		f.Flush()
-	}
-
 	<-bodyConsumed
+	writeJSON(w, http.StatusAccepted, map[string]any{"upload_id": uploadID})
 }
 
 // signalOnClose closes done once the wrapped reader is closed.
