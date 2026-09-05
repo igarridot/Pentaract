@@ -76,8 +76,15 @@ function filesPath(storageId, suffix = '') {
   return `/storages/${storageId}/files${suffix}`
 }
 
+// Encodes a storage path for use inside a URL path. Each segment is encoded
+// separately so slashes keep their meaning while "#", "?" or "%" in a file
+// name survive the round trip (encodeURI leaves "#" and "?" untouched).
+export function encodePath(path) {
+  return (path || '').split('/').map(encodeURIComponent).join('/')
+}
+
 function filesDownloadAuthUrl(storageId, mode, path, params = {}) {
-  return buildAuthUrl(filesPath(storageId, `/${mode}/${encodeURI(path || '')}`), params)
+  return buildAuthUrl(filesPath(storageId, `/${mode}/${encodePath(path)}`), params)
 }
 
 const API = {
@@ -142,7 +149,7 @@ const API = {
     },
 
     tree: (storageId, path) =>
-      apiRequest(filesPath(storageId, `/tree/${path || ''}`)),
+      apiRequest(filesPath(storageId, `/tree/${encodePath(path)}`)),
 
     downloadFileUrl: (storageId, path, downloadId) =>
       filesDownloadAuthUrl(storageId, 'download', path, { download_id: downloadId }),
@@ -154,14 +161,14 @@ const API = {
       filesDownloadAuthUrl(storageId, 'download_dir', path, { download_id: downloadId }),
 
     search: (storageId, basePath, searchPath) =>
-      apiRequest(`${filesPath(storageId, `/search/${basePath || ''}`)}?search_path=${encodeURIComponent(searchPath)}`),
+      apiRequest(`${filesPath(storageId, `/search/${encodePath(basePath)}`)}?search_path=${encodeURIComponent(searchPath)}`),
 
     delete: (storageId, path, deleteId, forceDelete = false) => {
       const params = new URLSearchParams()
       if (deleteId) params.set('delete_id', deleteId)
       if (forceDelete) params.set('force_delete', '1')
       const query = params.toString()
-      return apiRequest(`${filesPath(storageId, `/${path}`)}${query ? `?${query}` : ''}`, 'DELETE')
+      return apiRequest(`${filesPath(storageId, `/${encodePath(path)}`)}${query ? `?${query}` : ''}`, 'DELETE')
     },
 
     uploadLocal: (storageId, localPath, destPath, uploadId, onConflict) =>

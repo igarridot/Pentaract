@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import API from './index.js'
+import API, { encodePath } from './index.js'
 
 function makeStorage(token = null) {
   return {
@@ -309,4 +309,32 @@ test('files.delete builds query params for delete_id and force_delete', async ()
 
   const res = await API.files.delete('s1', 'path/to/file', 'del1', true)
   assert.equal(res, null)
+})
+
+test('encodePath escapes reserved characters per segment and keeps slashes', () => {
+  assert.equal(encodePath('folder/a b.txt'), 'folder/a%20b.txt')
+  assert.equal(encodePath('q&a/100%/#1?.txt'), 'q%26a/100%25/%231%3F.txt')
+  assert.equal(encodePath(''), '')
+  assert.equal(encodePath(undefined), '')
+})
+
+test('tree, search and delete encode the storage path', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  const seen = []
+  globalThis.fetch = async (url) => {
+    seen.push(url)
+    return { ok: true, status: 200, headers: { get: () => null }, async text() { return '[]' } }
+  }
+
+  await API.files.tree('s1', 'docs/#1')
+  await API.files.search('s1', 'docs/a b', 'x')
+  await API.files.delete('s1', 'docs/100%.txt')
+  assert.deepEqual(seen, [
+    '/api/storages/s1/files/tree/docs/%231',
+    '/api/storages/s1/files/search/docs/a%20b?search_path=x',
+    '/api/storages/s1/files/docs/100%25.txt',
+  ])
+
+  const d = API.files.downloadFileUrl('s1', 'clips/#1 (mirrored).funscript', 'd1')
+  assert.match(d, /\/download\/clips\/%231%20\(mirrored\)\.funscript\?/)
 })
