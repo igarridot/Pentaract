@@ -241,7 +241,7 @@ func TestFilesHandlerDownloadAttachmentResumesWithRange(t *testing.T) {
 	var gotProgress *service.DownloadProgress
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: fileID, Path: "clips/scene.funscript", Size: int64(len(content))}, nil
+			return &domain.File{ID: fileID, Path: "clips/scene.7z", Size: int64(len(content))}, nil
 		},
 		exactFileSizeFn: func(ctx context.Context, file *domain.File) (int64, error) { return int64(len(content)), nil },
 		downloadFileRangeToWriter: func(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *service.DownloadProgress) error {
@@ -252,7 +252,7 @@ func TestFilesHandlerDownloadAttachmentResumesWithRange(t *testing.T) {
 	})
 
 	// The browser kept 2 bytes before blocking and resumes from there.
-	req := makeFilesReq(http.MethodGet, "/?download_id=dl-resume-range", "", storageID, "clips/scene.funscript")
+	req := makeFilesReq(http.MethodGet, "/?download_id=dl-resume-range", "", storageID, "clips/scene.7z")
 	req.Header.Set("Range", "bytes=2-")
 	w := httptest.NewRecorder()
 	h.Download(w, req)
@@ -267,7 +267,7 @@ func TestFilesHandlerDownloadAttachmentResumesWithRange(t *testing.T) {
 	}
 
 	// An unsatisfiable range is answered with 416 and finishes the tracker cleanly.
-	req = makeFilesReq(http.MethodGet, "/?download_id=dl-bad-range", "", storageID, "clips/scene.funscript")
+	req = makeFilesReq(http.MethodGet, "/?download_id=dl-bad-range", "", storageID, "clips/scene.7z")
 	req.Header.Set("Range", "bytes=50-")
 	w = httptest.NewRecorder()
 	h.Download(w, req)
@@ -1106,12 +1106,12 @@ func collectDownloadProgress(t *testing.T, h *FilesHandler, downloadID string, w
 
 func TestFilesHandlerDownloadBrowserDisconnectKeepsTrackerInterrupted(t *testing.T) {
 	storageID := uuid.New().String()
-	req, cancelReq := cancelableFilesReq("/?download_id=dl-blocked", storageID, "clips/scene.funscript")
+	req, cancelReq := cancelableFilesReq("/?download_id=dl-blocked", storageID, "clips/scene.7z")
 	defer cancelReq()
 
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			// The browser blocked the download and closed the connection.
@@ -1146,13 +1146,13 @@ func TestFilesHandlerDownloadBrowserDisconnectKeepsTrackerInterrupted(t *testing
 
 func TestFilesHandlerDownloadResumedRequestReplacesInterruptedTracker(t *testing.T) {
 	storageID := uuid.New().String()
-	blockedReq, cancelBlocked := cancelableFilesReq("/?download_id=dl-resume", storageID, "clips/scene.funscript")
+	blockedReq, cancelBlocked := cancelableFilesReq("/?download_id=dl-resume", storageID, "clips/scene.7z")
 	defer cancelBlocked()
 
 	blocked := true
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			if blocked {
@@ -1172,7 +1172,7 @@ func TestFilesHandlerDownloadResumedRequestReplacesInterruptedTracker(t *testing
 	// The user allowed the download in the browser, which re-requests the same URL.
 	blocked = false
 	w := httptest.NewRecorder()
-	h.Download(w, makeFilesReq(http.MethodGet, "/?download_id=dl-resume", "", storageID, "clips/scene.funscript"))
+	h.Download(w, makeFilesReq(http.MethodGet, "/?download_id=dl-resume", "", storageID, "clips/scene.7z"))
 	if w.Code != http.StatusOK || w.Body.String() != "abc" {
 		t.Fatalf("resumed download expected 200/abc, got %d/%q", w.Code, w.Body.String())
 	}
@@ -1202,12 +1202,12 @@ func TestFilesHandlerDownloadInterruptedTrackerExpiresAsError(t *testing.T) {
 	defer func() { downloadInterruptedGracePeriod = previous }()
 
 	storageID := uuid.New().String()
-	req, cancelReq := cancelableFilesReq("/?download_id=dl-expire", storageID, "clips/scene.funscript")
+	req, cancelReq := cancelableFilesReq("/?download_id=dl-expire", storageID, "clips/scene.7z")
 	defer cancelReq()
 
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			cancelReq()
@@ -1250,12 +1250,12 @@ func TestFilesHandlerDownloadInterruptedTrackerExpiresAsError(t *testing.T) {
 
 func TestFilesHandlerCancelInterruptedDownloadReportsCancelled(t *testing.T) {
 	storageID := uuid.New().String()
-	req, cancelReq := cancelableFilesReq("/?download_id=dl-cancel", storageID, "clips/scene.funscript")
+	req, cancelReq := cancelableFilesReq("/?download_id=dl-cancel", storageID, "clips/scene.7z")
 	defer cancelReq()
 
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			cancelReq()
@@ -1284,14 +1284,14 @@ func TestFilesHandlerDownloadRealFailureStillReportsError(t *testing.T) {
 	storageID := uuid.New().String()
 	h := newTestFilesHandler(&mockFilesService{
 		getFileForDownloadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {
-			return &domain.File{ID: uuid.New(), Path: "clips/scene.funscript", Size: 3}, nil
+			return &domain.File{ID: uuid.New(), Path: "clips/scene.7z", Size: 3}, nil
 		},
 		downloadFileToWriterFn: func(ctx context.Context, file *domain.File, w io.Writer, progress *service.DownloadProgress) error {
 			return fmt.Errorf("decrypting chunk 0: %w", domain.ErrDecryptionFailed)
 		},
 	})
 
-	h.Download(httptest.NewRecorder(), makeFilesReq(http.MethodGet, "/?download_id=dl-fail", "", storageID, "clips/scene.funscript"))
+	h.Download(httptest.NewRecorder(), makeFilesReq(http.MethodGet, "/?download_id=dl-fail", "", storageID, "clips/scene.7z"))
 
 	h.downloadsMu.RLock()
 	tracker := h.downloads["dl-fail"]

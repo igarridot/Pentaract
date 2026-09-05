@@ -337,8 +337,8 @@ test('tree, search and delete encode the storage path', async () => {
     '/api/storages/s1/files/docs/100%25.txt',
   ])
 
-  const d = API.files.downloadFileUrl('s1', 'clips/#1 (mirrored).funscript', 'd1')
-  assert.match(d, /\/download\/clips\/%231%20\(mirrored\)\.funscript\?/)
+  const d = API.files.downloadFileUrl('s1', 'clips/#1 (mirrored).7z', 'd1')
+  assert.match(d, /\/download\/clips\/%231%20\(mirrored\)\.7z\?/)
 })
 
 test('subscribeProgress stops and reports an error on 401 instead of retrying forever', async () => {
