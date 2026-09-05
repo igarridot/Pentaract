@@ -42,7 +42,7 @@ func TestUploadChunkWithRetrySuccess(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
 				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
@@ -50,7 +50,7 @@ func TestUploadChunkWithRetrySuccess(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	file := &domain.File{ID: fileID, Path: "/test.txt", StorageID: storageID}
 	storage := &domain.Storage{ID: storageID, ChatID: 123, Name: "test"}
@@ -101,7 +101,7 @@ func TestUploadChunkWithRetryRetriesOnTransientFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
 				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
@@ -109,7 +109,7 @@ func TestUploadChunkWithRetryRetriesOnTransientFailure(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	file := &domain.File{ID: fileID, Path: "/retry.txt", StorageID: storageID}
 	storage := &domain.Storage{ID: storageID, ChatID: 123, Name: "test"}
@@ -145,7 +145,7 @@ func TestUploadChunkWithRetryContextCancelled(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
 				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
@@ -153,7 +153,7 @@ func TestUploadChunkWithRetryContextCancelled(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	file := &domain.File{ID: fileID, Path: "/cancel.txt", StorageID: storageID}
 	storage := &domain.Storage{ID: storageID, ChatID: 123, Name: "test"}
@@ -208,7 +208,7 @@ func TestVerifySingleChunkContentMismatch(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: &fakeWorkersRepo{},
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -217,7 +217,7 @@ func TestVerifySingleChunkContentMismatch(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	// Provide a hash for "different-data" — verification should fail
 	differentHash := sha256Hash([]byte("different-data"))
@@ -272,7 +272,7 @@ func TestVerifySingleChunkRetriesTransientDownloadFailure(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: &fakeWorkersRepo{},
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -281,7 +281,7 @@ func TestVerifySingleChunkRetriesTransientDownloadFailure(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	result := uploadedChunkResult{
 		TelegramFileID:    "FILE_ID",
@@ -329,7 +329,7 @@ func TestUploadChunkWithRetryBackoffRespectsContext(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, sid uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
 				return &repository.WorkerToken{Token: "TOKEN", Name: "w1"}, nil
@@ -337,7 +337,7 @@ func TestUploadChunkWithRetryBackoffRespectsContext(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	file := &domain.File{ID: fileID, Path: "/backoff.txt", StorageID: storageID}
 	storage := &domain.Storage{ID: storageID, ChatID: 123, Name: "test"}

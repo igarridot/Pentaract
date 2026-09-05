@@ -12,8 +12,8 @@ import (
 	"github.com/Dominux/Pentaract/internal/repository"
 )
 
-func (m *StorageManager) downloadChunkWithWorker(ctx context.Context, storage domain.Storage, chunk domain.FileChunk, wt repository.WorkerToken) ([]byte, error) {
-	data, err := m.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
+func (d *ChunkDownloader) downloadChunkWithWorker(ctx context.Context, storage domain.Storage, chunk domain.FileChunk, wt repository.WorkerToken) ([]byte, error) {
+	data, err := d.tgClient.Download(ctx, wt.Token, chunk.TelegramFileID)
 	if err == nil {
 		return data, nil
 	}
@@ -21,18 +21,18 @@ func (m *StorageManager) downloadChunkWithWorker(ctx context.Context, storage do
 		return nil, err
 	}
 
-	fileID, resolveErr := m.tgClient.ResolveFileIDByMessage(ctx, wt.Token, storage.ChatID, chunk.TelegramMessageID)
+	fileID, resolveErr := d.tgClient.ResolveFileIDByMessage(ctx, wt.Token, storage.ChatID, chunk.TelegramMessageID)
 	if resolveErr != nil {
 		return nil, fmt.Errorf("%w: %v (original: %v)", domain.ErrTelegramResolveFailed, resolveErr, err)
 	}
 
-	data, err = m.tgClient.Download(ctx, wt.Token, fileID)
+	data, err = d.tgClient.Download(ctx, wt.Token, fileID)
 	if err != nil {
 		return nil, err
 	}
 
 	if fileID != chunk.TelegramFileID && chunk.ID != uuid.Nil {
-		if updateErr := m.filesRepo.UpdateChunkTelegramFileID(ctx, chunk.ID, fileID); updateErr != nil {
+		if updateErr := d.filesRepo.UpdateChunkTelegramFileID(ctx, chunk.ID, fileID); updateErr != nil {
 			slog.Warn("failed updating chunk file_id", "position", chunk.Position, "err", updateErr)
 		}
 	}
@@ -40,13 +40,13 @@ func (m *StorageManager) downloadChunkWithWorker(ctx context.Context, storage do
 	return data, nil
 }
 
-func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
-	wt, err := m.scheduler.GetToken(ctx, storage.ID)
+func (d *ChunkDownloader) downloadChunk(ctx context.Context, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
+	wt, err := d.scheduler.GetToken(ctx, storage.ID)
 	if err != nil {
 		return nil, fmt.Errorf("getting token for chunk %d: %w", chunk.Position, err)
 	}
 
-	data, err := m.downloadChunkWithWorker(ctx, storage, chunk, *wt)
+	data, err := d.downloadChunkWithWorker(ctx, storage, chunk, *wt)
 	if err == nil {
 		return data, nil
 	}
@@ -57,7 +57,7 @@ func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Stora
 		return nil, err
 	}
 
-	workers, listErr := m.workersRepo.ListTokensByStorage(ctx, storage.ID)
+	workers, listErr := d.workersRepo.ListTokensByStorage(ctx, storage.ID)
 	if listErr != nil {
 		return nil, fmt.Errorf("fallback workers lookup failed after getFile error: %w", listErr)
 	}
@@ -67,7 +67,7 @@ func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Stora
 		if candidate.Token == wt.Token {
 			continue
 		}
-		data, tryErr := m.downloadChunkWithWorker(ctx, storage, chunk, candidate)
+		data, tryErr := d.downloadChunkWithWorker(ctx, storage, chunk, candidate)
 		if tryErr == nil {
 			slog.Info("chunk recovered via fallback worker", "position", chunk.Position, "worker", candidate.Name)
 			return data, nil
@@ -83,10 +83,10 @@ func (m *StorageManager) downloadChunk(ctx context.Context, storage domain.Stora
 
 // downloadChunkWithRetry wraps downloadChunk with retry + exponential backoff.
 // All chunk downloads go through the scheduler for rate-limited token acquisition.
-func (m *StorageManager) downloadChunkWithRetry(ctx context.Context, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
+func (d *ChunkDownloader) downloadChunkWithRetry(ctx context.Context, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
 	var lastErr error
 	for attempt := 1; attempt <= DownloadChunkMaxAttempts; attempt++ {
-		data, err := m.downloadChunk(ctx, storage, chunk)
+		data, err := d.downloadChunk(ctx, storage, chunk)
 		if err == nil {
 			return data, nil
 		}
@@ -104,32 +104,32 @@ func (m *StorageManager) downloadChunkWithRetry(ctx context.Context, storage dom
 	return nil, lastErr
 }
 
-func (m *StorageManager) downloadAndDecryptChunk(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
-	data, err := m.downloadChunkWithRetry(ctx, storage, chunk)
+func (d *ChunkDownloader) downloadAndDecryptChunk(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
+	data, err := d.downloadChunkWithRetry(ctx, storage, chunk)
 	if err != nil {
 		return nil, fmt.Errorf("downloading chunk %d: %w", chunk.Position, err)
 	}
-	data, err = m.chunkCipher.DecryptChunk(fileID, chunk.Position, data)
+	data, err = d.cipher.DecryptChunk(fileID, chunk.Position, data)
 	if err != nil {
 		return nil, fmt.Errorf("decrypting chunk %d: %w", chunk.Position, err)
 	}
 	return data, nil
 }
 
-func (m *StorageManager) downloadAndDecryptChunkCached(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
+func (d *ChunkDownloader) downloadAndDecryptChunkCached(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
 	cacheKey := streamChunkCacheKey{fileID: fileID, position: chunk.Position}
-	cache := m.getStreamChunkCache()
+	cache := d.cache
 	if data, ok := cache.get(cacheKey); ok {
 		return data, nil
 	}
 
 	loadKey := fmt.Sprintf("%s:%d", fileID.String(), chunk.Position)
-	value, err, _ := m.streamChunkLoads.Do(loadKey, func() (interface{}, error) {
+	value, err, _ := d.loads.Do(loadKey, func() (interface{}, error) {
 		if data, ok := cache.get(cacheKey); ok {
 			return data, nil
 		}
 
-		data, err := m.downloadAndDecryptChunk(ctx, fileID, storage, chunk)
+		data, err := d.downloadAndDecryptChunk(ctx, fileID, storage, chunk)
 		if err != nil {
 			return nil, err
 		}
@@ -153,7 +153,7 @@ type chunkDataLoader func(ctx context.Context, fileID uuid.UUID, storage domain.
 
 // downloadChunksInOrder loads chunks in parallel (DownloadChunkParallelism)
 // and hands them to writeChunk strictly in position order.
-func (m *StorageManager) downloadChunksInOrder(
+func (d *ChunkDownloader) downloadChunksInOrder(
 	ctx context.Context,
 	file *domain.File,
 	storage *domain.Storage,
@@ -175,8 +175,8 @@ func (m *StorageManager) downloadChunksInOrder(
 
 // writeWholeFile streams every chunk of file to w in order, loading chunks
 // with loadChunk. label names the operation in logs.
-func (m *StorageManager) writeWholeFile(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, loadChunk chunkDataLoader, label string) error {
-	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
+func (d *ChunkDownloader) writeWholeFile(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, loadChunk chunkDataLoader, label string) error {
+	chunks, err := d.filesRepo.ListChunks(ctx, file.ID)
 	if err != nil {
 		return fmt.Errorf("listing chunks: %w", err)
 	}
@@ -186,14 +186,14 @@ func (m *StorageManager) writeWholeFile(ctx context.Context, file *domain.File, 
 
 	progress.setTotalsIfUnset(int64(len(chunks)), file.Size)
 
-	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
+	storage, err := d.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
 		return fmt.Errorf("getting storage: %w", err)
 	}
 
 	slog.Info("starting "+label, "file", file.Path, "chunks", len(chunks), "storage", storage.Name, "chat", storage.Name)
 
-	err = m.downloadChunksInOrder(ctx, file, storage, chunks, loadChunk, func(chunk domain.FileChunk, data []byte) error {
+	err = d.downloadChunksInOrder(ctx, file, storage, chunks, loadChunk, func(chunk domain.FileChunk, data []byte) error {
 		if _, err := w.Write(data); err != nil {
 			return fmt.Errorf("writing chunk %d: %w", chunk.Position, err)
 		}
@@ -211,21 +211,21 @@ func (m *StorageManager) writeWholeFile(ctx context.Context, file *domain.File, 
 // DownloadToWriter streams a file's chunks sequentially to the given writer.
 // Chunks are always fetched from Telegram (no cache), since a full download
 // reads each chunk exactly once.
-func (m *StorageManager) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
-	return m.writeWholeFile(ctx, file, w, progress, m.downloadAndDecryptChunk, "download")
+func (d *ChunkDownloader) DownloadToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+	return d.writeWholeFile(ctx, file, w, progress, d.downloadAndDecryptChunk, "download")
 }
 
 // StreamToWriter is the streaming path used by inline previews and media
 // playback. It reuses cached decrypted chunks, which helps with buffering and
 // seek-heavy clients such as Kodi.
-func (m *StorageManager) StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
-	return m.writeWholeFile(ctx, file, w, progress, m.downloadAndDecryptChunkCached, "stream")
+func (d *ChunkDownloader) StreamToWriter(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress) error {
+	return d.writeWholeFile(ctx, file, w, progress, d.downloadAndDecryptChunkCached, "stream")
 }
 
 // ExactFileSize derives the exact file size from chunk count plus the actual
 // plaintext bytes in the last chunk.
-func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (int64, error) {
-	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
+func (d *ChunkDownloader) ExactFileSize(ctx context.Context, file *domain.File) (int64, error) {
+	chunks, err := d.filesRepo.ListChunks(ctx, file.ID)
 	if err != nil {
 		return 0, fmt.Errorf("listing chunks: %w", err)
 	}
@@ -233,13 +233,13 @@ func (m *StorageManager) ExactFileSize(ctx context.Context, file *domain.File) (
 		return 0, domain.ErrNotFound("file chunks")
 	}
 
-	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
+	storage, err := d.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
 		return 0, fmt.Errorf("getting storage: %w", err)
 	}
 
 	lastChunk := chunks[len(chunks)-1]
-	lastChunkData, err := m.downloadAndDecryptChunkCached(ctx, file.ID, *storage, lastChunk)
+	lastChunkData, err := d.downloadAndDecryptChunkCached(ctx, file.ID, *storage, lastChunk)
 	if err != nil {
 		return 0, err
 	}
@@ -279,12 +279,12 @@ func inferRangeChunkWindow(start, end, totalSize int64, chunksCount int) (int, i
 }
 
 // DownloadRangeToWriter streams only the requested byte range [start, end] (inclusive).
-func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error {
+func (d *ChunkDownloader) DownloadRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error {
 	if start < 0 || end < start || end >= totalSize {
 		return fmt.Errorf("invalid range %d-%d for file size %d", start, end, totalSize)
 	}
 
-	chunks, err := m.filesRepo.ListChunks(ctx, file.ID)
+	chunks, err := d.filesRepo.ListChunks(ctx, file.ID)
 	if err != nil {
 		return fmt.Errorf("listing chunks: %w", err)
 	}
@@ -292,7 +292,7 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 		return domain.ErrNotFound("file chunks")
 	}
 
-	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
+	storage, err := d.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
 		return fmt.Errorf("getting storage: %w", err)
 	}
@@ -315,7 +315,7 @@ func (m *StorageManager) DownloadRangeToWriter(ctx context.Context, file *domain
 		progress.TotalChunks = int64(len(rangeChunks))
 	}
 
-	return m.downloadChunksInOrder(ctx, file, storage, rangeChunks, m.downloadAndDecryptChunkCached, func(chunk domain.FileChunk, data []byte) error {
+	return d.downloadChunksInOrder(ctx, file, storage, rangeChunks, d.downloadAndDecryptChunkCached, func(chunk domain.FileChunk, data []byte) error {
 		chunkStart := offset
 		chunkEndExclusive := chunkStart + int64(len(data))
 		offset = chunkEndExclusive

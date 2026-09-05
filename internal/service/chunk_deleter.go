@@ -12,15 +12,15 @@ import (
 )
 
 // DeleteFromTelegram deletes chunk messages from Telegram for the given chunks.
-func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error {
+func (x *ChunkDeleter) DeleteFromTelegram(ctx context.Context, storage domain.Storage, chunks []domain.FileChunk, progress *DeleteProgress) error {
 	slog.Info("removing chunks from telegram", "chunks", len(chunks), "chat", storage.Name)
 
 	g, gctx := errgroup.WithContext(ctx)
 	g.SetLimit(DeleteParallelism)
 
 	fallbackWorkers := make([]repository.WorkerToken, 0)
-	if m.workersRepo != nil {
-		workers, err := m.workersRepo.ListTokensByStorage(ctx, storage.ID)
+	if x.workersRepo != nil {
+		workers, err := x.workersRepo.ListTokensByStorage(ctx, storage.ID)
 		if err != nil {
 			slog.Warn("failed listing workers for delete, continuing with scheduler-selected workers only", "storage_id", storage.ID, "err", err)
 		} else {
@@ -41,7 +41,7 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 			continue
 		}
 		g.Go(func() error {
-			wt, err := m.scheduler.GetToken(gctx, storage.ID)
+			wt, err := x.scheduler.GetToken(gctx, storage.ID)
 			if err != nil {
 				return fmt.Errorf("getting token for delete message %d: %w", c.TelegramMessageID, err)
 			}
@@ -63,7 +63,7 @@ func (m *StorageManager) DeleteFromTelegram(ctx context.Context, storage domain.
 				} else {
 					slog.Warn("retrying message delete via fallback worker", "message_id", c.TelegramMessageID, "worker", candidate.Name, "chat", storage.Name)
 				}
-				if err := m.tgClient.DeleteMessage(gctx, candidate.Token, storage.ChatID, c.TelegramMessageID); err == nil {
+				if err := x.tgClient.DeleteMessage(gctx, candidate.Token, storage.ChatID, c.TelegramMessageID); err == nil {
 					progress.chunkDeleted()
 					return nil
 				} else {

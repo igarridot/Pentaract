@@ -5,7 +5,6 @@ import (
 	"crypto/sha256"
 	"errors"
 	"fmt"
-	"sync"
 	"sync/atomic"
 	"time"
 
@@ -32,16 +31,55 @@ type (
 	}
 )
 
+// chunkTransport is the Telegram plumbing every chunk operation needs.
+type chunkTransport struct {
+	workersRepo workersLister
+	scheduler   *WorkerScheduler
+	tgClient    *telegram.Client
+	cipher      *ChunkCipher
+}
+
+// ChunkDeleter removes chunk messages from Telegram.
+type ChunkDeleter struct {
+	*chunkTransport
+}
+
+// ChunkDownloader fetches, decrypts and orders chunks for downloads, streams
+// and byte-range requests, with a small cache for seek-heavy playback.
+type ChunkDownloader struct {
+	*chunkTransport
+	filesRepo    chunksRepository
+	storagesRepo storageGetter
+	cache        *streamChunkCache
+	loads        singleflight.Group
+}
+
+// ChunkUploader splits, encrypts, uploads and verifies chunks, persisting the
+// records once the whole file is on Telegram.
+type ChunkUploader struct {
+	*chunkTransport
+	filesRepo    chunksRepository
+	storagesRepo storageGetter
+	downloader   *ChunkDownloader // verification re-downloads what was uploaded
+	deleter      *ChunkDeleter    // failed uploads are cleaned up
+}
+
+// StorageManager is the facade the services depend on: one object exposing
+// upload, download and delete of chunked files.
 type StorageManager struct {
-	filesRepo          chunksRepository
-	storagesRepo       storageGetter
-	workersRepo        workersLister
-	scheduler          *WorkerScheduler
-	tgClient           *telegram.Client
-	chunkCipher        *ChunkCipher
-	streamChunkCache   *streamChunkCache
-	streamChunkCacheMu sync.Mutex
-	streamChunkLoads   singleflight.Group
+	*ChunkUploader
+	*ChunkDownloader
+	*ChunkDeleter
+}
+
+// storageDeps groups the collaborators shared by the chunk services.
+type storageDeps struct {
+	filesRepo    chunksRepository
+	storagesRepo storageGetter
+	workersRepo  workersLister
+	scheduler    *WorkerScheduler
+	tgClient     *telegram.Client
+	chunkCipher  *ChunkCipher
 }
 
 func NewStorageManager(
@@ -52,14 +90,38 @@ func NewStorageManager(
 	tgClient *telegram.Client,
 	chunkCipher *ChunkCipher,
 ) *StorageManager {
-	return &StorageManager{
+	return newStorageManager(storageDeps{
 		filesRepo:    filesRepo,
 		storagesRepo: storagesRepo,
 		workersRepo:  workersRepo,
 		scheduler:    scheduler,
 		tgClient:     tgClient,
 		chunkCipher:  chunkCipher,
+	})
+}
+
+func newStorageManager(deps storageDeps) *StorageManager {
+	transport := &chunkTransport{
+		workersRepo: deps.workersRepo,
+		scheduler:   deps.scheduler,
+		tgClient:    deps.tgClient,
+		cipher:      deps.chunkCipher,
 	}
+	deleter := &ChunkDeleter{chunkTransport: transport}
+	downloader := &ChunkDownloader{
+		chunkTransport: transport,
+		filesRepo:      deps.filesRepo,
+		storagesRepo:   deps.storagesRepo,
+		cache:          newStreamChunkCache(defaultStreamChunkCacheMaxEntries, defaultStreamChunkCacheMaxBytes),
+	}
+	uploader := &ChunkUploader{
+		chunkTransport: transport,
+		filesRepo:      deps.filesRepo,
+		storagesRepo:   deps.storagesRepo,
+		downloader:     downloader,
+		deleter:        deleter,
+	}
+	return &StorageManager{ChunkUploader: uploader, ChunkDownloader: downloader, ChunkDeleter: deleter}
 }
 
 func isGetFileFailure(err error) bool {
@@ -104,17 +166,6 @@ func sleepBackoff(ctx context.Context, attempt int) error {
 	case <-time.After(backoff):
 		return nil
 	}
-}
-
-func (m *StorageManager) getStreamChunkCache() *streamChunkCache {
-	m.streamChunkCacheMu.Lock()
-	defer m.streamChunkCacheMu.Unlock()
-
-	if m.streamChunkCache == nil {
-		m.streamChunkCache = newStreamChunkCache(defaultStreamChunkCacheMaxEntries, defaultStreamChunkCacheMaxBytes)
-	}
-
-	return m.streamChunkCache
 }
 
 // UploadProgress tracks chunk upload progress. All methods are safe to call
@@ -218,17 +269,17 @@ type uploadedChunkResult struct {
 // uploadParallelism calculates optimal upload concurrency based on
 // available workers and rate limit, avoiding contention when few workers
 // are configured.
-func (m *StorageManager) uploadParallelism(ctx context.Context, storageID uuid.UUID) int {
-	if m.workersRepo == nil || m.scheduler == nil {
+func (u *ChunkUploader) uploadParallelism(ctx context.Context, storageID uuid.UUID) int {
+	if u.workersRepo == nil || u.scheduler == nil {
 		return UploadChunkParallelism
 	}
-	tokens, err := m.workersRepo.ListTokensByStorage(ctx, storageID)
+	tokens, err := u.workersRepo.ListTokensByStorage(ctx, storageID)
 	if err != nil || len(tokens) == 0 {
 		return UploadChunkParallelism
 	}
 	// workers * rateLimit / 6 gives a reasonable concurrency:
 	// 2 workers * 18 rpm / 6 = 6;  4 workers * 18 rpm / 6 = 12 (capped at 10)
-	p := len(tokens) * m.scheduler.RateLimit() / 6
+	p := len(tokens) * u.scheduler.RateLimit() / 6
 	if p < 2 {
 		p = 2
 	}

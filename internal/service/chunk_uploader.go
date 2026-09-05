@@ -37,8 +37,8 @@ func shouldRetryChunkUpload(ctx context.Context, err error) bool {
 	return !contextAborted(ctx)
 }
 
-func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.File, storage *domain.Storage, position int16, chunkData []byte, plainHash [sha256.Size]byte) (uploadedChunkResult, error) {
-	encryptedChunkData, releaseEncBuf, err := m.chunkCipher.EncryptChunk(file.ID, position, chunkData)
+func (u *ChunkUploader) uploadChunkWithRetry(ctx context.Context, file *domain.File, storage *domain.Storage, position int16, chunkData []byte, plainHash [sha256.Size]byte) (uploadedChunkResult, error) {
+	encryptedChunkData, releaseEncBuf, err := u.cipher.EncryptChunk(file.ID, position, chunkData)
 	if err != nil {
 		return uploadedChunkResult{}, fmt.Errorf("encrypting chunk %d: %w", position, err)
 	}
@@ -50,14 +50,14 @@ func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.
 
 	filename := telegram.GenerateChunkFilename(file.ID, int(position))
 	for attempt := 1; attempt <= UploadChunkMaxAttempts; attempt++ {
-		wt, err := m.scheduler.GetToken(ctx, storage.ID)
+		wt, err := u.scheduler.GetToken(ctx, storage.ID)
 		if err != nil {
 			return uploadedChunkResult{}, fmt.Errorf("getting token for chunk %d: %w", position, err)
 		}
 
 		slog.Info("uploading chunk", "position", position, "file", file.Path, "worker", wt.Name, "storage", storage.Name, "attempt", attempt, "max_attempts", UploadChunkMaxAttempts)
 
-		result, err := m.tgClient.Upload(ctx, wt.Token, storage.ChatID, encryptedChunkData, filename)
+		result, err := u.tgClient.Upload(ctx, wt.Token, storage.ChatID, encryptedChunkData, filename)
 		if err == nil {
 			return uploadedChunkResult{
 				TelegramFileID:    result.FileID,
@@ -83,7 +83,7 @@ func (m *StorageManager) uploadChunkWithRetry(ctx context.Context, file *domain.
 
 // verifySingleChunk downloads and hash-checks a single uploaded chunk.
 // Returns nil on success, error on failure (after retries).
-func (m *StorageManager) verifySingleChunk(ctx context.Context, file *domain.File, storage domain.Storage, result uploadedChunkResult) error {
+func (u *ChunkUploader) verifySingleChunk(ctx context.Context, file *domain.File, storage domain.Storage, result uploadedChunkResult) error {
 	chunk := domain.FileChunk{
 		FileID:            file.ID,
 		TelegramFileID:    result.TelegramFileID,
@@ -105,7 +105,7 @@ func (m *StorageManager) verifySingleChunk(ctx context.Context, file *domain.Fil
 		}
 
 		chunkStartedAt := time.Now()
-		data, err := m.downloadAndDecryptChunkCached(ctx, file.ID, storage, chunk)
+		data, err := u.downloader.downloadAndDecryptChunkCached(ctx, file.ID, storage, chunk)
 		if err != nil {
 			if contextAborted(ctx) {
 				return ctx.Err()
@@ -138,8 +138,8 @@ func (m *StorageManager) verifySingleChunk(ctx context.Context, file *domain.Fil
 // Phases: parallel upload -> sequential retry of failed chunks -> drain the
 // verifier -> retry transiently failed verifications -> persist. Any failure
 // deletes the chunks already sent to Telegram.
-func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
-	storage, err := m.storagesRepo.GetByID(ctx, file.StorageID)
+func (u *ChunkUploader) Upload(ctx context.Context, file *domain.File, reader io.Reader, progress *UploadProgress) error {
+	storage, err := u.storagesRepo.GetByID(ctx, file.StorageID)
 	if err != nil {
 		return fmt.Errorf("getting storage: %w", err)
 	}
@@ -147,16 +147,16 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 	slog.Info("starting upload", "file", file.Path, "storage", storage.Name, "chat", storage.Name)
 	progress.expectedChunks()
 
-	parallelism := m.uploadParallelism(ctx, storage.ID)
+	parallelism := u.uploadParallelism(ctx, storage.ID)
 	slog.Info("upload parallelism", "file", file.Path, "parallelism", parallelism)
 
 	run := &uploadRun{
-		m:        m,
+		u:        u,
 		ctx:      ctx,
 		file:     file,
 		storage:  storage,
 		progress: progress,
-		verifier: m.startChunkVerifier(ctx, file, *storage, progress, parallelism),
+		verifier: u.startChunkVerifier(ctx, file, *storage, progress, parallelism),
 	}
 
 	if err := run.uploadChunks(reader, parallelism); err != nil {
@@ -183,7 +183,7 @@ func (m *StorageManager) Upload(ctx context.Context, file *domain.File, reader i
 
 // uploadRun holds the state shared by the phases of a single Upload call.
 type uploadRun struct {
-	m        *StorageManager
+	u        *ChunkUploader
 	ctx      context.Context
 	file     *domain.File
 	storage  *domain.Storage
@@ -237,7 +237,7 @@ func (r *uploadRun) uploadChunks(reader io.Reader, parallelism int) error {
 }
 
 func (r *uploadRun) uploadChunk(ctx context.Context, position int16, data []byte, hash [sha256.Size]byte) error {
-	result, err := r.m.uploadChunkWithRetry(ctx, r.file, r.storage, position, data, hash)
+	result, err := r.u.uploadChunkWithRetry(ctx, r.file, r.storage, position, data, hash)
 	if err != nil {
 		if contextAborted(ctx) {
 			return err
@@ -277,7 +277,7 @@ func (r *uploadRun) retryFailedChunks() error {
 		if err := r.ctx.Err(); err != nil {
 			return err
 		}
-		result, err := r.m.uploadChunkWithRetry(r.ctx, r.file, r.storage, fc.position, fc.data, fc.plainHash)
+		result, err := r.u.uploadChunkWithRetry(r.ctx, r.file, r.storage, fc.position, fc.data, fc.plainHash)
 		if err != nil {
 			return fmt.Errorf("second-round upload chunk %d: %w", fc.position, err)
 		}
@@ -313,7 +313,7 @@ func (r *uploadRun) retryFailedVerifications() ([]int16, error) {
 			if err := r.ctx.Err(); err != nil {
 				return nil, err
 			}
-			err := r.m.verifySingleChunk(r.ctx, r.file, *r.storage, result)
+			err := r.u.verifySingleChunk(r.ctx, r.file, *r.storage, result)
 			switch {
 			case err == nil:
 				slog.Info("chunk verified on retry", "position", result.Position, "file", r.file.Path, "round", round)
@@ -355,7 +355,7 @@ func (r *uploadRun) persist() error {
 		}
 	}
 
-	if err := r.m.filesRepo.CreateChunksAndMarkUploaded(r.ctx, r.file.ID, fileChunks); err != nil {
+	if err := r.u.filesRepo.CreateChunksAndMarkUploaded(r.ctx, r.file.ID, fileChunks); err != nil {
 		r.cleanupAll()
 		return fmt.Errorf("saving verified chunks: %w", err)
 	}
@@ -389,7 +389,7 @@ func (r *uploadRun) cleanupAll() {
 	}
 	storage := *r.storage
 	go func() {
-		if err := r.m.DeleteFromTelegram(context.Background(), storage, chunks, nil); err != nil {
+		if err := r.u.deleter.DeleteFromTelegram(context.Background(), storage, chunks, nil); err != nil {
 			slog.Error("cleanup after failed upload returned error", "err", err)
 		}
 	}()
@@ -417,7 +417,7 @@ func closeOnCancel(ctx context.Context, reader io.Reader) func() {
 // upload is still in flight. Transient failures trip a circuit breaker and are
 // queued for a later retry round; a hash mismatch fails the verifier.
 type chunkVerifier struct {
-	m        *StorageManager
+	u        *ChunkUploader
 	ctx      context.Context
 	file     *domain.File
 	storage  domain.Storage
@@ -437,11 +437,11 @@ type chunkVerifier struct {
 // startChunkVerifier runs the verification pipeline with at most
 // PipelineVerifyParallelism concurrent verifications, so it does not saturate
 // the Telegram API while uploads are still running.
-func (m *StorageManager) startChunkVerifier(ctx context.Context, file *domain.File, storage domain.Storage, progress *UploadProgress, buffer int) *chunkVerifier {
+func (u *ChunkUploader) startChunkVerifier(ctx context.Context, file *domain.File, storage domain.Storage, progress *UploadProgress, buffer int) *chunkVerifier {
 	group, vctx := errgroup.WithContext(ctx)
 	group.SetLimit(PipelineVerifyParallelism)
 	v := &chunkVerifier{
-		m:        m,
+		u:        u,
 		ctx:      vctx,
 		file:     file,
 		storage:  storage,
@@ -482,7 +482,7 @@ func (v *chunkVerifier) submit(ctx context.Context, result uploadedChunkResult) 
 }
 
 func (v *chunkVerifier) verify(result uploadedChunkResult) error {
-	err := v.m.verifySingleChunk(v.ctx, v.file, v.storage, result)
+	err := v.u.verifySingleChunk(v.ctx, v.file, v.storage, result)
 	if err == nil {
 		v.cb.RecordSuccess()
 		v.progress.chunkVerified()

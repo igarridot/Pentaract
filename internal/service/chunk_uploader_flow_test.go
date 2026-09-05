@@ -162,14 +162,14 @@ func (f *fakeTelegram) deletedCount() int {
 
 func newUploadTestManager(srvURL string, storageID uuid.UUID, cipher *ChunkCipher) (*StorageManager, *fakeChunksRepo) {
 	repo := newFakeChunksRepo()
-	return &StorageManager{
+	return newStorageManager(storageDeps{
 		filesRepo:    repo,
 		storagesRepo: fakeStorageGetter{storage: domain.Storage{ID: storageID, Name: "Main", ChatID: 123}},
 		workersRepo:  &fakeWorkersRepo{},
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srvURL),
 		chunkCipher:  cipher,
-	}, repo
+	}), repo
 }
 
 func TestUploadStreamsChunksVerifiesAndPersistsInOrder(t *testing.T) {
@@ -290,7 +290,7 @@ func TestUploadCancelledContextAbortsWithoutPersisting(t *testing.T) {
 
 func TestChunkVerifierSubmitDoesNotBlockOnceStopped(t *testing.T) {
 	ctx, cancel := context.WithCancel(context.Background())
-	m := &StorageManager{}
+	m := newStorageManager(storageDeps{})
 	v := m.startChunkVerifier(ctx, &domain.File{}, domain.Storage{}, nil, 0)
 
 	// Trip the breaker and cancel: the consumer gives up while waiting for

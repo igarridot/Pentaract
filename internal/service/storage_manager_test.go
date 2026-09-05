@@ -94,13 +94,13 @@ func TestStorageManagerDownloadToWriter(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(mock),
 		storagesRepo: repository.NewStoragesRepo(mock),
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srv.URL),
 		chunkCipher:  cipher,
-	}
+	})
 
 	var out bytes.Buffer
 	progress := &DownloadProgress{}
@@ -208,7 +208,7 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(filesMock),
 		storagesRepo: repository.NewStoragesRepo(filesMock),
 		workersRepo:  repository.NewStorageWorkersRepo(workersMock),
@@ -219,7 +219,7 @@ func TestStorageManagerStreamToWriterParallelizesChunksAndPreservesOrder(t *test
 		}, 10),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -337,7 +337,7 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(filesMock),
 		storagesRepo: repository.NewStoragesRepo(filesMock),
 		workersRepo:  repository.NewStorageWorkersRepo(workersMock),
@@ -348,7 +348,7 @@ func TestStorageManagerDownloadToWriterParallelizesChunksAndPreservesOrder(t *te
 		}, 10),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -469,7 +469,7 @@ func TestStorageManagerDownloadRangeToWriterUsesAllWorkersForMultiChunkStream(t 
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(filesMock),
 		storagesRepo: repository.NewStoragesRepo(filesMock),
 		workersRepo:  repository.NewStorageWorkersRepo(workersMock),
@@ -480,7 +480,7 @@ func TestStorageManagerDownloadRangeToWriterUsesAllWorkersForMultiChunkStream(t 
 		}, 10),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: cipher,
-	}
+	})
 
 	ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
 	defer cancel()
@@ -552,13 +552,13 @@ func TestStorageManagerExactFileSizeAndRange(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(mock),
 		storagesRepo: repository.NewStoragesRepo(mock),
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srv.URL),
 		chunkCipher:  cipher,
-	}
+	})
 
 	size, err := m.ExactFileSize(context.Background(), &domain.File{ID: fileID, StorageID: storageID})
 	if err != nil || size != int64(len(plain)) {
@@ -624,13 +624,13 @@ func TestStorageManagerStreamToWriterPrimesChunkCacheForLaterSeek(t *testing.T) 
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(mock),
 		storagesRepo: repository.NewStoragesRepo(mock),
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srv.URL),
 		chunkCipher:  cipher,
-	}
+	})
 
 	var fullOut bytes.Buffer
 	if err := m.StreamToWriter(context.Background(), &domain.File{
@@ -711,13 +711,13 @@ func TestStorageManagerDownloadToWriterDoesNotPrimeChunkCache(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(mock),
 		storagesRepo: repository.NewStoragesRepo(mock),
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srv.URL),
 		chunkCipher:  cipher,
-	}
+	})
 
 	var fullOut bytes.Buffer
 	if err := m.DownloadToWriter(context.Background(), &domain.File{
@@ -805,13 +805,13 @@ func TestStorageManagerDownloadRangeToWriterSeekSkipsEarlierChunks(t *testing.T)
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(mock),
 		storagesRepo: repository.NewStoragesRepo(mock),
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srv.URL),
 		chunkCipher:  cipher,
-	}
+	})
 
 	var out bytes.Buffer
 	progress := &DownloadProgress{}
@@ -873,13 +873,13 @@ func TestStorageManagerExactFileSizeUsesOnlyLastChunk(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(mock),
 		storagesRepo: repository.NewStoragesRepo(mock),
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srv.URL),
 		chunkCipher:  cipher,
-	}
+	})
 
 	size, err := m.ExactFileSize(context.Background(), &domain.File{ID: fileID, StorageID: storageID})
 	if err != nil {
@@ -960,13 +960,13 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(mock),
 		storagesRepo: repository.NewStoragesRepo(mock),
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srv.URL),
 		chunkCipher:  NewChunkCipher("secret"),
-	}
+	})
 
 	progress := &UploadProgress{TotalBytes: 3}
 	err = m.Upload(context.Background(), &domain.File{ID: fileID, Path: "a.txt", Size: 3, StorageID: storageID}, strings.NewReader("abc"), progress)
@@ -988,7 +988,7 @@ func TestStorageManagerUploadAndDeleteFromTelegram(t *testing.T) {
 	if len(uploadedChunk) > MaxTelegramGetFileBytes {
 		t.Fatalf("uploaded encrypted chunk exceeds getFile limit: %d", len(uploadedChunk))
 	}
-	decrypted, err := m.chunkCipher.DecryptChunk(fileID, 0, uploadedChunk)
+	decrypted, err := m.ChunkUploader.cipher.DecryptChunk(fileID, 0, uploadedChunk)
 	if err != nil {
 		t.Fatalf("decrypt uploaded chunk failed: %v", err)
 	}
@@ -1125,13 +1125,13 @@ func TestStorageManagerUploadRetriesOnlyFailedChunk(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(mock),
 		storagesRepo: repository.NewStoragesRepo(mock),
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srv.URL),
 		chunkCipher:  cipher,
-	}
+	})
 
 	progress := &UploadProgress{TotalBytes: totalSize}
 	reader := io.MultiReader(bytes.NewReader(plain0), bytes.NewReader(plain1))
@@ -1202,13 +1202,13 @@ func TestStorageManagerUploadVerifiesRoundTripAndCleansUpOnMismatch(t *testing.T
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:    repository.NewFilesRepo(mock),
 		storagesRepo: repository.NewStoragesRepo(mock),
 		scheduler:    NewWorkerScheduler(&fakeManagerSchedulerRepo{}, 1),
 		tgClient:     telegram.NewClient(srv.URL),
 		chunkCipher:  cipher,
-	}
+	})
 
 	err = m.Upload(context.Background(), &domain.File{ID: fileID, Path: "broken.txt", Size: 3, StorageID: storageID}, strings.NewReader("abc"), &UploadProgress{TotalBytes: 3})
 	if err == nil || !strings.Contains(err.Error(), "verification") {
@@ -1258,7 +1258,7 @@ func TestStorageManagerDeleteFromTelegramFallsBackToOtherWorker(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: repository.NewStorageWorkersRepo(mock),
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -1266,7 +1266,7 @@ func TestStorageManagerDeleteFromTelegramFallsBackToOtherWorker(t *testing.T) {
 			},
 		}, 1),
 		tgClient: telegram.NewClient(srv.URL),
-	}
+	})
 
 	progress := &DeleteProgress{}
 	err = m.DeleteFromTelegram(context.Background(), domain.Storage{ID: storageID, Name: "Main", ChatID: 123}, []domain.FileChunk{
@@ -1316,7 +1316,7 @@ func TestStorageManagerDeleteFromTelegramFailsWhenAllWorkersFail(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: repository.NewStorageWorkersRepo(mock),
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -1324,7 +1324,7 @@ func TestStorageManagerDeleteFromTelegramFailsWhenAllWorkersFail(t *testing.T) {
 			},
 		}, 1),
 		tgClient: telegram.NewClient(srv.URL),
-	}
+	})
 
 	progress := &DeleteProgress{}
 	err = m.DeleteFromTelegram(context.Background(), domain.Storage{ID: storageID, Name: "Main", ChatID: 123}, []domain.FileChunk{
@@ -1339,7 +1339,7 @@ func TestStorageManagerDeleteFromTelegramFailsWhenAllWorkersFail(t *testing.T) {
 }
 
 func TestStorageManagerRangeValidation(t *testing.T) {
-	m := &StorageManager{}
+	m := newStorageManager(storageDeps{})
 	err := m.DownloadRangeToWriter(context.Background(), &domain.File{}, io.Discard, 10, 5, 20, nil)
 	if err == nil {
 		t.Fatalf("expected invalid range error")
@@ -1404,11 +1404,11 @@ func TestStorageManagerDownloadChunkWithWorkerRecoversByMessage(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		filesRepo:   repository.NewFilesRepo(filesMock),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: NewChunkCipher("secret"),
-	}
+	})
 
 	data, err := m.downloadChunkWithWorker(context.Background(), domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		ID:                chunkID,
@@ -1455,7 +1455,7 @@ func TestStorageManagerDownloadChunkFallbackWorker(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: repository.NewStorageWorkersRepo(workersMock),
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -1464,7 +1464,7 @@ func TestStorageManagerDownloadChunkFallbackWorker(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: NewChunkCipher("secret"),
-	}
+	})
 
 	data, err := m.downloadChunk(context.Background(), domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID:    "FILE_ID",
@@ -1505,7 +1505,7 @@ func TestStorageManagerDownloadAndDecryptChunkTooBig(t *testing.T) {
 	}))
 	defer srv.Close()
 
-	m := &StorageManager{
+	m := newStorageManager(storageDeps{
 		workersRepo: repository.NewStorageWorkersRepo(workersMock),
 		scheduler: NewWorkerScheduler(&fakeManagerSchedulerRepo{
 			getTokenFn: func(ctx context.Context, storageID uuid.UUID, rateLimit int) (*repository.WorkerToken, error) {
@@ -1514,7 +1514,7 @@ func TestStorageManagerDownloadAndDecryptChunkTooBig(t *testing.T) {
 		}, 1),
 		tgClient:    telegram.NewClient(srv.URL),
 		chunkCipher: NewChunkCipher("secret"),
-	}
+	})
 
 	_, err = m.downloadAndDecryptChunk(context.Background(), fileID, domain.Storage{ID: storageID, ChatID: 123}, domain.FileChunk{
 		TelegramFileID: "FILE_ID",
