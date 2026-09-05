@@ -2,10 +2,11 @@ import { useState, useEffect, useCallback } from 'react'
 import {
   Dialog, DialogTitle, DialogContent, DialogActions,
   Button, List, ListItemButton, ListItemIcon, ListItemText,
-  Typography, Breadcrumbs, Link as MuiLink, Box,
+  Typography, Box,
 } from '@mui/material'
 import { Folder as FolderIcon } from '@mui/icons-material'
 import API from '../api'
+import PathBreadcrumbs from './PathBreadcrumbs'
 
 export default function FolderBrowserDialog({
   open,
@@ -44,30 +45,7 @@ export default function FolderBrowserDialog({
           Select destination folder
         </Typography>
 
-        <Breadcrumbs sx={{ mb: 1.5 }}>
-          <MuiLink
-            underline="hover"
-            color="inherit"
-            sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
-            onClick={() => loadFolders('')}
-          >
-            Root
-          </MuiLink>
-          {pathParts.map((part, i) => {
-            const pathTo = pathParts.slice(0, i + 1).join('/')
-            return (
-              <MuiLink
-                key={pathTo}
-                underline="hover"
-                color="inherit"
-                sx={{ cursor: 'pointer', fontSize: '0.8125rem' }}
-                onClick={() => loadFolders(pathTo)}
-              >
-                {part}
-              </MuiLink>
-            )
-          })}
-        </Breadcrumbs>
+        <PathBreadcrumbs parts={pathParts} sx={{ mb: 1.5 }} onSelect={(parts) => loadFolders(parts.join('/'))} />
 
         <Box sx={{
           border: '1px solid',

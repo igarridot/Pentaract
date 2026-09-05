@@ -1,5 +1,6 @@
 import { Box, List, Divider, Typography } from '@mui/material'
 import FSListItem from '../../components/FSListItem'
+import Panel from '../../components/Panel'
 
 // The file/folder list with dividers and empty state. Selection and row
 // actions are delegated to callbacks owned by Files/index.jsx.
@@ -17,13 +18,7 @@ export default function FileList({
   onToggleSelect,
 }) {
   return (
-    <Box sx={{
-      bgcolor: 'background.paper',
-      borderRadius: 3,
-      border: '1px solid',
-      borderColor: 'divider',
-      overflow: 'hidden',
-    }}>
+    <Panel>
       <List disablePadding>
         {items.map((item, i) => (
           <Box key={item.path || item.name}>
@@ -51,6 +46,6 @@ export default function FileList({
           </Box>
         )}
       </List>
-    </Box>
+    </Panel>
   )
 }
