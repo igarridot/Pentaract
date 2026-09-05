@@ -42,3 +42,36 @@ func TestAccessLogMiddlewareIncludesUserAgent(t *testing.T) {
 		t.Fatalf("expected request line in access log, got %q", logLine)
 	}
 }
+
+func TestAccessLogMiddlewareRedactsAccessToken(t *testing.T) {
+	var logOutput bytes.Buffer
+	previous := slog.Default()
+	slog.SetDefault(slog.New(slog.NewTextHandler(&logOutput, &slog.HandlerOptions{})))
+	defer slog.SetDefault(previous)
+
+	handler := accessLogMiddleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusOK)
+	}))
+
+	req := httptest.NewRequest(http.MethodGet, "/api/storages/s1/files/download/a.txt?access_token=eyJhbGci.secret.sig&download_id=d1", nil)
+	handler.ServeHTTP(httptest.NewRecorder(), req)
+
+	logLine := logOutput.String()
+	if strings.Contains(logLine, "eyJhbGci") {
+		t.Fatalf("access token leaked into the access log: %q", logLine)
+	}
+	if !strings.Contains(logLine, "access_token=REDACTED") || !strings.Contains(logLine, "download_id=d1") {
+		t.Fatalf("expected redacted token and other params kept, got %q", logLine)
+	}
+}
+
+func TestRedactedRequestURIKeepsPlainRequests(t *testing.T) {
+	req := httptest.NewRequest(http.MethodGet, "/api/storages?x=1", nil)
+	if got := redactedRequestURI(req.URL); got != "/api/storages?x=1" {
+		t.Fatalf("unexpected request uri: %q", got)
+	}
+	req = httptest.NewRequest(http.MethodGet, "/api/storages", nil)
+	if got := redactedRequestURI(req.URL); got != "/api/storages" {
+		t.Fatalf("unexpected request uri: %q", got)
+	}
+}
