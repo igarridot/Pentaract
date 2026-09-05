@@ -117,7 +117,7 @@ func TestUploadSuccessWithHTTPRoundTrip(t *testing.T) {
 
 func TestUploadRetryOn429(t *testing.T) {
 	origSleep := telegramSleep
-	telegramSleep = func(d time.Duration) {} // no-op sleep for test speed
+	telegramSleep = func(context.Context, time.Duration) error { return nil }
 	defer func() { telegramSleep = origSleep }()
 
 	var attempts atomic.Int32
@@ -181,7 +181,7 @@ func TestDownloadSuccessWithHTTPRoundTrip(t *testing.T) {
 
 func TestDownloadRetryOn429(t *testing.T) {
 	origSleep := telegramSleep
-	telegramSleep = func(d time.Duration) {}
+	telegramSleep = func(context.Context, time.Duration) error { return nil }
 	defer func() { telegramSleep = origSleep }()
 
 	var getFileAttempts atomic.Int32
@@ -313,7 +313,7 @@ func TestDeleteMessageSuccessWithHTTPRoundTrip(t *testing.T) {
 
 func TestDeleteMessageRetryOn429(t *testing.T) {
 	origSleep := telegramSleep
-	telegramSleep = func(d time.Duration) {}
+	telegramSleep = func(context.Context, time.Duration) error { return nil }
 	defer func() { telegramSleep = origSleep }()
 
 	var attempts atomic.Int32
@@ -397,7 +397,7 @@ func TestResolveFileIDByMessageFailureReturnsSentinelError(t *testing.T) {
 
 func TestResolveFileIDByMessageRetryOn429(t *testing.T) {
 	origSleep := telegramSleep
-	telegramSleep = func(d time.Duration) {}
+	telegramSleep = func(context.Context, time.Duration) error { return nil }
 	defer func() { telegramSleep = origSleep }()
 
 	var attempts atomic.Int32
@@ -458,7 +458,7 @@ func TestParseRateLimitErrorWith429HTTPTestServer(t *testing.T) {
 
 func TestDownloadFileDownloadRetryOn429(t *testing.T) {
 	origSleep := telegramSleep
-	telegramSleep = func(d time.Duration) {}
+	telegramSleep = func(context.Context, time.Duration) error { return nil }
 	defer func() { telegramSleep = origSleep }()
 
 	var downloadAttempts atomic.Int32
