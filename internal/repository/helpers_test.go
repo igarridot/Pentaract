@@ -6,7 +6,7 @@ import (
 	"testing"
 
 	"github.com/jackc/pgx/v5"
-	pgxmock "github.com/pashagolub/pgxmock/v3"
+	pgxmock "github.com/pashagolub/pgxmock/v5"
 )
 
 func TestCollectRowsPropagatesQueryError(t *testing.T) {

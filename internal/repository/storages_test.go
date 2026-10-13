@@ -7,7 +7,7 @@ import (
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	pgxmock "github.com/pashagolub/pgxmock/v3"
+	pgxmock "github.com/pashagolub/pgxmock/v5"
 )
 
 func TestStoragesRepoCRUD(t *testing.T) {
