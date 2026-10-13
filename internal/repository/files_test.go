@@ -6,7 +6,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	pgxmock "github.com/pashagolub/pgxmock/v3"
+	pgxmock "github.com/pashagolub/pgxmock/v5"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 )

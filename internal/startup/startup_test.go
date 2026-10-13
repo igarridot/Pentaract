@@ -7,7 +7,7 @@ import (
 
 	"github.com/jackc/pgx/v5"
 	"github.com/jackc/pgx/v5/pgconn"
-	pgxmock "github.com/pashagolub/pgxmock/v3"
+	pgxmock "github.com/pashagolub/pgxmock/v5"
 
 	"github.com/Dominux/Pentaract/internal/config"
 )
