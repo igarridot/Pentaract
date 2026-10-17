@@ -54,8 +54,12 @@ const (
 	hlsReaperInterval      = 15 * time.Second
 	hlsStderrLimit         = 8 << 10
 	hlsTranscodeMaxWidth   = 1920
-	hlsInitSegmentName     = "init.mp4"
-	hlsFFmpegPlaylist      = "ffmpeg.m3u8"
+	hlsAudioSampleRate     = 48000
+	// hlsAudioLeadSeconds is how far before the video transcoded audio
+	// starts (as silence). It only has to exceed the video's B-frame delay.
+	hlsAudioLeadSeconds = 0.5
+	hlsInitSegmentName  = "init.mp4"
+	hlsFFmpegPlaylist   = "ffmpeg.m3u8"
 	// HLSSourcePathPrefix is the loopback-only route ffmpeg reads from.
 	HLSSourcePathPrefix = "/api/internal/hls_source/"
 )
@@ -568,6 +572,12 @@ func hlsFFmpegArgs(cfg HLSConfig, sourceURL string, plan media.Plan, startSecond
 	}
 	if startSeconds > 0 {
 		args = append(args, "-ss", formatSeconds(startSeconds))
+		if plan.VideoCopy {
+			// Copied video starts at the keyframe before startSeconds; an
+			// accurate seek would start the audio later, at startSeconds,
+			// and that gap is lost in the browser (see hlsAudioFilter).
+			args = append(args, "-noaccurate_seek")
+		}
 	}
 	args = append(args, "-i", sourceURL, "-map", fmt.Sprintf("0:v:%d", plan.VideoIndex))
 	if plan.Audio != nil {
@@ -593,7 +603,10 @@ func hlsFFmpegArgs(cfg HLSConfig, sourceURL string, plan media.Plan, startSecond
 		if plan.AudioCopy {
 			args = append(args, "-c:a", "copy")
 		} else {
-			args = append(args, "-c:a", "aac", "-b:a", "192k", "-ac", "2")
+			args = append(args,
+				"-af", hlsAudioFilter(plan, startSeconds),
+				"-c:a", "aac", "-b:a", "192k", "-ac", "2", "-ar", strconv.Itoa(hlsAudioSampleRate),
+			)
 		}
 	}
 
@@ -618,6 +631,25 @@ func hlsFFmpegArgs(cfg HLSConfig, sourceURL string, plan media.Plan, startSecond
 		hlsFFmpegPlaylist,
 	)
 	return args
+}
+
+// hlsAudioFilter keeps transcoded audio in sync in the browser. Chrome plays
+// MSE audio frames back to back from the first one, whatever their
+// timestamps say ("Failed to reconcile encoded audio times with decoded
+// output"), so any gap shifts all the audio after it. And the MP4 muxer makes
+// each track start at zero by stretching the first frame of the track that
+// starts later. aresample fills gaps with real silence, and first_pts pads
+// the start so the audio begins hlsAudioLeadSeconds before the video: the
+// stretched first frame is then a video frame, which the browser shows at
+// its own timestamp. Copied video after a seek needs no padding:
+// -noaccurate_seek already starts audio and video at the same keyframe.
+func hlsAudioFilter(plan media.Plan, startSeconds float64) string {
+	filter := "aresample=async=1:min_hard_comp=0.02"
+	if startSeconds > 0 && plan.VideoCopy {
+		return filter
+	}
+	firstPts := int64((startSeconds - hlsAudioLeadSeconds) * hlsAudioSampleRate)
+	return fmt.Sprintf("%s:first_pts=%d", filter, firstPts)
 }
 
 func formatSeconds(seconds float64) string {
