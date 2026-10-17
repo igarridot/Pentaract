@@ -24,6 +24,12 @@ type Config struct {
 	DatabaseName           string
 	DatabaseHost           string
 	DatabasePort           int
+	// FFmpegPath, HLSCacheDir, HLSSegmentSeconds and HLSIdleTimeoutSec drive
+	// the HLS pipeline that plays Matroska files in the web UI.
+	FFmpegPath        string
+	HLSCacheDir       string
+	HLSSegmentSeconds int
+	HLSIdleTimeoutSec int
 }
 
 func (c *Config) DatabaseURL() string {
@@ -64,6 +70,10 @@ func Load() *Config {
 		DatabaseName:           mustGetEnv("DATABASE_NAME"),
 		DatabaseHost:           getEnv("DATABASE_HOST", "db"),
 		DatabasePort:           getEnvInt("DATABASE_PORT", 5432),
+		FFmpegPath:             getEnv("FFMPEG_PATH", "ffmpeg"),
+		HLSCacheDir:            getEnv("HLS_CACHE_DIR", ""),
+		HLSSegmentSeconds:      getEnvInt("HLS_SEGMENT_SECONDS", 6),
+		HLSIdleTimeoutSec:      getEnvInt("HLS_IDLE_TIMEOUT_SECS", 120),
 	}
 }
 

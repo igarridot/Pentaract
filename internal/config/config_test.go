@@ -58,6 +58,9 @@ func TestLoadDefaultsAndURLs(t *testing.T) {
 	if cfg.TelegramRateLimit != 18 {
 		t.Fatalf("unexpected TelegramRateLimit: %d", cfg.TelegramRateLimit)
 	}
+	if cfg.FFmpegPath != "ffmpeg" || cfg.HLSCacheDir != "" || cfg.HLSSegmentSeconds != 6 || cfg.HLSIdleTimeoutSec != 120 {
+		t.Fatalf("unexpected hls defaults: %+v", cfg)
+	}
 	if cfg.DatabaseHost != "db" || cfg.DatabasePort != 5432 {
 		t.Fatalf("unexpected db defaults: host=%q port=%d", cfg.DatabaseHost, cfg.DatabasePort)
 	}
@@ -79,6 +82,10 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("TELEGRAM_RATE_LIMIT", "11")
 	t.Setenv("DATABASE_HOST", "localhost")
 	t.Setenv("DATABASE_PORT", "15432")
+	t.Setenv("FFMPEG_PATH", "/opt/ffmpeg/bin/ffmpeg")
+	t.Setenv("HLS_CACHE_DIR", "/var/cache/hls")
+	t.Setenv("HLS_SEGMENT_SECONDS", "4")
+	t.Setenv("HLS_IDLE_TIMEOUT_SECS", "30")
 
 	cfg := Load()
 
@@ -93,6 +100,9 @@ func TestLoadEnvOverrides(t *testing.T) {
 	}
 	if cfg.DatabaseHost != "localhost" || cfg.DatabasePort != 15432 {
 		t.Fatalf("unexpected db overrides: %+v", cfg)
+	}
+	if cfg.FFmpegPath != "/opt/ffmpeg/bin/ffmpeg" || cfg.HLSCacheDir != "/var/cache/hls" || cfg.HLSSegmentSeconds != 4 || cfg.HLSIdleTimeoutSec != 30 {
+		t.Fatalf("unexpected hls overrides: %+v", cfg)
 	}
 }
 

@@ -32,7 +32,7 @@ func AuthMiddleware(secretKey string) func(http.Handler) http.Handler {
 					writeError(w, domain.ErrUnauthorized("not authenticated"))
 					return
 				}
-				if !strings.Contains(r.URL.Path, "/files/download/") && !strings.Contains(r.URL.Path, "/files/download_dir/") {
+				if !strings.Contains(r.URL.Path, "/files/download/") && !strings.Contains(r.URL.Path, "/files/download_dir/") && !strings.Contains(r.URL.Path, "/files/hls/") {
 					writeError(w, domain.ErrUnauthorized("not authenticated"))
 					return
 				}
