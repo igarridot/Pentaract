@@ -17,6 +17,12 @@ export function useBulkOperations(addAlert, storageId, loadTree, clearSelection)
   const isBulkDelete = isBulkOperating && bulkOperation?.operation === 'delete'
   const isBulkMove = isBulkOperating && bulkOperation?.operation === 'move'
 
+  // Moves the running bulk card to a terminal status; the effect below
+  // removes the card shortly after.
+  const finishBulk = useCallback((status) => {
+    setBulkOperation((prev) => (prev ? { ...prev, status } : prev))
+  }, [])
+
   const registerBulkTransfer = useCallback((operation, transferId) => {
     setBulkOperation((prev) => {
       if (!prev || prev.operation !== operation) return prev
@@ -72,9 +78,9 @@ export function useBulkOperations(addAlert, storageId, loadTree, clearSelection)
     })
   }, [])
 
+  // A finished bulk card lingers briefly, longer when it failed.
   useEffect(() => {
-    if (!bulkOperation || !['upload', 'download'].includes(bulkOperation.operation)) return
-    if (bulkOperation.status === 'running') return
+    if (!bulkOperation || bulkOperation.status === 'running') return
 
     const timeoutMs = bulkOperation.status === 'error' ? 3000 : 1500
     const timeout = setTimeout(() => setBulkOperation(null), timeoutMs)
@@ -99,11 +105,11 @@ export function useBulkOperations(addAlert, storageId, loadTree, clearSelection)
       }))
     }
     try {
-      for (let i = 0; i < targets.length; i += 1) {
+      for (const target of targets) {
         if (bulkCancelledRef.current) break
         const downloadId = createOperationId()
         registerBulkTransfer('download', downloadId)
-        const startedId = await startDownload(targets[i], downloadId)
+        const startedId = await startDownload(target, downloadId)
         if (!startedId) {
           markBulkTransferTerminal('download', downloadId, 'error')
           continue
@@ -112,7 +118,7 @@ export function useBulkOperations(addAlert, storageId, loadTree, clearSelection)
       }
       finalizeBulkTransferLaunch('download', bulkCancelledRef.current)
     } catch (err) {
-      setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
+      finishBulk('error')
       addAlert(err.message, 'error')
     } finally {
       bulkCancelRef.current = null
@@ -120,78 +126,55 @@ export function useBulkOperations(addAlert, storageId, loadTree, clearSelection)
     }
   }
 
-  const deleteSingleItem = async (item) => {
-    await API.files.delete(storageId, getItemPath(item))
-  }
-
-  const handleBulkDelete = async (selectedFiles) => {
-    setBulkDeleteOpen(false)
+  // Runs step(file) for each selected file in order, one at a time, keeping
+  // the bulk card's counter in sync. `label` names the finished action
+  // ("Deleted"); onCancel runs in addition to stopping the loop.
+  const runSequentialBulk = async (operation, selectedFiles, step, { label, onCancel }) => {
     const targets = [...selectedFiles]
     const bulkCancelledRef = { current: false }
-    setBulkOperation(createBulkOperation('delete', targets.length))
-    bulkCancelRef.current = () => { bulkCancelledRef.current = true }
-    try {
-      let deletedCount = 0
-      for (let i = 0; i < targets.length; i += 1) {
-        if (bulkCancelledRef.current) break
-        // Sequential to avoid overwhelming the backend.
-        await deleteSingleItem(targets[i])
-        deletedCount += 1
-        setBulkOperation((prev) => (prev ? { ...prev, completed: i + 1 } : prev))
-      }
-      setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
-      setTimeout(() => setBulkOperation(null), 1500)
-      addAlert(`Deleted ${deletedCount} file(s)`, 'success')
-      clearSelection()
-    } catch (err) {
-      setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
-      setTimeout(() => setBulkOperation(null), 3000)
-      addAlert(err.message, 'error')
-    } finally {
-      bulkCancelRef.current = null
-      loadTree()
-    }
-  }
-
-  const handleBulkMove = async (targetPath, selectedFiles) => {
-    setBulkMoveOpen(false)
-    const targets = [...selectedFiles]
-    const bulkCancelledRef = { current: false }
-    const moveAbortController = new AbortController()
-    setBulkOperation(createBulkOperation('move', targets.length))
+    setBulkOperation(createBulkOperation(operation, targets.length))
     bulkCancelRef.current = () => {
       bulkCancelledRef.current = true
-      moveAbortController.abort()
+      onCancel?.()
     }
     try {
-      let movedCount = 0
-      for (let i = 0; i < targets.length; i += 1) {
+      let count = 0
+      for (const target of targets) {
         if (bulkCancelledRef.current) break
-        const item = targets[i]
-        const newPath = buildBulkMoveTargetPath(targetPath, item.name)
-        // Sequential for predictable ordering and cancellation.
-        await API.files.move(storageId, item.path, newPath, { signal: moveAbortController.signal })
-        movedCount += 1
-        setBulkOperation((prev) => (prev ? { ...prev, completed: i + 1 } : prev))
+        await step(target)
+        count += 1
+        setBulkOperation((prev) => (prev ? { ...prev, completed: count } : prev))
       }
-      setBulkOperation((prev) => (prev ? { ...prev, status: bulkCancelledRef.current ? 'cancelled' : 'done' } : prev))
-      setTimeout(() => setBulkOperation(null), 1500)
-      addAlert(`Moved ${movedCount} file(s)`, 'success')
+      finishBulk(bulkCancelledRef.current ? 'cancelled' : 'done')
+      addAlert(`${label} ${count} file(s)`, 'success')
       clearSelection()
     } catch (err) {
       if (err?.name === 'AbortError') {
-        setBulkOperation((prev) => (prev ? { ...prev, status: 'cancelled' } : prev))
-        setTimeout(() => setBulkOperation(null), 1500)
-        addAlert('Bulk move cancelled', 'info')
+        finishBulk('cancelled')
+        addAlert(`Bulk ${operation} cancelled`, 'info')
       } else {
-        setBulkOperation((prev) => (prev ? { ...prev, status: 'error' } : prev))
-        setTimeout(() => setBulkOperation(null), 3000)
+        finishBulk('error')
         addAlert(err.message, 'error')
       }
     } finally {
       bulkCancelRef.current = null
       loadTree()
     }
+  }
+
+  const handleBulkDelete = (selectedFiles) => {
+    setBulkDeleteOpen(false)
+    return runSequentialBulk('delete', selectedFiles,
+      (item) => API.files.delete(storageId, getItemPath(item)),
+      { label: 'Deleted' })
+  }
+
+  const handleBulkMove = (targetPath, selectedFiles) => {
+    setBulkMoveOpen(false)
+    const moveAbortController = new AbortController()
+    return runSequentialBulk('move', selectedFiles,
+      (item) => API.files.move(storageId, item.path, buildBulkMoveTargetPath(targetPath, item.name), { signal: moveAbortController.signal }),
+      { label: 'Moved', onCancel: () => moveAbortController.abort() })
   }
 
   const cleanupBulk = useCallback(() => {

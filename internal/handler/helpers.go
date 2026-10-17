@@ -6,6 +6,7 @@ import (
 	"errors"
 	"log/slog"
 	"net/http"
+	"strconv"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/google/uuid"
@@ -40,13 +41,39 @@ func writeError(w http.ResponseWriter, err error) {
 	})
 }
 
-func parseUUIDParam(r *http.Request, name string) (uuid.UUID, error) {
-	s := chi.URLParam(r, name)
+// parseUUID parses s, reporting a bad request that names the field.
+func parseUUID(s, name string) (uuid.UUID, error) {
 	id, err := uuid.Parse(s)
 	if err != nil {
 		return uuid.Nil, domain.ErrBadRequest("invalid " + name)
 	}
 	return id, nil
+}
+
+func parseUUIDParam(r *http.Request, name string) (uuid.UUID, error) {
+	return parseUUID(chi.URLParam(r, name), name)
+}
+
+// parseUUIDQuery parses a required UUID query parameter.
+func parseUUIDQuery(r *http.Request, name string) (uuid.UUID, error) {
+	s := r.URL.Query().Get(name)
+	if s == "" {
+		return uuid.Nil, domain.ErrBadRequest(name + " is required")
+	}
+	return parseUUID(s, name)
+}
+
+// parseBoolQuery parses an optional boolean query parameter; absent means false.
+func parseBoolQuery(r *http.Request, name string) (bool, error) {
+	s := r.URL.Query().Get(name)
+	if s == "" {
+		return false, nil
+	}
+	value, err := strconv.ParseBool(s)
+	if err != nil {
+		return false, domain.ErrBadRequest("invalid " + name + " value")
+	}
+	return value, nil
 }
 
 // storageRequest returns the authenticated user and the storage addressed by
@@ -57,6 +84,19 @@ func storageRequest(r *http.Request) (*appjwt.AuthUser, uuid.UUID, error) {
 		return nil, uuid.Nil, err
 	}
 	return GetAuthUser(r.Context()), storageID, nil
+}
+
+// storageJSONRequest is storageRequest for handlers that also take a JSON
+// body, decoded into dst.
+func storageJSONRequest(r *http.Request, dst any) (*appjwt.AuthUser, uuid.UUID, error) {
+	user, storageID, err := storageRequest(r)
+	if err != nil {
+		return nil, uuid.Nil, err
+	}
+	if err := parseBody(r, dst); err != nil {
+		return nil, uuid.Nil, err
+	}
+	return user, storageID, nil
 }
 
 func parseBody(r *http.Request, dst any) error {

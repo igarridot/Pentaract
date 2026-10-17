@@ -4,7 +4,6 @@ import (
 	"context"
 	"crypto/sha256"
 	"encoding/json"
-	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -161,25 +160,6 @@ func TestUploadChunkWithRetryContextCancelled(t *testing.T) {
 	_, err := m.uploadChunkWithRetry(ctx, file, storage, 0, []byte("data"), [32]byte{})
 	if err == nil {
 		t.Fatalf("expected error after context cancellation")
-	}
-}
-
-func TestShouldRetryChunkUpload(t *testing.T) {
-	// nil error -> no retry
-	if shouldRetryChunkUpload(context.Background(), nil) {
-		t.Fatal("nil error should not retry")
-	}
-
-	// non-nil error with active context -> retry
-	if !shouldRetryChunkUpload(context.Background(), fmt.Errorf("transient")) {
-		t.Fatal("transient error should retry")
-	}
-
-	// cancelled context -> no retry
-	ctx, cancel := context.WithCancel(context.Background())
-	cancel()
-	if shouldRetryChunkUpload(ctx, context.Canceled) {
-		t.Fatal("cancelled context should not retry")
 	}
 }
 

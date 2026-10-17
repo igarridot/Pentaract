@@ -89,14 +89,9 @@ func (h *UsersHandler) UpdatePassword(w http.ResponseWriter, r *http.Request) {
 
 func (h *UsersHandler) DeleteManaged(w http.ResponseWriter, r *http.Request) {
 	user := GetAuthUser(r.Context())
-	targetIDStr := r.URL.Query().Get("user_id")
-	if targetIDStr == "" {
-		writeError(w, domain.ErrBadRequest("user_id is required"))
-		return
-	}
-	targetID, err := uuid.Parse(targetIDStr)
+	targetID, err := parseUUIDQuery(r, "user_id")
 	if err != nil {
-		writeError(w, domain.ErrBadRequest("invalid user_id"))
+		writeError(w, err)
 		return
 	}
 

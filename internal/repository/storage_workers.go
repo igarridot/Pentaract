@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"errors"
 	"log/slog"
 	"sync"
 	"time"
@@ -32,18 +31,20 @@ func NewStorageWorkersRepo(pool DB) *StorageWorkersRepo {
 	}
 }
 
-func (r *StorageWorkersRepo) Create(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
+func scanWorker(s scanner) (*domain.StorageWorker, error) {
 	w := &domain.StorageWorker{}
-	err := r.pool.QueryRow(ctx,
+	err := s.Scan(&w.ID, &w.Name, &w.UserID, &w.Token, &w.StorageID)
+	return w, err
+}
+
+func (r *StorageWorkersRepo) Create(ctx context.Context, name string, userID uuid.UUID, token string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
+	w, err := scanWorker(r.pool.QueryRow(ctx,
 		`INSERT INTO storage_workers (name, user_id, token, storage_id) VALUES ($1, $2, $3, $4)
 		RETURNING id, name, user_id, token, storage_id`,
 		name, userID, token, storageID,
-	).Scan(&w.ID, &w.Name, &w.UserID, &w.Token, &w.StorageID)
+	))
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, domain.ErrAlreadyExists("storage worker")
-		}
-		return nil, err
+		return nil, conflictOr(err, "storage worker")
 	}
 	return w, nil
 }
@@ -54,9 +55,8 @@ func (r *StorageWorkersRepo) List(ctx context.Context, userID uuid.UUID) ([]doma
 		userID,
 	)
 	return collectRows(rows, err, func(rows pgx.Rows) (domain.StorageWorker, error) {
-		var w domain.StorageWorker
-		err := rows.Scan(&w.ID, &w.Name, &w.UserID, &w.Token, &w.StorageID)
-		return w, err
+		w, err := scanWorker(rows)
+		return *w, err
 	})
 }
 
@@ -81,33 +81,22 @@ func (r *StorageWorkersRepo) ListTokensByStorage(ctx context.Context, storageID 
 }
 
 func (r *StorageWorkersRepo) Delete(ctx context.Context, id, userID uuid.UUID) error {
-	ct, err := r.pool.Exec(ctx,
+	return execAffecting(ctx, r.pool, "storage worker",
 		`DELETE FROM storage_workers WHERE id = $1 AND user_id = $2`,
 		id, userID,
 	)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return domain.ErrNotFound("storage worker")
-	}
-	return nil
 }
 
 // Update updates a worker's name and storage assignment.
 func (r *StorageWorkersRepo) Update(ctx context.Context, id, userID uuid.UUID, name string, storageID *uuid.UUID) (*domain.StorageWorker, error) {
-	w := &domain.StorageWorker{}
-	err := r.pool.QueryRow(ctx,
+	w, err := scanWorker(r.pool.QueryRow(ctx,
 		`UPDATE storage_workers SET name = $3, storage_id = $4
 		WHERE id = $1 AND user_id = $2
 		RETURNING id, name, user_id, token, storage_id`,
 		id, userID, name, storageID,
-	).Scan(&w.ID, &w.Name, &w.UserID, &w.Token, &w.StorageID)
+	))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrNotFound("storage worker")
-		}
-		return nil, err
+		return nil, notFoundOr(err, "storage worker")
 	}
 	return w, nil
 }
@@ -220,7 +209,7 @@ func (r *StorageWorkersRepo) NextAvailableIn(ctx context.Context, storageID uuid
 		return 0, err
 	}
 	// The slot opens when this entry is older than 1 minute
-	available := earliest.Add(storageWorkerUsageWindow).Sub(time.Now())
+	available := time.Until(earliest.Add(storageWorkerUsageWindow))
 	if available < 0 {
 		return 0, nil
 	}

@@ -12,9 +12,12 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
+	appjwt "github.com/Dominux/Pentaract/internal/jwt"
 	"github.com/Dominux/Pentaract/internal/pathutil"
-	"github.com/Dominux/Pentaract/internal/service"
 )
+
+// maxLocalUploadBatch bounds how many files one batch request may queue.
+const maxLocalUploadBatch = 100
 
 // safePath resolves requestedPath relative to basePath and ensures it does not
 // escape basePath (preventing path-traversal attacks).
@@ -23,9 +26,7 @@ func safePath(basePath, requestedPath string) (string, error) {
 		return "", fmt.Errorf("base path is not configured")
 	}
 
-	joined := filepath.Join(basePath, requestedPath)
-
-	abs, err := filepath.Abs(joined)
+	abs, err := filepath.Abs(filepath.Join(basePath, requestedPath))
 	if err != nil {
 		return "", fmt.Errorf("failed to resolve absolute path: %w", err)
 	}
@@ -71,9 +72,7 @@ func (h *UploadHandler) BrowseLocalFS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	requestedPath := r.URL.Query().Get("path")
-
-	resolvedPath, err := safePath(h.localBasePath, requestedPath)
+	resolvedPath, err := safePath(h.localBasePath, r.URL.Query().Get("path"))
 	if err != nil {
 		writeError(w, domain.ErrBadRequest(err.Error()))
 		return
@@ -93,8 +92,7 @@ func (h *UploadHandler) BrowseLocalFS(w http.ResponseWriter, r *http.Request) {
 			continue
 		}
 
-		fullPath := filepath.Join(resolvedPath, entry.Name())
-		relPath, err := filepath.Rel(h.localBasePath, fullPath)
+		relPath, err := filepath.Rel(h.localBasePath, filepath.Join(resolvedPath, entry.Name()))
 		if err != nil {
 			continue
 		}
@@ -113,6 +111,77 @@ func (h *UploadHandler) BrowseLocalFS(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, elements)
 }
 
+// localUploadRequest is the preamble shared by the local upload endpoints:
+// the mount check, then the storage route and the JSON body.
+func (h *UploadHandler) localUploadRequest(r *http.Request, dst any) (*appjwt.AuthUser, uuid.UUID, error) {
+	if h.localBasePath == "" {
+		return nil, uuid.Nil, domain.ErrForbidden()
+	}
+	return storageJSONRequest(r, dst)
+}
+
+// localUpload is one validated file from the local mount, ready to queue.
+type localUpload struct {
+	uploadID     string
+	resolvedPath string
+	fullPath     string
+	size         int64
+}
+
+// resolveLocalUpload validates one local upload and derives its destination.
+func (h *UploadHandler) resolveLocalUpload(localPath, destPath, uploadID string) (localUpload, error) {
+	resolvedPath, info, err := resolveLocalFile(h.localBasePath, localPath)
+	if err != nil {
+		return localUpload{}, err
+	}
+	return localUpload{
+		uploadID:     uploadIDOrNew(uploadID),
+		resolvedPath: resolvedPath,
+		fullPath:     pathutil.Join(pathutil.TrimTrailingSlash(destPath), info.Name()),
+		size:         info.Size(),
+	}, nil
+}
+
+// queueLocalUploads registers a tracker for every item, so each upload_id can
+// be subscribed to (and cancelled) right away, then uploads the items one at
+// a time in the background, like browser uploads: parallel files would
+// compete for Telegram API bandwidth and time out.
+func (h *UploadHandler) queueLocalUploads(userID, storageID uuid.UUID, items []localUpload, onConflict string) {
+	type queuedUpload struct {
+		item    localUpload
+		tracker *uploadTracker
+		ctx     context.Context
+	}
+	queue := make([]queuedUpload, 0, len(items))
+	for _, item := range items {
+		tracker, uploadCtx := h.registerUpload(item.uploadID, storageID, item.fullPath, item.size)
+		queue = append(queue, queuedUpload{item: item, tracker: tracker, ctx: uploadCtx})
+	}
+
+	go func() {
+		for _, q := range queue {
+			if err := q.ctx.Err(); err != nil {
+				// Cancelled while still queued: report it without starting.
+				h.finishUpload(q.tracker, nil, false, err)
+			} else {
+				h.uploadLocalFile(q.ctx, q.tracker, userID, storageID, q.item, onConflict)
+			}
+			h.scheduleUploadTrackerCleanup(q.item.uploadID)
+		}
+	}()
+}
+
+// uploadLocalFile opens a file from the local mount and runs a tracked upload.
+func (h *UploadHandler) uploadLocalFile(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, item localUpload, onConflict string) {
+	f, err := os.Open(item.resolvedPath)
+	if err != nil {
+		slog.Error("local upload: failed to open file", "file", item.resolvedPath, "err", err)
+		h.finishUpload(tracker, nil, false, err)
+		return
+	}
+	h.runTrackedUpload(ctx, tracker, userID, storageID, item.fullPath, item.size, f, onConflict)
+}
+
 type uploadLocalRequest struct {
 	LocalPath  string `json:"local_path"`
 	DestPath   string `json:"dest_path"`
@@ -124,60 +193,21 @@ type uploadLocalRequest struct {
 // Telegram storage. It returns immediately with a 202 and an upload_id that
 // can be used to track progress via /api/upload_progress.
 func (h *UploadHandler) UploadLocal(w http.ResponseWriter, r *http.Request) {
-	user, storageID, err := storageRequest(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
-	if h.localBasePath == "" {
-		writeError(w, domain.ErrForbidden())
-		return
-	}
-
 	var req uploadLocalRequest
-	if err := parseBody(r, &req); err != nil {
-		writeError(w, err)
-		return
-	}
-
-	resolvedPath, info, err := resolveLocalFile(h.localBasePath, req.LocalPath)
+	user, storageID, err := h.localUploadRequest(r, &req)
 	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	destPath := pathutil.TrimTrailingSlash(req.DestPath)
-	fullPath := pathutil.Join(destPath, info.Name())
-
-	onConflict := req.OnConflict
-	if onConflict == "" {
-		onConflict = service.UploadConflictKeepBoth
-	}
-
-	uploadID := req.UploadID
-	if uploadID == "" {
-		uploadID = uuid.New().String()
-	}
-
-	tracker, uploadCtx := h.registerUpload(uploadID, storageID, fullPath, info.Size())
-	go func() {
-		defer h.scheduleUploadTrackerCleanup(uploadID)
-		h.uploadLocalFile(uploadCtx, tracker, user.ID, storageID, resolvedPath, fullPath, info.Size(), onConflict)
-	}()
-
-	writeJSON(w, http.StatusAccepted, map[string]any{"upload_id": uploadID})
-}
-
-// uploadLocalFile opens a file from the local mount and runs a tracked upload.
-func (h *UploadHandler) uploadLocalFile(ctx context.Context, tracker *uploadTracker, userID, storageID uuid.UUID, localPath, fullPath string, fileSize int64, onConflict string) {
-	f, err := os.Open(localPath)
+	item, err := h.resolveLocalUpload(req.LocalPath, req.DestPath, req.UploadID)
 	if err != nil {
-		slog.Error("local upload: failed to open file", "file", localPath, "err", err)
-		h.finishUpload(tracker, nil, false, err)
+		writeError(w, err)
 		return
 	}
-	h.runTrackedUpload(ctx, tracker, userID, storageID, fullPath, fileSize, f, onConflict)
+
+	h.queueLocalUploads(user.ID, storageID, []localUpload{item}, conflictPolicy(req.OnConflict))
+	writeJSON(w, http.StatusAccepted, map[string]any{"upload_id": item.uploadID})
 }
 
 type uploadLocalBatchItem struct {
@@ -192,19 +222,9 @@ type uploadLocalBatchRequest struct {
 
 // UploadLocalBatch starts multiple local file uploads at once.
 func (h *UploadHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request) {
-	user, storageID, err := storageRequest(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
-	if h.localBasePath == "" {
-		writeError(w, domain.ErrForbidden())
-		return
-	}
-
 	var req uploadLocalBatchRequest
-	if err := parseBody(r, &req); err != nil {
+	user, storageID, err := h.localUploadRequest(r, &req)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
@@ -213,72 +233,29 @@ func (h *UploadHandler) UploadLocalBatch(w http.ResponseWriter, r *http.Request)
 		writeError(w, domain.ErrBadRequest("items is required"))
 		return
 	}
-	if len(req.Items) > 100 {
-		writeError(w, domain.ErrBadRequest("batch size must not exceed 100"))
+	if len(req.Items) > maxLocalUploadBatch {
+		writeError(w, domain.ErrBadRequest(fmt.Sprintf("batch size must not exceed %d", maxLocalUploadBatch)))
 		return
-	}
-
-	onConflict := req.OnConflict
-	if onConflict == "" {
-		onConflict = service.UploadConflictKeepBoth
-	}
-
-	// Validate all paths first (fail fast).
-	type resolvedItem struct {
-		resolvedPath string
-		info         os.FileInfo
-		fullPath     string
-	}
-	resolved := make([]resolvedItem, 0, len(req.Items))
-	for _, item := range req.Items {
-		rp, info, err := resolveLocalFile(h.localBasePath, item.LocalPath)
-		if err != nil {
-			writeError(w, err)
-			return
-		}
-		resolved = append(resolved, resolvedItem{
-			resolvedPath: rp,
-			info:         info,
-			fullPath:     pathutil.Join(pathutil.TrimTrailingSlash(item.DestPath), info.Name()),
-		})
 	}
 
 	type uploadResult struct {
 		LocalPath string `json:"local_path"`
 		UploadID  string `json:"upload_id"`
 	}
-	type queuedUpload struct {
-		uploadID string
-		item     resolvedItem
-		tracker  *uploadTracker
-		ctx      context.Context
-	}
 
-	// Pre-register every tracker so each upload_id can be subscribed to (and
-	// cancelled) right away, even for items still waiting in the queue.
-	results := make([]uploadResult, 0, len(resolved))
-	queue := make([]queuedUpload, 0, len(resolved))
-	for i, ri := range resolved {
-		uploadID := uuid.New().String()
-		tracker, uploadCtx := h.registerUpload(uploadID, storageID, ri.fullPath, ri.info.Size())
-		queue = append(queue, queuedUpload{uploadID: uploadID, item: ri, tracker: tracker, ctx: uploadCtx})
-		results = append(results, uploadResult{LocalPath: req.Items[i].LocalPath, UploadID: uploadID})
-	}
-
-	// Process files sequentially in a single goroutine, matching browser upload
-	// behavior. This prevents multiple files from competing for Telegram API
-	// bandwidth and avoids upload timeouts.
-	go func() {
-		for _, q := range queue {
-			if err := q.ctx.Err(); err != nil {
-				// Cancelled while still queued: report it without starting.
-				h.finishUpload(q.tracker, nil, false, err)
-			} else {
-				h.uploadLocalFile(q.ctx, q.tracker, user.ID, storageID, q.item.resolvedPath, q.item.fullPath, q.item.info.Size(), onConflict)
-			}
-			h.scheduleUploadTrackerCleanup(q.uploadID)
+	// Validate every path before queueing anything (fail fast).
+	items := make([]localUpload, 0, len(req.Items))
+	results := make([]uploadResult, 0, len(req.Items))
+	for _, reqItem := range req.Items {
+		item, err := h.resolveLocalUpload(reqItem.LocalPath, reqItem.DestPath, "")
+		if err != nil {
+			writeError(w, err)
+			return
 		}
-	}()
+		items = append(items, item)
+		results = append(results, uploadResult{LocalPath: reqItem.LocalPath, UploadID: item.uploadID})
+	}
 
+	h.queueLocalUploads(user.ID, storageID, items, conflictPolicy(req.OnConflict))
 	writeJSON(w, http.StatusAccepted, map[string]any{"uploads": results})
 }

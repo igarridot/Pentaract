@@ -202,11 +202,7 @@ func (s *FilesService) Delete(ctx context.Context, userID, storageID uuid.UUID, 
 	}
 
 	// Delete from DB only after Telegram deletion has been confirmed.
-	if err := s.filesRepo.Delete(ctx, storageID, path); err != nil {
-		return err
-	}
-
-	return nil
+	return s.filesRepo.Delete(ctx, storageID, path)
 }
 
 // DownloadDir writes all files under a directory as a zip archive to the given writer.
@@ -232,15 +228,8 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 		return "", domain.ErrNotFound("files in directory")
 	}
 
-	dirName := pathutil.ArchiveName(dirPath)
-
 	zipWriter := zip.NewWriter(w)
-	prefix := dirPath
-	if prefix != "" && !strings.HasSuffix(prefix, "/") {
-		prefix += "/"
-	}
-
-	if err := s.downloadDirFilesToZip(ctx, files, prefix, zipWriter, progress); err != nil {
+	if err := s.downloadDirFilesToZip(ctx, files, pathutil.DirPrefix(dirPath), zipWriter, progress); err != nil {
 		return "", err
 	}
 
@@ -248,7 +237,7 @@ func (s *FilesService) DownloadDir(ctx context.Context, userID, storageID uuid.U
 		return "", fmt.Errorf("closing zip archive: %w", err)
 	}
 
-	return dirName, nil
+	return pathutil.ArchiveName(dirPath), nil
 }
 
 func (s *FilesService) downloadDirFilesToZip(ctx context.Context, files []domain.File, prefix string, zipWriter *zip.Writer, progress *DownloadProgress) error {

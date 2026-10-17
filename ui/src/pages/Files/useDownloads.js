@@ -1,8 +1,19 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import API from '../../api'
 import { createOperationId } from '../../common/operation_id'
-import { isActiveDownloadStatus } from '../../common/progress'
+import { isActiveDownloadStatus, createDownloadState, applyDownloadProgressUpdate } from '../../common/progress'
 import { createCompletionRegistry } from '../../common/completion_registry'
+
+// What each terminal SSE status does to the card: how long it stays visible
+// and which alert it raises.
+const DOWNLOAD_TERMINAL = {
+  done: { delay: 2000 },
+  error: {
+    delay: 6000,
+    alert: (data) => [data.error_message || 'Download failed unexpectedly. Please try again.', 'error', { persistent: true }],
+  },
+  cancelled: { delay: 1500, alert: () => ['Download cancelled', 'info'] },
+}
 
 export function useDownloads(addAlert, storageId, loadTree, {
   markBulkTransferTerminal,
@@ -41,8 +52,7 @@ export function useDownloads(addAlert, storageId, loadTree, {
   const waitForDownload = useCallback((downloadId) => completionRef.current.waitFor(downloadId), [])
 
   const triggerBrowserDownload = useCallback((downloadId, url) => {
-    const existingFrame = downloadFramesRef.current.get(downloadId)
-    existingFrame?.remove()
+    downloadFramesRef.current.get(downloadId)?.remove()
 
     const frame = document.createElement('iframe')
     frame.style.display = 'none'
@@ -53,56 +63,21 @@ export function useDownloads(addAlert, storageId, loadTree, {
     document.body.appendChild(frame)
   }, [])
 
-  const startDownload = async (item, providedDownloadId = createOperationId()) => {
+  const startDownload = async (item, downloadId = createOperationId()) => {
     try {
-      const downloadId = providedDownloadId
       const filename = item.is_file ? item.name : `${item.name}.zip`
-
-      setDownloadStates((prev) => [...prev, {
-        id: downloadId,
-        filename,
-        totalBytes: 0,
-        downloadedBytes: 0,
-        totalChunks: 0,
-        downloadedChunks: 0,
-        status: 'downloading',
-        workersStatus: 'active',
-        errorMessage: '',
-      }])
+      setDownloadStates((prev) => [...prev, createDownloadState(downloadId, filename)])
 
       const cancel = API.files.subscribeDownloadProgress(downloadId, (data) => {
-        updateDownloadState(downloadId, (prev) => ({
-          ...prev,
-          filename,
-          totalBytes: data.total_bytes || prev?.totalBytes || 0,
-          downloadedBytes: data.downloaded_bytes || 0,
-          totalChunks: data.total || prev?.totalChunks || 0,
-          downloadedChunks: data.downloaded || 0,
-          status: data.status,
-          workersStatus: data.workers_status || prev?.workersStatus || 'active',
-          errorMessage: data.status === 'error' ? (data.error_message || prev?.errorMessage || '') : '',
-        }))
+        updateDownloadState(downloadId, (prev) => applyDownloadProgressUpdate(prev, data))
 
-        if (data.status === 'done') {
-          markBulkTransferTerminal('download', downloadId, 'done')
-          releaseDownloadTracking(downloadId, 'done')
-          loadTree()
-          scheduleDownloadStateRemoval(downloadId, 2000)
-        }
-        if (data.status === 'error') {
-          markBulkTransferTerminal('download', downloadId, 'error')
-          releaseDownloadTracking(downloadId, 'error')
-          loadTree()
-          addAlert(data.error_message || 'Download failed unexpectedly. Please try again.', 'error', { persistent: true })
-          scheduleDownloadStateRemoval(downloadId, 6000)
-        }
-        if (data.status === 'cancelled') {
-          markBulkTransferTerminal('download', downloadId, 'cancelled')
-          releaseDownloadTracking(downloadId)
-          loadTree()
-          addAlert('Download cancelled', 'info')
-          scheduleDownloadStateRemoval(downloadId, 1500)
-        }
+        const terminal = DOWNLOAD_TERMINAL[data.status]
+        if (!terminal) return
+        markBulkTransferTerminal('download', downloadId, data.status)
+        releaseDownloadTracking(downloadId, data.status)
+        loadTree()
+        if (terminal.alert) addAlert(...terminal.alert(data))
+        scheduleDownloadStateRemoval(downloadId, terminal.delay)
       })
       downloadProgressCancelsRef.current.set(downloadId, cancel)
 
@@ -113,8 +88,8 @@ export function useDownloads(addAlert, storageId, loadTree, {
       triggerBrowserDownload(downloadId, url)
       return downloadId
     } catch (err) {
-      markBulkTransferTerminal('download', providedDownloadId, 'error')
-      completionRef.current.settle(providedDownloadId, 'error')
+      markBulkTransferTerminal('download', downloadId, 'error')
+      completionRef.current.settle(downloadId, 'error')
       addAlert(err.message, 'error')
       return null
     }
@@ -136,10 +111,10 @@ export function useDownloads(addAlert, storageId, loadTree, {
   }
 
   const cleanupDownloads = useCallback(() => {
-    downloadProgressCancelsRef.current.forEach((_, downloadId) => {
+    downloadProgressCancelsRef.current.forEach((cancel, downloadId) => {
       API.files.cancelDownload(downloadId).catch(() => {})
+      cancel()
     })
-    downloadProgressCancelsRef.current.forEach((cancel) => cancel())
     downloadProgressCancelsRef.current.clear()
     downloadFramesRef.current.forEach((frame) => frame.remove())
     downloadFramesRef.current.clear()

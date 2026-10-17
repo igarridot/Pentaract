@@ -46,15 +46,7 @@ export default function Storages() {
   return (
     <Box>
       <Typography variant="h5" sx={{ mb: 3 }}>Storages</Typography>
-      {deleteState && (
-        <DeleteProgress
-          label={deleteState.label}
-          totalChunks={deleteState.totalChunks}
-          deletedChunks={deleteState.deletedChunks}
-          status={deleteState.status}
-          workersStatus={deleteState.workersStatus}
-        />
-      )}
+      {deleteState && <DeleteProgress {...deleteState} />}
 
       <Panel>
         <List disablePadding>

@@ -118,7 +118,7 @@ func parseRateLimitError(resp *http.Response) *RateLimitError {
 // after sleeping for Telegram's retry_after. name identifies the call in logs
 // and errors. Context cancellation is honoured between retries.
 func (c *Client) doWithRetry(ctx context.Context, client *http.Client, name string, newReq func() (*http.Request, error)) (int, []byte, error) {
-	for attempt := 0; attempt <= maxRetries; attempt++ {
+	for attempt := 0; ; attempt++ {
 		if err := ctx.Err(); err != nil {
 			return 0, nil, err
 		}
@@ -128,47 +128,49 @@ func (c *Client) doWithRetry(ctx context.Context, client *http.Client, name stri
 			return 0, nil, fmt.Errorf("creating %s request: %w", name, err)
 		}
 
-		resp, err := client.Do(req)
-		if err != nil {
-			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
-				slog.Warn("telegram transient error on "+name+", retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
-				if err := telegramSleep(ctx, retryBackoff(attempt)); err != nil {
-					return 0, nil, err
-				}
-				continue
-			}
-			return 0, nil, fmt.Errorf("%s request: %w", name, err)
-		}
-
-		if rlErr := parseRateLimitError(resp); rlErr != nil {
-			resp.Body.Close()
-			if attempt == maxRetries {
+		status, body, rlErr, err := doOnce(client, req)
+		switch {
+		case err == nil && rlErr == nil:
+			return status, body, nil
+		case attempt == maxRetries:
+			if rlErr != nil {
 				return 0, nil, rlErr
 			}
+			return 0, nil, fmt.Errorf("%s: %w", name, err)
+		case rlErr != nil:
 			slog.Warn("telegram rate limited on "+name, "retry_after_s", rlErr.RetryAfter, "attempt", attempt+1, "max_retries", maxRetries)
 			if err := telegramSleep(ctx, time.Duration(rlErr.RetryAfter)*time.Second); err != nil {
 				return 0, nil, err
 			}
-			continue
-		}
-
-		body, err := io.ReadAll(resp.Body)
-		resp.Body.Close()
-		if err != nil {
-			if attempt < maxRetries && isRetryableDownloadError(ctx, err) {
-				slog.Warn("telegram transient read error on "+name+", retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
-				if err := telegramSleep(ctx, retryBackoff(attempt)); err != nil {
-					return 0, nil, err
-				}
-				continue
+		case isRetryableDownloadError(ctx, err):
+			slog.Warn("telegram transient error on "+name+", retrying", "attempt", attempt+1, "max_retries", maxRetries, "err", err)
+			if err := telegramSleep(ctx, retryBackoff(attempt)); err != nil {
+				return 0, nil, err
 			}
-			return 0, nil, fmt.Errorf("reading %s response: %w", name, err)
+		default:
+			return 0, nil, fmt.Errorf("%s: %w", name, err)
 		}
+	}
+}
 
-		return resp.StatusCode, body, nil
+// doOnce performs one round trip and reads the whole body. A 429 comes back
+// as rlErr; a transport or read failure as err.
+func doOnce(client *http.Client, req *http.Request) (status int, body []byte, rlErr *RateLimitError, err error) {
+	resp, err := client.Do(req)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("request: %w", err)
+	}
+	defer resp.Body.Close()
+
+	if rlErr := parseRateLimitError(resp); rlErr != nil {
+		return 0, nil, rlErr, nil
 	}
 
-	return 0, nil, fmt.Errorf("telegram %s failed after %d retries", name, maxRetries)
+	body, err = io.ReadAll(resp.Body)
+	if err != nil {
+		return 0, nil, nil, fmt.Errorf("reading response: %w", err)
+	}
+	return resp.StatusCode, body, nil, nil
 }
 
 // getWithRetry is doWithRetry for a plain GET.

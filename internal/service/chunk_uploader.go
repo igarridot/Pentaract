@@ -31,13 +31,6 @@ type failedChunkInfo struct {
 	plainHash [sha256.Size]byte
 }
 
-func shouldRetryChunkUpload(ctx context.Context, err error) bool {
-	if err == nil {
-		return false
-	}
-	return !contextAborted(ctx)
-}
-
 func (u *ChunkUploader) uploadChunkWithRetry(ctx context.Context, file *domain.File, storage *domain.Storage, position int16, chunkData []byte, plainHash [sha256.Size]byte) (uploadedChunkResult, error) {
 	encryptedChunkData, releaseEncBuf, err := u.cipher.EncryptChunk(file.ID, position, chunkData)
 	if err != nil {
@@ -50,7 +43,7 @@ func (u *ChunkUploader) uploadChunkWithRetry(ctx context.Context, file *domain.F
 	}
 
 	filename := telegram.GenerateChunkFilename(file.ID, int(position))
-	for attempt := 1; attempt <= UploadChunkMaxAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		wt, err := u.scheduler.GetToken(ctx, storage.ID)
 		if err != nil {
 			return uploadedChunkResult{}, fmt.Errorf("getting token for chunk %d: %w", position, err)
@@ -68,7 +61,7 @@ func (u *ChunkUploader) uploadChunkWithRetry(ctx context.Context, file *domain.F
 			}, nil
 		}
 
-		if !shouldRetryChunkUpload(ctx, err) || attempt == UploadChunkMaxAttempts {
+		if contextAborted(ctx) || attempt == UploadChunkMaxAttempts {
 			return uploadedChunkResult{}, fmt.Errorf("uploading chunk %d: %w", position, err)
 		}
 
@@ -78,8 +71,6 @@ func (u *ChunkUploader) uploadChunkWithRetry(ctx context.Context, file *domain.F
 			return uploadedChunkResult{}, backoffErr
 		}
 	}
-
-	return uploadedChunkResult{}, fmt.Errorf("uploading chunk %d: exhausted retries", position)
 }
 
 // verifySingleChunk downloads and hash-checks a single uploaded chunk.
@@ -93,14 +84,11 @@ func (u *ChunkUploader) verifySingleChunk(ctx context.Context, file *domain.File
 	}
 
 	const verifyExtraAttempts = 2
-	verifyBackoffs := []time.Duration{500 * time.Millisecond, 1 * time.Second}
 
-	for attempt := 0; attempt <= verifyExtraAttempts; attempt++ {
+	for attempt := 0; ; attempt++ {
 		if attempt > 0 {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			case <-time.After(verifyBackoffs[attempt-1]):
+			if err := sleepBackoff(ctx, attempt); err != nil {
+				return err
 			}
 			slog.Warn("retrying chunk verification", "position", result.Position, "file", file.Path, "attempt", attempt+1)
 		}
@@ -127,8 +115,6 @@ func (u *ChunkUploader) verifySingleChunk(ctx context.Context, file *domain.File
 		slog.Info("chunk verified", "position", result.Position, "file", file.Path, "elapsed", time.Since(chunkStartedAt).Round(time.Millisecond))
 		return nil
 	}
-
-	return fmt.Errorf("verifying chunk %d: exhausted retries", result.Position)
 }
 
 // Upload reads from reader chunk by chunk (streaming), uploads to Telegram in

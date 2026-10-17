@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import {
   Box, Typography, TextField, Button, Stack,
@@ -7,7 +7,10 @@ import {
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
 import { useApiAction } from '../../common/use_api_action'
+import { useAsyncValue } from '../../common/use_async_value'
 import Panel from '../../components/Panel'
+
+const NO_STORAGES = []
 
 export default function StorageWorkerCreateForm() {
   const navigate = useNavigate()
@@ -15,17 +18,7 @@ export default function StorageWorkerCreateForm() {
   const [name, setName] = useState('')
   const [token, setToken] = useState('')
   const [storageId, setStorageId] = useState('')
-  const [storages, setStorages] = useState([])
-
-  useEffect(() => {
-    const load = async () => {
-      try {
-        const data = await API.storages.list()
-        setStorages(data || [])
-      } catch {}
-    }
-    load()
-  }, [])
+  const storages = useAsyncValue(API.storages.list, NO_STORAGES)
 
   const handleSubmit = (e) => {
     e.preventDefault()

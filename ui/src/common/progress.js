@@ -55,6 +55,36 @@ export function applyUploadProgressUpdate(previous, data) {
   }
 }
 
+// Initial card state for a download, before the first SSE event arrives.
+export function createDownloadState(id, filename) {
+  return {
+    id,
+    filename,
+    totalBytes: 0,
+    downloadedBytes: 0,
+    totalChunks: 0,
+    downloadedChunks: 0,
+    status: 'downloading',
+    workersStatus: 'active',
+    errorMessage: '',
+  }
+}
+
+// Merges a download_progress SSE event into the card state. Totals fall back
+// to what we already knew; the error message only survives in the error state.
+export function applyDownloadProgressUpdate(previous, data) {
+  return {
+    ...previous,
+    totalBytes: data.total_bytes || previous?.totalBytes || 0,
+    downloadedBytes: data.downloaded_bytes || 0,
+    totalChunks: data.total || previous?.totalChunks || 0,
+    downloadedChunks: data.downloaded || 0,
+    status: data.status,
+    workersStatus: data.workers_status || previous?.workersStatus || 'active',
+    errorMessage: data.status === 'error' ? (data.error_message || previous?.errorMessage || '') : '',
+  }
+}
+
 export function summarizeTerminalStatuses(terminalStatuses = {}) {
   const summary = {
     completed: 0,

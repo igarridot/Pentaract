@@ -1,8 +1,8 @@
-import { useEffect, useState } from 'react'
 import { Drawer, List, Toolbar, Box, ListItem, ListItemButton, ListItemIcon, ListItemText } from '@mui/material'
 import { Storage as StorageIcon, SmartToy as WorkerIcon, ManageAccounts as UsersIcon, DriveFolderUpload as LocalUploadIcon } from '@mui/icons-material'
 import { Link, useLocation } from 'react-router-dom'
 import API from '../api'
+import { useAsyncValue } from '../common/use_async_value'
 
 const DRAWER_WIDTH = 220
 
@@ -48,19 +48,7 @@ function SideBarItem({ to, icon, label, showLabel }) {
 }
 
 export default function SideBar({ open }) {
-  const [isAdmin, setIsAdmin] = useState(false)
-
-  useEffect(() => {
-    let cancelled = false
-    API.users.adminStatus()
-      .then((data) => {
-        if (!cancelled) setIsAdmin(!!data?.is_admin)
-      })
-      .catch(() => {
-        if (!cancelled) setIsAdmin(false)
-      })
-    return () => { cancelled = true }
-  }, [])
+  const isAdmin = !!useAsyncValue(API.users.adminStatus, null)?.is_admin
 
   return (
     <Drawer

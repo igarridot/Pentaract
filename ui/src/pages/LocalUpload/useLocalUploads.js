@@ -1,6 +1,5 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import API from '../../api'
-import { createOperationId } from '../../common/operation_id'
 import {
   isActiveUploadStatus, isTerminalTransferStatus, createUploadState, applyUploadProgressUpdate,
 } from '../../common/progress'
@@ -94,23 +93,6 @@ export function useLocalUploads(addAlert) {
     return resolved
   }, [addAlert, askConflictDecision, hasConflict, invalidateDir])
 
-  const launchLocalUpload = useCallback(async (storageId, localPath, destPath, onConflict) => {
-    const uploadId = createOperationId()
-    const filename = fileNameFromPath(localPath)
-    trackUpload(uploadId, filename)
-
-    try {
-      await API.files.uploadLocal(storageId, localPath, destPath, uploadId, onConflict)
-    } catch (err) {
-      updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
-      releaseTracking(uploadId)
-      addAlert(`Upload failed: ${err.message}`, 'error', { persistent: true })
-      scheduleRemoval(uploadId, 3000)
-    }
-
-    return uploadId
-  }, [addAlert, trackUpload, updateUploadState, releaseTracking, scheduleRemoval])
-
   const launchLocalBatch = useCallback(async (storageId, items, onConflict) => {
     try {
       const result = await API.files.uploadLocalBatch(storageId, items, onConflict)
@@ -147,7 +129,6 @@ export function useLocalUploads(addAlert) {
   return {
     uploadStates,
     isUploading,
-    launchLocalUpload,
     launchLocalBatch,
     cancelUpload,
     resolveLocalConflicts,
