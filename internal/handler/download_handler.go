@@ -235,7 +235,7 @@ func (h *DownloadHandler) serveInline(w http.ResponseWriter, r *http.Request, s 
 		}
 		w.WriteHeader(http.StatusOK)
 		if err := h.svc.StreamFileToWriter(ctx, s.file, w, nil); err != nil {
-			slog.Error("stream file failed", "err", err)
+			logInlineFailure(r, "stream file failed", err)
 		}
 		return
 	}
@@ -256,8 +256,19 @@ func (h *DownloadHandler) serveInline(w http.ResponseWriter, r *http.Request, s 
 	w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 	w.WriteHeader(http.StatusPartialContent)
 	if err := h.svc.DownloadFileRangeToWriter(ctx, s.file, w, start, end, totalSize, nil); err != nil {
-		slog.Error("download file range failed", "err", err)
+		logInlineFailure(r, "download file range failed", err)
 	}
+}
+
+// logInlineFailure keeps the log quiet when a player simply dropped the
+// connection: ffmpeg and browsers abandon range requests all the time (a
+// seek, a probe of the file tail), which says nothing about the server.
+func logInlineFailure(r *http.Request, msg string, err error) {
+	if clientDisconnected(r, err) {
+		slog.Debug(msg, "err", err, "client_disconnected", true)
+		return
+	}
+	slog.Error(msg, "err", err)
 }
 
 // serveAttachment streams the file straight to the response as a download.
