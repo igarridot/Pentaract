@@ -145,10 +145,12 @@ func TestHLSFFmpegArgs(t *testing.T) {
 	args := strings.Join(hlsFFmpegArgs(cfg, "http://127.0.0.1:8000/src", plan, 12, 2), " ")
 
 	for _, want := range []string{
-		"-ss 12.000 -i http://127.0.0.1:8000/src",
+		// Copied video after a seek: audio starts at the same keyframe and
+		// only needs its gaps filled, no lead-in.
+		"-ss 12.000 -noaccurate_seek -i http://127.0.0.1:8000/src",
 		"-map 0:v:0 -map 0:a:0",
 		"-c:v copy",
-		"-c:a aac -b:a 192k -ac 2",
+		"-af aresample=async=1:min_hard_comp=0.02 -c:a aac -b:a 192k -ac 2 -ar 48000",
 		"-copyts -avoid_negative_ts disabled",
 		"-hls_segment_type fmp4",
 		"-hls_flags temp_file+independent_segments",
@@ -160,8 +162,14 @@ func TestHLSFFmpegArgs(t *testing.T) {
 			t.Errorf("args missing %q:\n%s", want, args)
 		}
 	}
-	if strings.Contains(args, "libx264") || strings.Contains(args, "hvc1") {
-		t.Errorf("h264 copy must not transcode or retag:\n%s", args)
+	if strings.Contains(args, "libx264") || strings.Contains(args, "hvc1") || strings.Contains(args, "first_pts") {
+		t.Errorf("h264 copy must not transcode or retag, nor pad audio after a seek:\n%s", args)
+	}
+
+	// From the start, the audio leads the video by 0.5 s of silence.
+	args = strings.Join(hlsFFmpegArgs(cfg, "u", plan, 0, 0), " ")
+	if !strings.Contains(args, "aresample=async=1:min_hard_comp=0.02:first_pts=-24000") || strings.Contains(args, "noaccurate_seek") {
+		t.Errorf("session from the start must pad audio from -0.5 s:\n%s", args)
 	}
 
 	plan, _ = media.BuildPlan(info, 3)
@@ -192,6 +200,13 @@ func TestHLSFFmpegArgs(t *testing.T) {
 	args = strings.Join(hlsFFmpegArgs(cfg, "u", plan.WithVideoTranscode(), 0, 0), " ")
 	if !strings.Contains(args, "-c:v libx264") || strings.Contains(args, "-c:v copy") {
 		t.Errorf("forced transcode must re-encode the h264:\n%s", args)
+	}
+
+	// Transcoded video after a seek starts exactly at -ss (accurate seek),
+	// so the audio lead-in is measured from there: (12 - 0.5) * 48000.
+	args = strings.Join(hlsFFmpegArgs(cfg, "u", plan.WithVideoTranscode(), 12, 2), " ")
+	if !strings.Contains(args, "first_pts=552000") || strings.Contains(args, "noaccurate_seek") {
+		t.Errorf("transcode seek must pad audio from 11.5 s with an accurate seek:\n%s", args)
 	}
 }
 
