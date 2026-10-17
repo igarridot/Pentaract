@@ -1,6 +1,6 @@
 FROM public.ecr.aws/docker/library/golang:1.27-alpine
 
-RUN apk add --no-cache ca-certificates nodejs npm git
+RUN apk add --no-cache ca-certificates nodejs npm git ffmpeg
 RUN npm install -g pnpm@latest
 
 WORKDIR /app

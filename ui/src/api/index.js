@@ -169,6 +169,21 @@ const API = {
     previewFileUrl: (storageId, path) =>
       filesDownloadAuthUrl(storageId, 'download', path, { inline: '1' }),
 
+    // Matroska playback: the server describes the file and serves it as HLS.
+    mediaInfo: (storageId, path) =>
+      apiRequest(filesPath(storageId, `/media_info/${encodePath(path)}`)),
+
+    // For hls.js, which authenticates with a header (see buildHlsConfig).
+    hlsPlaylistUrl: (storageId, path, audio) =>
+      `${API_BASE}${filesPath(storageId, `/hls/${encodePath(path)}/index.m3u8`)}${audio ? `?audio=${audio}` : ''}`,
+
+    // For native HLS players (Safari without MSE) that cannot send headers.
+    hlsPlaylistAuthUrl: (storageId, path, audio) =>
+      buildAuthUrl(filesPath(storageId, `/hls/${encodePath(path)}/index.m3u8`), audio ? { audio: String(audio) } : {}),
+
+    hlsStop: (storageId, path) =>
+      apiRequest(filesPath(storageId, `/hls_stop/${encodePath(path)}`), 'POST'),
+
     downloadDirUrl: (storageId, path, downloadId) =>
       filesDownloadAuthUrl(storageId, 'download_dir', path, { download_id: downloadId }),
 

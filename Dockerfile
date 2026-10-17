@@ -27,7 +27,7 @@ RUN pnpm run build
 # Stage 3: Runtime
 FROM public.ecr.aws/docker/library/alpine:latest
 
-RUN apk add --no-cache ca-certificates
+RUN apk add --no-cache ca-certificates ffmpeg
 
 COPY --from=builder /app/pentaract /pentaract
 COPY --from=ui /app/dist /ui/dist

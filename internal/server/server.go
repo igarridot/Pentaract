@@ -1,6 +1,7 @@
 package server
 
 import (
+	"fmt"
 	"io/fs"
 	"log/slog"
 	"net/http"
@@ -8,6 +9,7 @@ import (
 	"path"
 	"path/filepath"
 	"strings"
+	"time"
 
 	"github.com/go-chi/chi/v5"
 	"github.com/go-chi/chi/v5/middleware"
@@ -43,6 +45,15 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	accessSvc := service.NewAccessService(accessRepo, usersRepo)
 	workersSvc := service.NewStorageWorkersService(workersRepo)
 	filesSvc := service.NewFilesService(filesRepo, accessRepo, storageManager, storagesRepo, scheduler)
+	// ffmpeg reads the Matroska source back from this very server over
+	// loopback, through the same ranged inline download Kodi uses.
+	hlsSvc := service.NewHLSService(service.HLSConfig{
+		FFmpegPath:     cfg.FFmpegPath,
+		WorkDir:        cfg.HLSCacheDir,
+		SegmentSeconds: cfg.HLSSegmentSeconds,
+		IdleTimeout:    time.Duration(cfg.HLSIdleTimeoutSec) * time.Second,
+		SourceBaseURL:  fmt.Sprintf("http://127.0.0.1:%d", cfg.Port),
+	}, filesSvc)
 
 	// Handlers. Delete progress is shared: files and storages both delete.
 	deletes := handler.NewDeleteTrackers()
@@ -52,6 +63,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	accessH := handler.NewAccessHandler(accessSvc)
 	workersH := handler.NewStorageWorkersHandler(workersSvc)
 	filesH := handler.NewFilesHandler(filesSvc, deletes)
+	mediaH := handler.NewMediaHandler(filesSvc, hlsSvc, filesH.DownloadHandler)
 
 	// Router
 	r := chi.NewRouter()
@@ -70,6 +82,8 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", authH.Login)
 		r.Post("/users", usersH.Register)
+		// Loopback-only: ffmpeg's view of a Matroska file during HLS playback.
+		r.Get("/internal/hls_source/{token}", mediaH.HLSSource)
 
 		r.Group(func(r chi.Router) {
 			r.Use(handler.AuthMiddleware(cfg.SecretKey))
@@ -105,6 +119,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Get("/storages/{storageID}/files/download/*", filesH.Download)
 			r.Get("/storages/{storageID}/files/download_dir/*", filesH.DownloadDir)
 			r.Get("/storages/{storageID}/files/search/*", filesH.Search)
+			r.Get("/storages/{storageID}/files/media_info/*", mediaH.MediaInfo)
+			r.Get("/storages/{storageID}/files/hls/*", mediaH.HLS)
+			r.Post("/storages/{storageID}/files/hls_stop/*", mediaH.HLSStop)
 			r.Delete("/storages/{storageID}/files/*", filesH.DeleteFile)
 
 			r.Get("/upload_progress", filesH.UploadProgress)

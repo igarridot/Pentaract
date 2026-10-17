@@ -79,6 +79,13 @@ func TestAuthMiddlewareAllowsQueryTokenOnlyForDownloadEndpoints(t *testing.T) {
 		t.Fatalf("expected 204 for download endpoint, got %d", w.Code)
 	}
 
+	hls := httptest.NewRequest(http.MethodGet, "/api/storages/1/files/hls/a.mkv/index.m3u8?access_token="+token, nil)
+	w = httptest.NewRecorder()
+	AuthMiddleware(secret)(next).ServeHTTP(w, hls)
+	if w.Code != http.StatusNoContent {
+		t.Fatalf("expected 204 for hls endpoint, got %d", w.Code)
+	}
+
 	blocked := httptest.NewRequest(http.MethodGet, "/api/storages?access_token="+token, nil)
 	w = httptest.NewRecorder()
 	AuthMiddleware(secret)(next).ServeHTTP(w, blocked)

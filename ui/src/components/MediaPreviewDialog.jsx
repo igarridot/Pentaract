@@ -1,7 +1,11 @@
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box } from '@mui/material'
+import { lazy, Suspense } from 'react'
+import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, CircularProgress } from '@mui/material'
 import { getVideoMime } from '../pages/Files/operations'
 
-export default function MediaPreviewDialog({ open, file, mediaType, src, onClose, onDownload }) {
+// hls.js is only needed for Matroska files, so it stays out of the main bundle.
+const HlsPlayer = lazy(() => import('./HlsPlayer'))
+
+export default function MediaPreviewDialog({ open, file, mediaType, src, storageId, onClose, onDownload }) {
   const videoMime = getVideoMime(file?.name)
 
   return (
@@ -16,6 +20,11 @@ export default function MediaPreviewDialog({ open, file, mediaType, src, onClose
             <Box component="video" controls preload="metadata" sx={{ width: '100%', maxHeight: '70vh' }}>
               <source src={src} type={videoMime} />
             </Box>
+          )}
+          {mediaType === 'hls' && open && file && (
+            <Suspense fallback={<CircularProgress size={24} />}>
+              <HlsPlayer storageId={storageId} file={file} />
+            </Suspense>
           )}
         </Box>
       </DialogContent>

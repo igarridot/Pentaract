@@ -334,3 +334,23 @@ test('subscribeProgress keeps retrying on server errors', async () => {
   assert.equal(fetches, 2)
   assert.deepEqual(events, [{ status: 'done' }])
 })
+
+test('hls url builders and media endpoints encode the storage path', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  assert.equal(API.files.hlsPlaylistUrl('s1', 'tv/ep #1.mkv', 3), '/api/storages/s1/files/hls/tv/ep%20%231.mkv/index.m3u8?audio=3')
+  assert.equal(API.files.hlsPlaylistUrl('s1', 'a.mkv'), '/api/storages/s1/files/hls/a.mkv/index.m3u8')
+  assert.equal(API.files.hlsPlaylistAuthUrl('s1', 'a.mkv', 2), '/api/storages/s1/files/hls/a.mkv/index.m3u8?access_token=tok&audio=2')
+  assert.equal(API.files.hlsPlaylistAuthUrl('s1', 'a.mkv'), '/api/storages/s1/files/hls/a.mkv/index.m3u8?access_token=tok')
+
+  const seen = []
+  globalThis.fetch = async (url, opts) => {
+    seen.push([url, opts.method])
+    return { ok: true, status: 204, headers: { get: () => null }, async text() { return '' } }
+  }
+  await API.files.mediaInfo('s1', 'tv/ep #1.mkv')
+  await API.files.hlsStop('s1', 'tv/ep #1.mkv')
+  assert.deepEqual(seen, [
+    ['/api/storages/s1/files/media_info/tv/ep%20%231.mkv', 'GET'],
+    ['/api/storages/s1/files/hls_stop/tv/ep%20%231.mkv', 'POST'],
+  ])
+})

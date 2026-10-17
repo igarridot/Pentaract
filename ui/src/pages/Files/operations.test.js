@@ -144,6 +144,7 @@ test('runUploadPipeline stops launching new uploads when startUpload returns nul
 
 test('file operation helpers derive paths and media type consistently', () => {
   assert.equal(getMediaType('movie.mp4'), 'video')
+  assert.equal(getMediaType('episode.MKV'), 'hls')
   assert.equal(getMediaType('photo.PNG'), 'image')
   assert.equal(getMediaType('notes.txt'), null)
 
