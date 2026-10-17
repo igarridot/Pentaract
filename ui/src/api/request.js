@@ -26,27 +26,18 @@ async function parseResponse(resp) {
   return JSON.parse(text)
 }
 
+// Adds the bearer token to headers when auth is requested and a token exists.
+function authHeaders(auth, headers = {}) {
+  const token = auth ? getRawToken() : null
+  return token ? { ...headers, Authorization: `Bearer ${token}` } : headers
+}
+
 export async function apiRequest(path, method = 'GET', body = null, auth = true, options = {}) {
-  const headers = { 'Content-Type': 'application/json' }
-  if (auth) {
-    const token = getRawToken()
-    if (token) headers['Authorization'] = `Bearer ${token}`
-  }
-
-  const opts = { method, headers, ...options }
+  const opts = { method, headers: authHeaders(auth, { 'Content-Type': 'application/json' }), ...options }
   if (body) opts.body = JSON.stringify(body)
-
-  const resp = await fetch(`${API_BASE}${path}`, opts)
-  return parseResponse(resp)
+  return parseResponse(await fetch(`${API_BASE}${path}`, opts))
 }
 
 export async function apiMultipartRequest(path, method, formData, auth = true, options = {}) {
-  const headers = {}
-  if (auth) {
-    const token = getRawToken()
-    if (token) headers['Authorization'] = `Bearer ${token}`
-  }
-
-  const resp = await fetch(`${API_BASE}${path}`, { method, headers, body: formData, ...options })
-  return parseResponse(resp)
+  return parseResponse(await fetch(`${API_BASE}${path}`, { method, headers: authHeaders(auth), body: formData, ...options }))
 }

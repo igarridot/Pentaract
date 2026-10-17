@@ -7,6 +7,20 @@ import { createCompletionRegistry } from '../../common/completion_registry'
 import { createBulkOperation, runUploadPipeline } from './operations'
 import { useUploadConflicts } from './useUploadConflicts'
 
+// What each terminal SSE status does to the card: how long it stays visible
+// and which alert it raises.
+const UPLOAD_TERMINAL = {
+  done: { delay: 2000, alert: () => ['File uploaded', 'success'] },
+  error: {
+    delay: 3000,
+    alert: (filename) => [`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true }],
+  },
+  skipped: {
+    delay: 1500,
+    alert: (filename) => [`Skipped upload for "${filename}"`, 'info', { persistent: false }],
+  },
+}
+
 export function useUploads(addAlert, storageId, currentPath, loadTree, {
   registerBulkTransfer,
   markBulkTransferTerminal,
@@ -51,40 +65,25 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
     uploadAbortControllersRef.current.delete(uploadId)
   }, [])
 
+  // Settles an upload for everyone waiting on it: the bulk card, the
+  // completion registry and the progress subscription.
+  const settleUpload = useCallback((uploadId, status) => {
+    markBulkTransferTerminal('upload', uploadId, status)
+    releaseUploadTracking(uploadId)
+    uploadCompletionRegistryRef.current.settle(uploadId, status)
+  }, [markBulkTransferTerminal, releaseUploadTracking])
+
   const applyUploadTerminalState = useCallback((uploadId, filename, status) => {
-    if (status === 'done') {
-      markBulkTransferTerminal('upload', uploadId, 'done')
-      releaseUploadTracking(uploadId)
-      uploadCompletionRegistryRef.current.settle(uploadId, 'done')
-      addAlert('File uploaded', 'success')
-      loadTree()
-      scheduleUploadStateRemoval(uploadId, 2000)
-      return
-    }
+    const terminal = UPLOAD_TERMINAL[status]
+    if (!terminal) return
+    settleUpload(uploadId, status)
+    loadTree()
+    addAlert(...terminal.alert(filename))
+    scheduleUploadStateRemoval(uploadId, terminal.delay)
+  }, [addAlert, loadTree, settleUpload, scheduleUploadStateRemoval])
 
-    if (status === 'error') {
-      markBulkTransferTerminal('upload', uploadId, 'error')
-      releaseUploadTracking(uploadId)
-      uploadCompletionRegistryRef.current.settle(uploadId, 'error')
-      loadTree()
-      addAlert(`Upload failed unexpectedly for "${filename}". Please try again.`, 'error', { persistent: true })
-      scheduleUploadStateRemoval(uploadId, 3000)
-      return
-    }
-
-    if (status === 'skipped') {
-      markBulkTransferTerminal('upload', uploadId, 'skipped')
-      releaseUploadTracking(uploadId)
-      uploadCompletionRegistryRef.current.settle(uploadId, 'skipped')
-      loadTree()
-      addAlert(`Skipped upload for "${filename}"`, 'info', { persistent: false })
-      scheduleUploadStateRemoval(uploadId, 1500)
-    }
-  }, [addAlert, loadTree, markBulkTransferTerminal, releaseUploadTracking, scheduleUploadStateRemoval])
-
-  const launchUpload = useCallback((file, targetPath, onConflict = 'keep_both', providedUploadId = createOperationId()) => {
+  const launchUpload = useCallback((file, targetPath, onConflict = 'keep_both', uploadId = createOperationId()) => {
     const filename = file.name
-    const uploadId = providedUploadId
     const completionPromise = uploadCompletionRegistryRef.current.waitFor(uploadId)
     setUploadStates((prev) => [...prev, createUploadState(uploadId, filename, file.size)])
 
@@ -105,28 +104,22 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
     ).then(
       () => 'sent',
       (err) => {
-        if (err?.name !== 'AbortError') {
-          markBulkTransferTerminal('upload', uploadId, 'error')
+        // The request itself failed: an abort is a cancellation, anything
+        // else means the upload never reached the server intact.
+        const status = err?.name === 'AbortError' ? 'cancelled' : 'error'
+        if (status === 'error') {
           updateUploadState(uploadId, (prev) => ({ ...prev, status: 'error' }))
-          uploadCompletionRegistryRef.current.settle(uploadId, 'error')
           addAlert(`Upload interrupted: ${err.message}`, 'error', { persistent: true })
-        } else {
-          markBulkTransferTerminal('upload', uploadId, 'cancelled')
-          uploadCompletionRegistryRef.current.settle(uploadId, 'cancelled')
         }
-        releaseUploadTracking(uploadId)
+        settleUpload(uploadId, status)
         loadTree()
         scheduleUploadStateRemoval(uploadId, 1500)
-        return err?.name === 'AbortError' ? 'cancelled' : 'error'
+        return status
       },
     )
 
-    return {
-      uploadId,
-      requestPromise,
-      completionPromise,
-    }
-  }, [addAlert, applyUploadTerminalState, loadTree, markBulkTransferTerminal, releaseUploadTracking, scheduleUploadStateRemoval, storageId, updateUploadState])
+    return { uploadId, requestPromise, completionPromise }
+  }, [addAlert, applyUploadTerminalState, loadTree, settleUpload, scheduleUploadStateRemoval, storageId, updateUploadState])
 
   const hasUploadConflict = useCallback((targetPath, filename) => (
     hasConflict(storageId, targetPath, filename)
@@ -216,10 +209,10 @@ export function useUploads(addAlert, storageId, currentPath, loadTree, {
   }
 
   const cleanupUploads = useCallback(() => {
-    uploadProgressCancelsRef.current.forEach((_, uploadId) => {
+    uploadProgressCancelsRef.current.forEach((cancel, uploadId) => {
       API.files.cancelUpload(uploadId).catch(() => {})
+      cancel()
     })
-    uploadProgressCancelsRef.current.forEach((cancel) => cancel())
     uploadProgressCancelsRef.current.clear()
     uploadAbortControllersRef.current.forEach((controller) => controller.abort())
     uploadAbortControllersRef.current.clear()

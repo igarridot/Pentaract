@@ -10,6 +10,7 @@ import {
 } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
+import { useAsyncValue } from '../../common/use_async_value'
 import PathBreadcrumbs from '../../components/PathBreadcrumbs'
 import UploadProgress from '../../components/UploadProgress'
 import BulkOperationProgress from '../../components/BulkOperationProgress'
@@ -21,11 +22,13 @@ import { useLocalUploads } from './useLocalUploads'
 import LocalFsBrowser from './LocalFsBrowser'
 import { sortLocalEntries, localEntryKey, buildLocalBatchItems } from './local_upload_paths'
 
+const NO_STORAGES = []
+
 export default function LocalUpload() {
   const addAlert = useAlert()
 
   // Storage selection
-  const [storages, setStorages] = useState([])
+  const storages = useAsyncValue(API.storages.list, NO_STORAGES)
   const [storageId, setStorageId] = useState('')
   const [destPath, setDestPath] = useState('')
 
@@ -58,19 +61,6 @@ export default function LocalUpload() {
 
   // Bulk progress
   const [bulkProgress, setBulkProgress] = useState(null)
-
-  // Load storages on mount
-  useEffect(() => {
-    let cancelled = false
-    API.storages.list()
-      .then((data) => {
-        if (!cancelled) setStorages(data || [])
-      })
-      .catch(() => {
-        if (!cancelled) setStorages([])
-      })
-    return () => { cancelled = true }
-  }, [])
 
   // Browse directory
   const browse = useCallback(async (path) => {
@@ -240,28 +230,9 @@ export default function LocalUpload() {
 
       {/* Upload progress */}
       {uploadStates.map((u) => (
-        <UploadProgress
-          key={u.id}
-          filename={u.filename}
-          totalBytes={u.totalBytes}
-          uploadedBytes={u.uploadedBytes}
-          totalChunks={u.totalChunks}
-          uploadedChunks={u.uploadedChunks}
-          verificationTotal={u.verificationTotal}
-          verifiedChunks={u.verifiedChunks}
-          status={u.status}
-          workersStatus={u.workersStatus}
-          onCancel={() => cancelUpload(u.id)}
-        />
+        <UploadProgress key={u.id} {...u} onCancel={() => cancelUpload(u.id)} />
       ))}
-      {bulkProgress && (
-        <BulkOperationProgress
-          operation={bulkProgress.operation}
-          status={bulkProgress.status}
-          total={bulkProgress.total}
-          completed={bulkProgress.completed}
-        />
-      )}
+      {bulkProgress && <BulkOperationProgress {...bulkProgress} />}
 
       {/* Section B: Local Filesystem Browser */}
       <PathBreadcrumbs

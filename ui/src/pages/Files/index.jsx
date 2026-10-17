@@ -119,13 +119,7 @@ export default function Files() {
   }, []) // eslint-disable-line react-hooks/exhaustive-deps -- unmount only
 
   // Compute bulk metrics with actual current transfer states
-  const {
-    totalBytes: bulkTotalBytes,
-    processedBytes: bulkProcessedBytes,
-    totalChunks: bulkTotalChunks,
-    processedChunks: bulkProcessedChunks,
-    workersStatus: bulkWorkersStatus,
-  } = getBulkOperationMetrics(bulkOperation, uploadStates, downloadStates)
+  const bulkMetrics = getBulkOperationMetrics(bulkOperation, uploadStates, downloadStates)
 
   const handleCreateFolder = (name) => run(
     () => API.files.createFolder(storageId, currentPath, name),
@@ -162,13 +156,7 @@ export default function Files() {
         onCancelDownload={cancelDownload}
         deleteState={deleteState}
         bulkOperation={bulkOperation}
-        bulkMetrics={{
-          totalBytes: bulkTotalBytes,
-          processedBytes: bulkProcessedBytes,
-          totalChunks: bulkTotalChunks,
-          processedChunks: bulkProcessedChunks,
-          workersStatus: bulkWorkersStatus,
-        }}
+        bulkMetrics={bulkMetrics}
         onCancelBulk={() => bulkCancelRef.current?.()}
       />
 

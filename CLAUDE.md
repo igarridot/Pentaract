@@ -69,7 +69,8 @@ Repositories → Telegram Client → WorkerScheduler → StorageManager → Serv
 - `common/use_api_action.js` — `run(action, { success, onSuccess, onError })` replaces the try/await/addAlert boilerplate in pages. API failures are `ApiError` with a `status` (`api/request.js`)
 - `common/completion_registry.js` — awaitable terminal status per transfer; bulk uploads and bulk downloads use it to run one file at a time
 - Dialogs that edit an entity (`EditWorkerDialog`, `GrantAccess`, `RenameFolderDialog`) initialise state from props and are reset by the parent through `key`, not by effects
-- Shared components: `Panel` (bordered surface), `PathBreadcrumbs` (Root > a > b), `ProgressCard`
+- Shared components: `Panel` (bordered surface), `PathBreadcrumbs` (Root > a > b), `ProgressCard`, `AuthForm` (login/register form; the page only supplies the submit call). Progress components take the hook state objects spread as props (`<UploadProgress {...uploadState} />`), so state keys and prop names must stay aligned
+- `common/use_async_value.js` — `useAsyncValue(API.x.y, fallback)` loads a value once on mount (storages lists, admin status); pass a stable loader and a module-level fallback
 - Pure, node-tested modules hold the logic hooks and components lean on: `common/progress.js`, `common/api_action.js`, `pages/Files/operations.js`, `pages/Files/upload_conflicts.js`, `pages/LocalUpload/local_upload_paths.js`
 - Storage paths inside URLs go through `encodePath` in `ui/src/api/index.js` (per-segment `encodeURIComponent`); the server decodes with `url.PathUnescape`
 - `ui/src/components/ProgressCard.jsx` — Shared progress UI used by all 4 progress components

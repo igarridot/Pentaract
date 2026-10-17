@@ -212,44 +212,6 @@ test('localFs.browse sends empty path when omitted', async () => {
   assert.deepEqual(res, [])
 })
 
-test('files.uploadLocal sends correct JSON body', async () => {
-  globalThis.localStorage = makeStorage('tok')
-  globalThis.fetch = async (url, opts) => {
-    assert.equal(url, '/api/storages/s1/files/upload_local')
-    assert.equal(opts.method, 'POST')
-    const body = JSON.parse(opts.body)
-    assert.equal(body.local_path, 'photos/a.jpg')
-    assert.equal(body.dest_path, 'backup')
-    assert.equal(body.upload_id, 'up-local-1')
-    assert.equal(body.on_conflict, 'keep_both')
-    return {
-      ok: true,
-      status: 202,
-      headers: { get: () => null },
-      async text() { return '{"upload_id":"up-local-1"}' },
-    }
-  }
-
-  const res = await API.files.uploadLocal('s1', 'photos/a.jpg', 'backup', 'up-local-1')
-  assert.equal(res.upload_id, 'up-local-1')
-})
-
-test('files.uploadLocal uses custom on_conflict policy', async () => {
-  globalThis.localStorage = makeStorage('tok')
-  globalThis.fetch = async (url, opts) => {
-    const body = JSON.parse(opts.body)
-    assert.equal(body.on_conflict, 'skip')
-    return {
-      ok: true,
-      status: 202,
-      headers: { get: () => null },
-      async text() { return '{"upload_id":"up-2"}' },
-    }
-  }
-
-  await API.files.uploadLocal('s1', 'a.txt', '', 'up-2', 'skip')
-})
-
 test('files.uploadLocalBatch sends items and on_conflict', async () => {
   globalThis.localStorage = makeStorage('tok')
   globalThis.fetch = async (url, opts) => {

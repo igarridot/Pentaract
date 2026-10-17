@@ -5,7 +5,45 @@ import {
   calculatePercent, isTerminalTransferStatus, isActiveUploadStatus, isActiveDownloadStatus,
   summarizeTerminalStatuses, resolveBulkTransferStatus, workersStatusText,
   createUploadState, applyUploadProgressUpdate,
+  createDownloadState, applyDownloadProgressUpdate,
 } from './progress.js'
+
+test('createDownloadState starts an in-flight card', () => {
+  assert.deepEqual(createDownloadState('d1', 'a.zip'), {
+    id: 'd1',
+    filename: 'a.zip',
+    totalBytes: 0,
+    downloadedBytes: 0,
+    totalChunks: 0,
+    downloadedChunks: 0,
+    status: 'downloading',
+    workersStatus: 'active',
+    errorMessage: '',
+  })
+})
+
+test('applyDownloadProgressUpdate keeps known totals and scopes the error message', () => {
+  const initial = createDownloadState('d1', 'a.zip')
+  const partial = applyDownloadProgressUpdate(initial, {
+    total_bytes: 100, downloaded_bytes: 10, total: 5, downloaded: 1, status: 'downloading',
+  })
+  assert.equal(partial.totalBytes, 100)
+  assert.equal(partial.downloadedBytes, 10)
+  assert.equal(partial.workersStatus, 'active')
+
+  // A sparse event never blanks the totals already known.
+  const sparse = applyDownloadProgressUpdate(partial, { downloaded_bytes: 20, downloaded: 2, status: 'interrupted', workers_status: 'waiting_rate_limit' })
+  assert.equal(sparse.totalBytes, 100)
+  assert.equal(sparse.totalChunks, 5)
+  assert.equal(sparse.status, 'interrupted')
+  assert.equal(sparse.workersStatus, 'waiting_rate_limit')
+  assert.equal(sparse.filename, 'a.zip')
+
+  const failed = applyDownloadProgressUpdate(sparse, { status: 'error', error_message: 'boom' })
+  assert.equal(failed.errorMessage, 'boom')
+  const recovered = applyDownloadProgressUpdate(failed, { status: 'downloading' })
+  assert.equal(recovered.errorMessage, '')
+})
 
 test('calculatePercent clamps values into 0..100', () => {
   assert.equal(calculatePercent(0, 0), 0)

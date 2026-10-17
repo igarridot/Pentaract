@@ -50,7 +50,6 @@ export function useFileNavigation(addAlert) {
     currentPath,
     pathParts,
     items,
-    setItems,
     search,
     setSearch,
     searchResults,
