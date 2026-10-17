@@ -8,7 +8,6 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
-	"github.com/jackc/pgx/v5/pgconn"
 
 	"github.com/Dominux/Pentaract/internal/domain"
 	"github.com/Dominux/Pentaract/internal/pathutil"
@@ -22,13 +21,18 @@ func NewFilesRepo(pool DB) *FilesRepo {
 	return &FilesRepo{pool: pool}
 }
 
+func scanFile(s scanner) (*domain.File, error) {
+	f := &domain.File{}
+	err := s.Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded)
+	return f, err
+}
+
 // CreateFileAnyway creates a file record, auto-resolving duplicate names with (1), (2), etc.
 func (r *FilesRepo) CreateFileAnyway(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, error) {
 	dir, filename := pathutil.SplitDirAndFile(path)
 	nameWithoutExt, ext := pathutil.SplitNameAndExtension(filename)
 
-	f := &domain.File{}
-	err := r.pool.QueryRow(ctx,
+	return scanFile(r.pool.QueryRow(ctx,
 		`WITH existing AS (
 			SELECT path FROM files
 			WHERE storage_id = $1
@@ -51,12 +55,7 @@ func (r *FilesRepo) CreateFileAnyway(ctx context.Context, path string, size int6
 		)
 		RETURNING id, path, size, storage_id, is_uploaded`,
 		storageID, dir, nameWithoutExt, ext, size,
-	).Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded)
-
-	if err != nil {
-		return nil, err
-	}
-	return f, nil
+	))
 }
 
 // CreateFileIfNotExists creates a file record only when the exact path does not
@@ -67,8 +66,7 @@ func (r *FilesRepo) CreateFileAnyway(ctx context.Context, path string, size int6
 // Those belong to uploads that may still be in progress. Stale records are
 // cleaned up atomically in CreateChunksAndMarkUploaded when an upload succeeds.
 func (r *FilesRepo) CreateFileIfNotExists(ctx context.Context, path string, size int64, storageID uuid.UUID) (*domain.File, bool, error) {
-	f := &domain.File{}
-	err := r.pool.QueryRow(ctx,
+	f, err := scanFile(r.pool.QueryRow(ctx,
 		`INSERT INTO files (path, size, storage_id, is_uploaded)
 		SELECT $1, $2, $3, false
 		WHERE NOT EXISTS (
@@ -76,37 +74,30 @@ func (r *FilesRepo) CreateFileIfNotExists(ctx context.Context, path string, size
 		)
 		RETURNING id, path, size, storage_id, is_uploaded`,
 		path, size, storageID,
-	).Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded)
+	))
+	if errors.Is(err, pgx.ErrNoRows) {
+		return nil, true, nil
+	}
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, true, nil
-		}
 		return nil, false, err
 	}
 	return f, false, nil
 }
 
 func (r *FilesRepo) GetByPath(ctx context.Context, storageID uuid.UUID, path string) (*domain.File, error) {
-	f := &domain.File{}
-	err := r.pool.QueryRow(ctx,
+	f, err := scanFile(r.pool.QueryRow(ctx,
 		`SELECT id, path, size, storage_id, is_uploaded FROM files WHERE storage_id = $1 AND path = $2`,
 		storageID, path,
-	).Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded)
+	))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrNotFound("file")
-		}
-		return nil, err
+		return nil, notFoundOr(err, "file")
 	}
 	return f, nil
 }
 
 // ListDir returns files and folders at the given path prefix.
 func (r *FilesRepo) ListDir(ctx context.Context, storageID uuid.UUID, path string) ([]domain.FSElement, error) {
-	// Ensure path ends with /
-	if path != "" && !strings.HasSuffix(path, "/") {
-		path += "/"
-	}
+	path = pathutil.DirPrefix(path)
 
 	rows, err := r.pool.Query(ctx,
 		`SELECT DISTINCT ON (name)
@@ -161,10 +152,6 @@ func (r *FilesRepo) ListDir(ctx context.Context, storageID uuid.UUID, path strin
 }
 
 func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error) {
-	if basePath != "" && !strings.HasSuffix(basePath, "/") {
-		basePath += "/"
-	}
-
 	escaped := strings.NewReplacer("%", `\%`, "_", `\_`).Replace(searchPath)
 	pattern := "%" + escaped + "%"
 	rows, err := r.pool.Query(ctx,
@@ -176,7 +163,7 @@ func (r *FilesRepo) Search(ctx context.Context, storageID uuid.UUID, basePath, s
 			AND is_uploaded = true
 			AND path NOT LIKE '%/.folder'
 		ORDER BY path`,
-		storageID, basePath, pattern,
+		storageID, pathutil.DirPrefix(basePath), pattern,
 	)
 	return collectRows(rows, err, func(rows pgx.Rows) (domain.FSElement, error) {
 		el := domain.FSElement{IsFile: true}
@@ -224,37 +211,18 @@ func (r *FilesRepo) ListChunksByStorage(ctx context.Context, storageID uuid.UUID
 // Unlike Delete (which matches by path), this cannot accidentally remove
 // records belonging to other concurrent uploads of the same path.
 func (r *FilesRepo) DeleteByID(ctx context.Context, fileID uuid.UUID) error {
-	ct, err := r.pool.Exec(ctx,
-		`DELETE FROM files WHERE id = $1`,
-		fileID,
-	)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return domain.ErrNotFound("file")
-	}
-	return nil
+	return execAffecting(ctx, r.pool, "file", `DELETE FROM files WHERE id = $1`, fileID)
 }
 
+// Delete removes the exact file or every file under the folder path.
 func (r *FilesRepo) Delete(ctx context.Context, storageID uuid.UUID, path string) error {
-	// Delete exact file or all files under folder path
-	ct, err := r.pool.Exec(ctx,
+	return execAffecting(ctx, r.pool, "file",
 		`DELETE FROM files WHERE storage_id = $1 AND (path = $2 OR path LIKE $3)`,
 		storageID, path, path+"/%",
 	)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return domain.ErrNotFound("file")
-	}
-	return nil
 }
 
-func createChunks(ctx context.Context, execer interface {
-	Exec(ctx context.Context, sql string, args ...any) (pgconn.CommandTag, error)
-}, chunks []domain.FileChunk) error {
+func createChunks(ctx context.Context, db execer, chunks []domain.FileChunk) error {
 	if len(chunks) == 0 {
 		return nil
 	}
@@ -268,7 +236,7 @@ func createChunks(ctx context.Context, execer interface {
 	}
 
 	query := `INSERT INTO file_chunks (file_id, telegram_file_id, telegram_message_id, position) VALUES ` + strings.Join(valueStrings, ", ")
-	_, err := execer.Exec(ctx, query, valueArgs...)
+	_, err := db.Exec(ctx, query, valueArgs...)
 	return err
 }
 
@@ -324,32 +292,21 @@ func (r *FilesRepo) UpdateChunkTelegramFileID(ctx context.Context, chunkID uuid.
 
 // ListFilesUnderPath returns all uploaded files under a directory prefix.
 func (r *FilesRepo) ListFilesUnderPath(ctx context.Context, storageID uuid.UUID, path string) ([]domain.File, error) {
-	if path != "" && !strings.HasSuffix(path, "/") {
-		path += "/"
-	}
-
 	rows, err := r.pool.Query(ctx,
 		`SELECT id, path, size, storage_id, is_uploaded FROM files
 		WHERE storage_id = $1 AND path LIKE $2 || '%' AND is_uploaded = true AND path NOT LIKE '%/.folder'
 		ORDER BY path`,
-		storageID, path,
+		storageID, pathutil.DirPrefix(path),
 	)
 	return collectRows(rows, err, func(rows pgx.Rows) (domain.File, error) {
-		var f domain.File
-		err := rows.Scan(&f.ID, &f.Path, &f.Size, &f.StorageID, &f.IsUploaded)
-		return f, err
+		f, err := scanFile(rows)
+		return *f, err
 	})
 }
 
 // DirStats returns total uploaded file bytes and exact Telegram chunk count under a directory prefix.
 func (r *FilesRepo) DirStats(ctx context.Context, storageID uuid.UUID, path string) (int64, int64, error) {
-	if path != "" && !strings.HasSuffix(path, "/") {
-		path += "/"
-	}
-
-	likePath := path + "%"
-	var totalBytes int64
-	var totalChunks int64
+	var totalBytes, totalChunks int64
 	err := r.pool.QueryRow(ctx,
 		`SELECT
 			COALESCE((SELECT SUM(f.size)
@@ -365,13 +322,9 @@ func (r *FilesRepo) DirStats(ctx context.Context, storageID uuid.UUID, path stri
 					AND f.path LIKE $2
 					AND f.is_uploaded = true
 					AND f.path NOT LIKE '%/.folder'), 0) AS total_chunks`,
-		storageID, likePath,
+		storageID, pathutil.DirPrefix(path)+"%",
 	).Scan(&totalBytes, &totalChunks)
-	if err != nil {
-		return 0, 0, err
-	}
-
-	return totalBytes, totalChunks, nil
+	return totalBytes, totalChunks, err
 }
 
 // Move renames a file or moves all files under a folder prefix to a new path.
@@ -389,18 +342,11 @@ func (r *FilesRepo) Move(ctx context.Context, storageID uuid.UUID, oldPath, newP
 	}
 
 	// Move folder: update all files under oldPath/
-	ct, err = r.pool.Exec(ctx,
+	return execAffecting(ctx, r.pool, "file",
 		`UPDATE files SET path = $3 || substring(path from length($2) + 1)
 		WHERE storage_id = $1 AND path LIKE $2 || '/%'`,
 		storageID, oldPath, newPath,
 	)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return domain.ErrNotFound("file")
-	}
-	return nil
 }
 
 // CreateFolder creates a placeholder file for a folder (size=0, is_uploaded=true).

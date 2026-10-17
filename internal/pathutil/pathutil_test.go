@@ -29,6 +29,24 @@ func TestTrimTrailingSlash(t *testing.T) {
 	}
 }
 
+func TestDirPrefix(t *testing.T) {
+	tests := []struct {
+		path string
+		want string
+	}{
+		{path: "", want: ""},
+		{path: "docs", want: "docs/"},
+		{path: "docs/", want: "docs/"},
+		{path: "root/docs//", want: "root/docs/"},
+	}
+
+	for _, tt := range tests {
+		if got := DirPrefix(tt.path); got != tt.want {
+			t.Fatalf("DirPrefix(%q) = %q, want %q", tt.path, got, tt.want)
+		}
+	}
+}
+
 func TestArchiveName(t *testing.T) {
 	tests := []struct {
 		path string

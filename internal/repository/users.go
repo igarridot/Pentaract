@@ -2,7 +2,6 @@ package repository
 
 import (
 	"context"
-	"errors"
 
 	"github.com/google/uuid"
 	"github.com/jackc/pgx/v5"
@@ -18,47 +17,41 @@ func NewUsersRepo(pool DB) *UsersRepo {
 	return &UsersRepo{pool: pool}
 }
 
-func (r *UsersRepo) Create(ctx context.Context, email, passwordHash string) (*domain.User, error) {
+func scanUser(s scanner) (*domain.User, error) {
 	user := &domain.User{}
-	err := r.pool.QueryRow(ctx,
+	err := s.Scan(&user.ID, &user.Email, &user.PasswordHash)
+	return user, err
+}
+
+func (r *UsersRepo) Create(ctx context.Context, email, passwordHash string) (*domain.User, error) {
+	user, err := scanUser(r.pool.QueryRow(ctx,
 		`INSERT INTO users (email, password_hash) VALUES ($1, $2) RETURNING id, email, password_hash`,
 		email, passwordHash,
-	).Scan(&user.ID, &user.Email, &user.PasswordHash)
+	))
 	if err != nil {
-		if isUniqueViolation(err) {
-			return nil, domain.ErrAlreadyExists("user")
-		}
-		return nil, err
+		return nil, conflictOr(err, "user")
 	}
 	return user, nil
 }
 
 func (r *UsersRepo) GetByEmail(ctx context.Context, email string) (*domain.User, error) {
-	user := &domain.User{}
-	err := r.pool.QueryRow(ctx,
+	user, err := scanUser(r.pool.QueryRow(ctx,
 		`SELECT id, email, password_hash FROM users WHERE email = $1`,
 		email,
-	).Scan(&user.ID, &user.Email, &user.PasswordHash)
+	))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrNotFound("user")
-		}
-		return nil, err
+		return nil, notFoundOr(err, "user")
 	}
 	return user, nil
 }
 
 func (r *UsersRepo) GetByID(ctx context.Context, id uuid.UUID) (*domain.User, error) {
-	user := &domain.User{}
-	err := r.pool.QueryRow(ctx,
+	user, err := scanUser(r.pool.QueryRow(ctx,
 		`SELECT id, email, password_hash FROM users WHERE id = $1`,
 		id,
-	).Scan(&user.ID, &user.Email, &user.PasswordHash)
+	))
 	if err != nil {
-		if errors.Is(err, pgx.ErrNoRows) {
-			return nil, domain.ErrNotFound("user")
-		}
-		return nil, err
+		return nil, notFoundOr(err, "user")
 	}
 	return user, nil
 }
@@ -78,17 +71,10 @@ func (r *UsersRepo) ListNonAdmin(ctx context.Context, adminEmail string) ([]doma
 }
 
 func (r *UsersRepo) UpdatePassword(ctx context.Context, id uuid.UUID, passwordHash string) error {
-	ct, err := r.pool.Exec(ctx,
+	return execAffecting(ctx, r.pool, "user",
 		`UPDATE users SET password_hash = $2 WHERE id = $1`,
 		id, passwordHash,
 	)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return domain.ErrNotFound("user")
-	}
-	return nil
 }
 
 func (r *UsersRepo) DeleteManaged(ctx context.Context, id uuid.UUID) error {
@@ -104,12 +90,8 @@ func (r *UsersRepo) DeleteManaged(ctx context.Context, id uuid.UUID) error {
 	if _, err := tx.Exec(ctx, `DELETE FROM storage_workers WHERE user_id = $1`, id); err != nil {
 		return err
 	}
-	ct, err := tx.Exec(ctx, `DELETE FROM users WHERE id = $1`, id)
-	if err != nil {
+	if err := execAffecting(ctx, tx, "user", `DELETE FROM users WHERE id = $1`, id); err != nil {
 		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return domain.ErrNotFound("user")
 	}
 
 	return tx.Commit(ctx)

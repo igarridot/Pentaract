@@ -7,6 +7,15 @@ func TrimTrailingSlash(path string) string {
 	return strings.TrimRight(path, "/")
 }
 
+// DirPrefix returns path as a directory prefix: "" for the root, otherwise
+// the path with exactly one trailing slash.
+func DirPrefix(path string) string {
+	if path == "" {
+		return ""
+	}
+	return TrimTrailingSlash(path) + "/"
+}
+
 // Join normalizes path segments and joins them with a single slash.
 func Join(base, name string) string {
 	base = strings.Trim(base, "/")

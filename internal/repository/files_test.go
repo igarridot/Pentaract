@@ -121,6 +121,14 @@ func TestFilesRepoListDirAndSearch(t *testing.T) {
 		t.Fatalf("unexpected list dir result: %+v", list)
 	}
 
+	// Extra trailing slashes are normalised into the single-slash prefix.
+	mock.ExpectQuery("SELECT DISTINCT ON \\(name\\)").
+		WithArgs(storageID, "docs/").
+		WillReturnRows(pgxmock.NewRows([]string{"path", "name", "size", "is_file"}))
+	if _, err := repo.ListDir(ctx, storageID, "docs//"); err != nil {
+		t.Fatalf("list dir with doubled slash failed: %v", err)
+	}
+
 	mock.ExpectQuery("SELECT path, size").
 		WithArgs(storageID, "docs/", "%report%").
 		WillReturnRows(pgxmock.NewRows([]string{"path", "size"}).

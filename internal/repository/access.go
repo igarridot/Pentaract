@@ -43,29 +43,22 @@ func (r *AccessRepo) List(ctx context.Context, storageID uuid.UUID) ([]domain.Us
 }
 
 func (r *AccessRepo) Delete(ctx context.Context, userID, storageID uuid.UUID) error {
-	ct, err := r.pool.Exec(ctx,
+	return execAffecting(ctx, r.pool, "access",
 		`DELETE FROM access WHERE user_id = $1 AND storage_id = $2`,
 		userID, storageID,
 	)
-	if err != nil {
-		return err
-	}
-	if ct.RowsAffected() == 0 {
-		return domain.ErrNotFound("access")
-	}
-	return nil
+}
+
+// accessFilters is the SQL predicate that grants each required level.
+var accessFilters = map[domain.AccessType]string{
+	domain.AccessRead:  `access_type IN ('r', 'w', 'a')`,
+	domain.AccessWrite: `access_type IN ('w', 'a')`,
+	domain.AccessAdmin: `access_type = 'a'`,
 }
 
 func (r *AccessRepo) HasAccess(ctx context.Context, userID, storageID uuid.UUID, requiredLevel domain.AccessType) (bool, error) {
-	var filter string
-	switch requiredLevel {
-	case domain.AccessRead:
-		filter = `access_type IN ('r', 'w', 'a')`
-	case domain.AccessWrite:
-		filter = `access_type IN ('w', 'a')`
-	case domain.AccessAdmin:
-		filter = `access_type = 'a'`
-	default:
+	filter, ok := accessFilters[requiredLevel]
+	if !ok {
 		return false, nil
 	}
 
@@ -74,8 +67,5 @@ func (r *AccessRepo) HasAccess(ctx context.Context, userID, storageID uuid.UUID,
 		`SELECT EXISTS(SELECT 1 FROM access WHERE user_id = $1 AND storage_id = $2 AND `+filter+`)`,
 		userID, storageID,
 	).Scan(&exists)
-	if err != nil {
-		return false, err
-	}
-	return exists, nil
+	return exists, err
 }
