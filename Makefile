@@ -1,10 +1,15 @@
-.PHONY: up down build check test ui-install ui-build dev-shell dev-up backup-now backup-restore backup-list
+.PHONY: up down certs build check test ui-install ui-build dev-shell dev-up backup-now backup-restore backup-list
 
 COMPOSE := docker compose --project-name pentaract
 
 # Production
-up:
+up: certs
 	$(COMPOSE) up -d --build --force-recreate --remove-orphans
+
+# Self-signed certificate for the nginx HTTPS front, kept if one exists.
+# Add the names you browse with: make certs CERT_HOSTS="pentaract.lan 192.168.1.10"
+certs:
+	sh scripts/gen-self-signed-cert.sh persistent_data/certs $(CERT_HOSTS)
 
 down:
 	$(COMPOSE) down

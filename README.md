@@ -62,7 +62,11 @@ Set at least:
 make up
 ```
 
-App URL: `http://localhost:8000`
+App URL: `https://localhost:8443` (nginx front, HTTPS + HTTP/2)
+
+`make up` creates a self-signed certificate, valid for 100 years, in `persistent_data/certs` the first time, so the browser shows a warning you accept once. It asks for the FQDN (or IPs) you open Pentaract with; to skip the question, pass them: `make certs CERT_HOSTS="pentaract.lan 192.168.1.10"`. To use a real certificate, place `fullchain.pem` and `privkey.pem` in that directory instead.
+
+Use the HTTPS URL in the browser. Over plain HTTP the browser uses HTTP/1.1 with at most 6 connections per host for all tabs together; an upload holds its request plus one progress stream per file, so other tabs stall until it ends. The plain `http://localhost:8000` stays published for Kodi, the CLI and other clients that do not trust the self-signed certificate.
 
 ### 3. Configure Telegram backend
 
@@ -148,7 +152,8 @@ From `.env`:
 
 | Variable | Default | Notes |
 |---|---|---|
-| `PORT` | `8000` | API + UI port |
+| `PORT` | `8000` | API + UI port (plain HTTP) |
+| `HTTPS_PORT` | `8443` | Host port of the nginx HTTPS + HTTP/2 front |
 | `DB_MAX_CONNS` | `32` | Postgres connection pool size (`WORKERS` is still read as `WORKERS * 8`) |
 | `SUPERUSER_EMAIL` | required | bootstrap admin |
 | `SUPERUSER_PASS` | required | bootstrap admin password |
