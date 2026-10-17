@@ -12,6 +12,16 @@ on:
       - ready_for_review
 
 jobs:
+  nginx-config:
+    name: nginx Config
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v7
+
+      - name: Check nginx front
+        run: sh scripts/test-nginx-config.sh
   go-tests:
     name: Go Tests
     runs-on: ubuntu-latest
