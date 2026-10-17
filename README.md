@@ -165,6 +165,20 @@ From `.env`:
 | `LOCAL_UPLOAD_BASE_PATH` | _(empty)_ | Host directory to expose for local filesystem uploads. Mounted read-only at `/mnt/data` inside the container. |
 | `BACKUP_RETENTION_DAYS` | `7` | Days to keep old database backups |
 | `BACKUP_INTERVAL_SECONDS` | `86400` | Seconds between automatic backups |
+| `FFMPEG_PATH` | `ffmpeg` | ffmpeg binary used to play MKV files in the web UI. The Docker image ships it; without it MKV preview explains that it is unavailable |
+| `HLS_CACHE_DIR` | _(system temp)_`/pentaract-hls` | Scratch directory for in-progress HLS segments (one subdirectory per playback session, removed when it ends) |
+| `HLS_SEGMENT_SECONDS` | `6` | Nominal HLS segment length |
+| `HLS_IDLE_TIMEOUT_SECS` | `120` | Seconds without segment requests before a playback session's ffmpeg is stopped |
+
+## Video Playback in the Web UI
+
+MP4, WebM, OGG and MOV files play straight from the ranged inline download (`?inline=1`), the same route Kodi and other external players use. Browsers do not open Matroska, so MKV files take a different path, only when previewed from the web UI:
+
+1. The server reads the first few MB of the file and parses the Matroska header itself (duration, codecs, audio tracks) — `GET /storages/{id}/files/media_info/{path}`. The preview shows what it found and lets you pick the audio track.
+2. `ffmpeg` turns the file into HLS on demand (`GET /storages/{id}/files/hls/{path}/index.m3u8`, `init.mp4`, `segNNNNN.m4s`). H.264 and HEVC video and AAC audio are copied as they are; other codecs (AC3, E-AC3, DTS, TrueHD, FLAC, VP9…) are transcoded to H.264 / stereo AAC. ffmpeg reads the source back from the server over loopback, through the same chunk cache as any other download.
+3. Seeking restarts ffmpeg at the target segment, so jumping around a long file costs one chunk download plus the ffmpeg start, not a full transcode. Segments keep the file's original timestamps, so the timeline stays accurate across seeks.
+
+External players such as Kodi keep receiving the native file; nothing is transcoded for them.
 
 ## Local Filesystem Upload
 
