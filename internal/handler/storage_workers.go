@@ -41,9 +41,9 @@ func parseOptionalUUID(s *string) (*uuid.UUID, error) {
 	if s == nil || *s == "" {
 		return nil, nil
 	}
-	id, err := uuid.Parse(*s)
+	id, err := parseUUID(*s, "storage_id")
 	if err != nil {
-		return nil, domain.ErrBadRequest("invalid storage_id")
+		return nil, err
 	}
 	return &id, nil
 }
@@ -130,15 +130,9 @@ func (h *StorageWorkersHandler) Delete(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *StorageWorkersHandler) HasWorkers(w http.ResponseWriter, r *http.Request) {
-	storageIDStr := r.URL.Query().Get("storage_id")
-	if storageIDStr == "" {
-		writeError(w, domain.ErrBadRequest("storage_id is required"))
-		return
-	}
-
-	storageID, err := uuid.Parse(storageIDStr)
+	storageID, err := parseUUIDQuery(r, "storage_id")
 	if err != nil {
-		writeError(w, domain.ErrBadRequest("invalid storage_id"))
+		writeError(w, err)
 		return
 	}
 

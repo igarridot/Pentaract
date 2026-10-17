@@ -57,11 +57,7 @@ func (h *DownloadHandler) setupDownloadTracker(r *http.Request, storageID uuid.U
 	}
 	h.downloadsMu.Lock()
 	if previous, ok := h.downloads[downloadID]; ok {
-		previous.canceled = true
-		previous.done = true
-		if previous.cancel != nil {
-			previous.cancel()
-		}
+		previous.markCancelledLocked()
 	}
 	h.downloads[downloadID] = tracker
 	h.downloadsMu.Unlock()
@@ -170,16 +166,13 @@ func (h *DownloadHandler) exactFileSize(ctx context.Context, file *domain.File) 
 	if totalSize, ok := h.fileSizes.get(file.ID); ok {
 		return totalSize, nil
 	}
-	if file.Size > 0 {
-		h.fileSizes.set(file.ID, file.Size)
-		return file.Size, nil
+	totalSize := file.Size
+	if totalSize <= 0 {
+		var err error
+		if totalSize, err = h.svc.ExactFileSize(ctx, file); err != nil {
+			return 0, err
+		}
 	}
-
-	totalSize, err := h.svc.ExactFileSize(ctx, file)
-	if err != nil {
-		return 0, err
-	}
-
 	h.fileSizes.set(file.ID, totalSize)
 	return totalSize, nil
 }
@@ -203,11 +196,8 @@ func (h *DownloadHandler) Download(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	served := servedFile{
-		file:        file,
-		filename:    filepath.Base(file.Path),
-		contentType: contentTypeForFilename(filepath.Base(file.Path)),
-	}
+	filename := filepath.Base(file.Path)
+	served := servedFile{file: file, filename: filename, contentType: contentTypeForFilename(filename)}
 	if r.URL.Query().Get("inline") == "1" {
 		h.serveInline(w, r, served)
 		return
@@ -228,17 +218,6 @@ func (s servedFile) writeHeaders(w http.ResponseWriter, disposition string) {
 	w.Header().Set("Content-Disposition", disposition+`; filename="`+sanitizeFilename(s.filename)+`"`)
 }
 
-// trackedDownload sets up progress tracking for downloads the UI follows via
-// download_id. The returned cleanup must be deferred by the caller.
-func (h *DownloadHandler) trackedDownload(r *http.Request, storageID uuid.UUID) (context.Context, *downloadTracker, *service.DownloadProgress, func()) {
-	ctx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
-	var progress *service.DownloadProgress
-	if tracker != nil {
-		progress = tracker.progress
-	}
-	return ctx, tracker, progress, cleanup
-}
-
 // serveInline serves a file for in-browser preview or playback, honouring
 // Range requests by fetching only the chunks that cover the window. Playback
 // fans out into several concurrent range requests that share one download_id,
@@ -252,7 +231,7 @@ func (h *DownloadHandler) serveInline(w http.ResponseWriter, r *http.Request, s 
 	rangeHeader := r.Header.Get("Range")
 	if rangeHeader == "" {
 		if s.file.Size > 0 {
-			w.Header().Set("Content-Length", fmt.Sprintf("%d", s.file.Size))
+			w.Header().Set("Content-Length", strconv.FormatInt(s.file.Size, 10))
 		}
 		w.WriteHeader(http.StatusOK)
 		if err := h.svc.StreamFileToWriter(ctx, s.file, w, nil); err != nil {
@@ -274,7 +253,7 @@ func (h *DownloadHandler) serveInline(w http.ResponseWriter, r *http.Request, s 
 		return
 	}
 	w.Header().Set("Content-Range", fmt.Sprintf("bytes %d-%d/%d", start, end, totalSize))
-	w.Header().Set("Content-Length", fmt.Sprintf("%d", end-start+1))
+	w.Header().Set("Content-Length", strconv.FormatInt(end-start+1, 10))
 	w.WriteHeader(http.StatusPartialContent)
 	if err := h.svc.DownloadFileRangeToWriter(ctx, s.file, w, start, end, totalSize, nil); err != nil {
 		slog.Error("download file range failed", "err", err)
@@ -283,12 +262,12 @@ func (h *DownloadHandler) serveInline(w http.ResponseWriter, r *http.Request, s 
 
 // serveAttachment streams the file straight to the response as a download.
 func (h *DownloadHandler) serveAttachment(w http.ResponseWriter, r *http.Request, s servedFile, storageID uuid.UUID) {
-	ctx, tracker, progress, cleanup := h.trackedDownload(r, storageID)
+	ctx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
 	defer cleanup()
 	s.writeHeaders(w, "attachment")
 
 	w.WriteHeader(http.StatusOK)
-	if err := h.svc.DownloadFileToWriter(ctx, s.file, w, progress); err != nil {
+	if err := h.svc.DownloadFileToWriter(ctx, s.file, w, tracker.progressOrNil()); err != nil {
 		slog.Error("download file failed", "err", err)
 		h.failTracker(r, tracker, err)
 		return
@@ -304,41 +283,36 @@ func parseSingleByteRange(header string, size int64) (int64, int64, error) {
 	if rangeSpec == "" || strings.Contains(rangeSpec, ",") {
 		return 0, 0, fmt.Errorf("multiple/empty ranges not supported")
 	}
-	parts := strings.SplitN(rangeSpec, "-", 2)
-	if len(parts) != 2 {
+	first, last, ok := strings.Cut(rangeSpec, "-")
+	if !ok {
 		return 0, 0, fmt.Errorf("invalid range format")
 	}
 
 	// Suffix range: bytes=-N
-	if parts[0] == "" {
-		suffix, err := strconv.ParseInt(parts[1], 10, 64)
+	if first == "" {
+		suffix, err := strconv.ParseInt(last, 10, 64)
 		if err != nil || suffix <= 0 {
 			return 0, 0, fmt.Errorf("invalid suffix range")
 		}
-		if suffix > size {
-			suffix = size
-		}
+		suffix = min(suffix, size)
 		return size - suffix, size - 1, nil
 	}
 
-	start, err := strconv.ParseInt(parts[0], 10, 64)
+	start, err := strconv.ParseInt(first, 10, 64)
 	if err != nil || start < 0 || start >= size {
 		return 0, 0, fmt.Errorf("invalid range start")
 	}
 
 	// Open range: bytes=N-
-	if parts[1] == "" {
+	if last == "" {
 		return start, size - 1, nil
 	}
 
-	end, err := strconv.ParseInt(parts[1], 10, 64)
+	end, err := strconv.ParseInt(last, 10, 64)
 	if err != nil || end < start {
 		return 0, 0, fmt.Errorf("invalid range end")
 	}
-	if end >= size {
-		end = size - 1
-	}
-	return start, end, nil
+	return start, min(end, size-1), nil
 }
 
 func (h *DownloadHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
@@ -350,13 +324,11 @@ func (h *DownloadHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 
 	path := extractWildcardPath(r)
 
-	dirName := pathutil.ArchiveName(path)
-
-	downloadCtx, tracker, progress, cleanup := h.trackedDownload(r, storageID)
+	downloadCtx, tracker, cleanup := h.setupDownloadTracker(r, storageID)
 	defer cleanup()
 
 	w.Header().Set("Content-Type", "application/zip")
-	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, sanitizeFilename(dirName)))
+	w.Header().Set("Content-Disposition", fmt.Sprintf(`attachment; filename="%s.zip"`, sanitizeFilename(pathutil.ArchiveName(path))))
 
 	writer := io.Writer(w)
 	if flusher, ok := w.(http.Flusher); ok {
@@ -364,7 +336,7 @@ func (h *DownloadHandler) DownloadDir(w http.ResponseWriter, r *http.Request) {
 		flusher.Flush()
 	}
 
-	if _, err := h.svc.DownloadDir(downloadCtx, user.ID, storageID, path, writer, progress); err != nil {
+	if _, err := h.svc.DownloadDir(downloadCtx, user.ID, storageID, path, writer, tracker.progressOrNil()); err != nil {
 		slog.Error("download dir failed", "err", err)
 		h.failTracker(r, tracker, err)
 		return
@@ -378,17 +350,15 @@ func (h *DownloadHandler) CancelDownload(w http.ResponseWriter, r *http.Request)
 
 	h.downloadsMu.Lock()
 	tracker, exists := h.downloads[downloadID]
+	if exists {
+		tracker.markCancelledLocked()
+	}
+	h.downloadsMu.Unlock()
+
 	if !exists {
-		h.downloadsMu.Unlock()
 		writeError(w, domain.ErrNotFound("download"))
 		return
 	}
-	tracker.canceled = true
-	tracker.done = true
-	if tracker.cancel != nil {
-		tracker.cancel()
-	}
-	h.downloadsMu.Unlock()
 
 	w.WriteHeader(http.StatusNoContent)
 }
@@ -408,31 +378,15 @@ func (h *DownloadHandler) DownloadProgress(w http.ResponseWriter, r *http.Reques
 		func() (map[string]any, bool, bool) {
 			h.downloadsMu.RLock()
 			tracker, exists := h.downloads[downloadID]
-			h.downloadsMu.RUnlock()
 			if !exists {
+				h.downloadsMu.RUnlock()
 				return nil, false, false
 			}
-
-			p := tracker.progress
-			status := "downloading"
-
-			h.downloadsMu.RLock()
-			isDone := tracker.done
-			downloadErr := tracker.err
-			isCanceled := tracker.canceled
-			isInterrupted := tracker.interrupted
+			isDone, downloadErr := tracker.done, tracker.err
+			status := tracker.statusLocked()
 			h.downloadsMu.RUnlock()
 
-			if isDone && isCanceled {
-				status = "cancelled"
-			} else if isDone && downloadErr != nil {
-				status = "error"
-			} else if isDone {
-				status = "done"
-			} else if isInterrupted {
-				status = "interrupted"
-			}
-
+			p := tracker.progress
 			return map[string]any{
 				"total":            p.TotalChunks,
 				"downloaded":       p.DownloadedChunks.Load(),

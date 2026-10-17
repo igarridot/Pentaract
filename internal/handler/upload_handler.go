@@ -49,6 +49,22 @@ func NewUploadHandler(svc uploadService) *UploadHandler {
 	}
 }
 
+// conflictPolicy applies the default upload conflict policy to a request value.
+func conflictPolicy(onConflict string) string {
+	if onConflict == "" {
+		return service.UploadConflictKeepBoth
+	}
+	return onConflict
+}
+
+// uploadIDOrNew keeps a client-chosen upload id and generates one otherwise.
+func uploadIDOrNew(uploadID string) string {
+	if uploadID == "" {
+		return uuid.New().String()
+	}
+	return uploadID
+}
+
 func (h *UploadHandler) scheduleUploadTrackerCleanup(uploadID string) {
 	time.AfterFunc(service.TrackerCleanupDelay, func() {
 		h.uploadsMu.Lock()
@@ -135,44 +151,24 @@ func (h *UploadHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	var path, filename, uploadID, onConflict, fileSizeStr string
-	var fileSize int64
+	// Text fields precede the file part; reading stops at the file so its
+	// bytes stream straight into the upload instead of being buffered.
+	fields := map[string]string{}
+	var filename string
 	var filePart io.ReadCloser
-
-	for {
+	for filePart == nil {
 		part, err := mr.NextPart()
 		if err != nil {
 			break
 		}
-		switch part.FormName() {
-		case "path":
+		switch name := part.FormName(); name {
+		case "path", "upload_id", "on_conflict", "file_size":
 			b, _ := io.ReadAll(part)
-			path = string(b)
-		case "upload_id":
-			b, _ := io.ReadAll(part)
-			uploadID = string(b)
-		case "on_conflict":
-			b, _ := io.ReadAll(part)
-			onConflict = string(b)
-		case "file_size":
-			b, _ := io.ReadAll(part)
-			fileSizeStr = string(b)
+			fields[name] = string(b)
 		case "file":
 			filename = part.FileName()
 			filePart = part
 		}
-		if filePart != nil {
-			break
-		}
-	}
-
-	if fileSizeStr != "" {
-		if parsed, err := strconv.ParseInt(fileSizeStr, 10, 64); err == nil && parsed > 0 {
-			fileSize = parsed
-		}
-	}
-	if fileSize <= 0 {
-		fileSize = max(r.ContentLength, 0)
 	}
 
 	if filePart == nil || filename == "" {
@@ -180,14 +176,14 @@ func (h *UploadHandler) Upload(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path = pathutil.TrimTrailingSlash(path)
-	if onConflict == "" {
-		onConflict = service.UploadConflictKeepBoth
+	// The declared size drives the progress totals; anything unparsable or
+	// non-positive falls back to the request length.
+	fileSize, err := strconv.ParseInt(fields["file_size"], 10, 64)
+	if err != nil || fileSize <= 0 {
+		fileSize = max(r.ContentLength, 0)
 	}
-	fullPath := pathutil.Join(path, filename)
-	if uploadID == "" {
-		uploadID = uuid.New().String()
-	}
+	fullPath := pathutil.Join(pathutil.TrimTrailingSlash(fields["path"]), filename)
+	uploadID := uploadIDOrNew(fields["upload_id"])
 
 	tracker, uploadCtx := h.registerUpload(uploadID, storageID, fullPath, fileSize)
 
@@ -200,7 +196,7 @@ func (h *UploadHandler) Upload(w http.ResponseWriter, r *http.Request) {
 	bodyConsumed := make(chan struct{})
 	go func() {
 		defer h.scheduleUploadTrackerCleanup(uploadID)
-		h.runTrackedUpload(uploadCtx, tracker, user.ID, storageID, fullPath, fileSize, &signalOnClose{ReadCloser: filePart, done: bodyConsumed}, onConflict)
+		h.runTrackedUpload(uploadCtx, tracker, user.ID, storageID, fullPath, fileSize, &signalOnClose{ReadCloser: filePart, done: bodyConsumed}, conflictPolicy(fields["on_conflict"]))
 	}()
 
 	<-bodyConsumed
@@ -275,19 +271,14 @@ func (h *UploadHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 		func() (map[string]any, bool, bool) {
 			h.uploadsMu.RLock()
 			tracker, exists := h.uploads[uploadID]
-			h.uploadsMu.RUnlock()
 			if !exists {
+				h.uploadsMu.RUnlock()
 				return nil, false, false
 			}
+			isDone, uploadErr, isSkipped := tracker.done, tracker.err, tracker.skipped
+			h.uploadsMu.RUnlock()
 
 			p := tracker.progress
-			h.uploadsMu.RLock()
-			isDone := tracker.done
-			uploadErr := tracker.err
-			isSkipped := tracker.skipped
-			h.uploadsMu.RUnlock()
-			status := uploadProgressStatus(p, isDone, uploadErr, isSkipped)
-
 			return map[string]any{
 				"total":              p.TotalChunks,
 				"uploaded":           p.UploadedChunks.Load(),
@@ -295,7 +286,7 @@ func (h *UploadHandler) UploadProgress(w http.ResponseWriter, r *http.Request) {
 				"uploaded_bytes":     p.UploadedBytes.Load(),
 				"verification_total": p.VerificationTotalChunks.Load(),
 				"verified":           p.VerifiedChunks.Load(),
-				"status":             status,
+				"status":             uploadProgressStatus(p, isDone, uploadErr, isSkipped),
 				"workers_status":     h.svc.WorkersStatus(tracker.storageID),
 			}, isDone, true
 		},

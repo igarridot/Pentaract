@@ -41,6 +41,8 @@ func (c *fileSizeCache) set(fileID uuid.UUID, size int64) {
 	c.mu.Unlock()
 }
 
+// uploadTracker follows one upload. Its mutable fields are guarded by the
+// owning UploadHandler's uploadsMu.
 type uploadTracker struct {
 	progress  *service.UploadProgress
 	cancel    context.CancelFunc
@@ -52,6 +54,9 @@ type uploadTracker struct {
 	done      bool
 }
 
+// downloadTracker follows one tracked download. Its mutable fields are
+// guarded by the owning DownloadHandler's downloadsMu; the *Locked methods
+// expect that lock to be held.
 type downloadTracker struct {
 	storageID uuid.UUID
 	progress  *service.DownloadProgress
@@ -63,6 +68,40 @@ type downloadTracker struct {
 	interrupted bool
 	err         error
 	done        bool
+}
+
+// progressOrNil is the progress to hand the service: nil when the download
+// is not tracked, so every nil-safe progress method becomes a no-op.
+func (t *downloadTracker) progressOrNil() *service.DownloadProgress {
+	if t == nil {
+		return nil
+	}
+	return t.progress
+}
+
+// markCancelledLocked ends the download on the client's behalf.
+func (t *downloadTracker) markCancelledLocked() {
+	t.canceled = true
+	t.done = true
+	if t.cancel != nil {
+		t.cancel()
+	}
+}
+
+// statusLocked is the SSE status the tracker currently reports.
+func (t *downloadTracker) statusLocked() string {
+	switch {
+	case t.done && t.canceled:
+		return "cancelled"
+	case t.done && t.err != nil:
+		return "error"
+	case t.done:
+		return "done"
+	case t.interrupted:
+		return "interrupted"
+	default:
+		return "downloading"
+	}
 }
 
 type flushWriter struct {
@@ -170,8 +209,7 @@ func writeSSE(w http.ResponseWriter, flusher http.Flusher, data any) {
 // While the tracker has not appeared and the wait time has not elapsed,
 // placeholder is sent instead. After the wait time, an error event is sent.
 func pollSSE(w http.ResponseWriter, r *http.Request, idParam string, placeholder map[string]any, errorData map[string]any, poll func() (data map[string]any, done bool, exists bool)) {
-	id := r.URL.Query().Get(idParam)
-	if id == "" {
+	if r.URL.Query().Get(idParam) == "" {
 		writeError(w, domain.ErrBadRequest(idParam+" is required"))
 		return
 	}

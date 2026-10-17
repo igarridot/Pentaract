@@ -606,6 +606,49 @@ func TestFilesHandlerUploadSuccess(t *testing.T) {
 	}
 }
 
+func TestFilesHandlerUploadDeclaredSizeFallsBackToContentLength(t *testing.T) {
+	for _, declared := range []string{"", "not-a-number", "-5", "99999999999999999999"} {
+		var body bytes.Buffer
+		mw := multipart.NewWriter(&body)
+		_ = mw.WriteField("upload_id", "upload-size")
+		_ = mw.WriteField("file_size", declared)
+		part, err := mw.CreateFormFile("file", "a.txt")
+		if err != nil {
+			t.Fatalf("create form file: %v", err)
+		}
+		_, _ = io.WriteString(part, "hello")
+		_ = mw.Close()
+
+		gotSize := make(chan int64, 1)
+		h := newTestFilesHandler(&mockFilesService{
+			uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
+				_, _ = io.Copy(io.Discard, reader)
+				gotSize <- size
+				return &domain.File{ID: uuid.New(), Path: path}, false, nil
+			},
+		})
+
+		req := makeFilesReq(http.MethodPost, "/", "", uuid.New().String(), "")
+		req.Header.Set("Content-Type", mw.FormDataContentType())
+		req.Body = io.NopCloser(bytes.NewReader(body.Bytes()))
+		req.ContentLength = int64(body.Len())
+
+		w := httptest.NewRecorder()
+		h.Upload(w, req)
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("file_size=%q: expected 202, got %d", declared, w.Code)
+		}
+		select {
+		case size := <-gotSize:
+			if size != req.ContentLength {
+				t.Fatalf("file_size=%q: upload size = %d, want content length %d", declared, size, req.ContentLength)
+			}
+		case <-time.After(2 * time.Second):
+			t.Fatalf("file_size=%q: upload service was not called", declared)
+		}
+	}
+}
+
 func TestFilesHandlerUploadSkipOnConflict(t *testing.T) {
 	h := newTestFilesHandler(&mockFilesService{
 		uploadFn: func(ctx context.Context, userID, storageID uuid.UUID, path string, size int64, reader io.Reader, progress *service.UploadProgress, onConflict string) (*domain.File, bool, error) {
@@ -727,6 +770,31 @@ func TestUploadProgressStatus(t *testing.T) {
 	}
 	if got := uploadProgressStatus(progress, true, nil, true); got != "skipped" {
 		t.Fatalf("expected skipped, got %q", got)
+	}
+}
+
+func TestDownloadTrackerStatus(t *testing.T) {
+	tests := []struct {
+		name    string
+		tracker downloadTracker
+		want    string
+	}{
+		{name: "running", tracker: downloadTracker{}, want: "downloading"},
+		{name: "interrupted", tracker: downloadTracker{interrupted: true}, want: "interrupted"},
+		{name: "done", tracker: downloadTracker{done: true}, want: "done"},
+		{name: "failed", tracker: downloadTracker{done: true, err: errors.New("boom")}, want: "error"},
+		{name: "cancelled wins over error", tracker: downloadTracker{done: true, canceled: true, err: errors.New("boom")}, want: "cancelled"},
+		{name: "interrupted then expired", tracker: downloadTracker{done: true, interrupted: true, err: domain.ErrClientDisconnected}, want: "error"},
+	}
+	for _, tt := range tests {
+		if got := tt.tracker.statusLocked(); got != tt.want {
+			t.Fatalf("%s: status = %q, want %q", tt.name, got, tt.want)
+		}
+	}
+
+	var untracked *downloadTracker
+	if untracked.progressOrNil() != nil {
+		t.Fatalf("nil tracker must report nil progress")
 	}
 }
 

@@ -5,7 +5,6 @@ import (
 	"io"
 	"net/http"
 	"net/url"
-	"strconv"
 	"strings"
 
 	"github.com/go-chi/chi/v5"
@@ -76,14 +75,9 @@ type moveFileRequest struct {
 }
 
 func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
-	user, storageID, err := storageRequest(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
 	var req moveFileRequest
-	if err := parseBody(r, &req); err != nil {
+	user, storageID, err := storageJSONRequest(r, &req)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
@@ -102,14 +96,9 @@ func (h *FilesHandler) Move(w http.ResponseWriter, r *http.Request) {
 }
 
 func (h *FilesHandler) CreateFolder(w http.ResponseWriter, r *http.Request) {
-	user, storageID, err := storageRequest(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
 	var req createFolderRequest
-	if err := parseBody(r, &req); err != nil {
+	user, storageID, err := storageJSONRequest(r, &req)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
@@ -134,9 +123,7 @@ func (h *FilesHandler) Tree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := extractWildcardPath(r)
-
-	elements, err := h.svc.ListDir(r.Context(), user.ID, storageID, path)
+	elements, err := h.svc.ListDir(r.Context(), user.ID, storageID, extractWildcardPath(r))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -152,10 +139,7 @@ func (h *FilesHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	basePath := extractWildcardPath(r)
-	searchPath := r.URL.Query().Get("search_path")
-
-	results, err := h.svc.Search(r.Context(), user.ID, storageID, basePath, searchPath)
+	results, err := h.svc.Search(r.Context(), user.ID, storageID, extractWildcardPath(r), r.URL.Query().Get("search_path"))
 	if err != nil {
 		writeError(w, err)
 		return
@@ -171,16 +155,15 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	path := extractWildcardPath(r)
-	path = pathutil.TrimTrailingSlash(path)
+	path := pathutil.TrimTrailingSlash(extractWildcardPath(r))
 	if path == "" {
 		writeError(w, domain.ErrBadRequest("file path is required"))
 		return
 	}
 
-	forceDelete, err := strconv.ParseBool(r.URL.Query().Get("force_delete"))
-	if err != nil && r.URL.Query().Get("force_delete") != "" {
-		writeError(w, domain.ErrBadRequest("invalid force_delete value"))
+	forceDelete, err := parseBoolQuery(r, "force_delete")
+	if err != nil {
+		writeError(w, err)
 		return
 	}
 
@@ -196,8 +179,7 @@ func (h *FilesHandler) DeleteFile(w http.ResponseWriter, r *http.Request) {
 }
 
 func extractWildcardPath(r *http.Request) string {
-	path := chi.URLParam(r, "*")
-	path = strings.TrimPrefix(path, "/")
+	path := strings.TrimPrefix(chi.URLParam(r, "*"), "/")
 	if decoded, err := url.PathUnescape(path); err == nil {
 		path = decoded
 	}
@@ -227,15 +209,10 @@ func (h *FilesHandler) DeleteProgress(w http.ResponseWriter, r *http.Request) {
 				status = "done"
 			}
 
-			pending := total - deleted
-			if pending < 0 {
-				pending = 0
-			}
-
 			return map[string]any{
 				"total":          total,
 				"deleted":        deleted,
-				"pending":        pending,
+				"pending":        max(total-deleted, 0),
 				"status":         status,
 				"workers_status": h.svc.WorkersStatus(tracker.storageID),
 			}, done, true

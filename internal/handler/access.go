@@ -30,14 +30,9 @@ type grantAccessRequest struct {
 }
 
 func (h *AccessHandler) Grant(w http.ResponseWriter, r *http.Request) {
-	user, storageID, err := storageRequest(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
 	var req grantAccessRequest
-	if err := parseBody(r, &req); err != nil {
+	user, storageID, err := storageJSONRequest(r, &req)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
@@ -71,21 +66,16 @@ type revokeAccessRequest struct {
 }
 
 func (h *AccessHandler) Revoke(w http.ResponseWriter, r *http.Request) {
-	user, storageID, err := storageRequest(r)
-	if err != nil {
-		writeError(w, err)
-		return
-	}
-
 	var req revokeAccessRequest
-	if err := parseBody(r, &req); err != nil {
+	user, storageID, err := storageJSONRequest(r, &req)
+	if err != nil {
 		writeError(w, err)
 		return
 	}
 
-	targetUserID, err := uuid.Parse(req.UserID)
+	targetUserID, err := parseUUID(req.UserID, "user_id")
 	if err != nil {
-		writeError(w, domain.ErrBadRequest("invalid user_id"))
+		writeError(w, err)
 		return
 	}
 
