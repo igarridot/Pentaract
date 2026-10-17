@@ -26,8 +26,8 @@ type hlsPlayer interface {
 	Available() (bool, string)
 	SegmentSeconds() int
 	MediaInfo(ctx context.Context, file *domain.File) (*media.Info, error)
-	Playlist(ctx context.Context, file *domain.File, audio uint64, query string) ([]byte, error)
-	Resource(ctx context.Context, userID uuid.UUID, file *domain.File, audio uint64, name string) (string, error)
+	Playlist(ctx context.Context, file *domain.File, variant service.HLSVariant, query string) ([]byte, error)
+	Resource(ctx context.Context, userID uuid.UUID, file *domain.File, variant service.HLSVariant, name string) (string, error)
 	Stop(userID, fileID uuid.UUID)
 	LookupSource(token string) (*domain.File, bool)
 }
@@ -119,8 +119,9 @@ func (h *MediaHandler) hlsStatusFor(info *media.Info) hlsStatus {
 
 // HLS answers GET /storages/{storageID}/files/hls/{path}/{resource}, where
 // resource is index.m3u8, init.mp4 or segNNNNN.m4s. The request's query
-// string (audio track, access_token for players that cannot send headers)
-// is echoed into the playlist so every segment request carries it.
+// string (audio track, transcode=1, access_token for players that cannot
+// send headers) is echoed into the playlist so every segment request
+// carries it.
 func (h *MediaHandler) HLS(w http.ResponseWriter, r *http.Request) {
 	user, storageID, err := storageRequest(r)
 	if err != nil {
@@ -132,7 +133,7 @@ func (h *MediaHandler) HLS(w http.ResponseWriter, r *http.Request) {
 		writeError(w, domain.ErrBadRequest("file path and hls resource are required"))
 		return
 	}
-	audio, err := parseAudioTrack(r)
+	variant, err := parseHLSVariant(r)
 	if err != nil {
 		writeError(w, err)
 		return
@@ -145,7 +146,7 @@ func (h *MediaHandler) HLS(w http.ResponseWriter, r *http.Request) {
 
 	w.Header().Set("Cache-Control", "no-store")
 	if resource == "index.m3u8" {
-		playlist, err := h.hls.Playlist(r.Context(), file, audio, r.URL.RawQuery)
+		playlist, err := h.hls.Playlist(r.Context(), file, variant, r.URL.RawQuery)
 		if err != nil {
 			writeError(w, hlsError(err))
 			return
@@ -156,7 +157,7 @@ func (h *MediaHandler) HLS(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	localPath, err := h.hls.Resource(r.Context(), user.ID, file, audio, resource)
+	localPath, err := h.hls.Resource(r.Context(), user.ID, file, variant, resource)
 	if err != nil {
 		writeError(w, hlsError(err))
 		return
@@ -225,16 +226,20 @@ func splitHLSPath(full string) (filePath, resource string) {
 	return strings.TrimSuffix(dir, "/"), name
 }
 
-func parseAudioTrack(r *http.Request) (uint64, error) {
-	raw := r.URL.Query().Get("audio")
+// parseHLSVariant reads ?audio=<track number> and ?transcode=1.
+func parseHLSVariant(r *http.Request) (service.HLSVariant, error) {
+	query := r.URL.Query()
+	variant := service.HLSVariant{TranscodeVideo: query.Get("transcode") == "1"}
+	raw := query.Get("audio")
 	if raw == "" {
-		return 0, nil
+		return variant, nil
 	}
 	audio, err := strconv.ParseUint(raw, 10, 64)
 	if err != nil {
-		return 0, domain.ErrBadRequest("invalid audio track")
+		return service.HLSVariant{}, domain.ErrBadRequest("invalid audio track")
 	}
-	return audio, nil
+	variant.Audio = audio
+	return variant, nil
 }
 
 // hlsError maps pipeline failures to HTTP errors the player can act on.

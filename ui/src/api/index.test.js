@@ -341,6 +341,9 @@ test('hls url builders and media endpoints encode the storage path', async () =>
   assert.equal(API.files.hlsPlaylistUrl('s1', 'a.mkv'), '/api/storages/s1/files/hls/a.mkv/index.m3u8')
   assert.equal(API.files.hlsPlaylistAuthUrl('s1', 'a.mkv', 2), '/api/storages/s1/files/hls/a.mkv/index.m3u8?access_token=tok&audio=2')
   assert.equal(API.files.hlsPlaylistAuthUrl('s1', 'a.mkv'), '/api/storages/s1/files/hls/a.mkv/index.m3u8?access_token=tok')
+  assert.equal(API.files.hlsPlaylistUrl('s1', 'a.mkv', 3, { transcode: true }), '/api/storages/s1/files/hls/a.mkv/index.m3u8?audio=3&transcode=1')
+  assert.equal(API.files.hlsPlaylistUrl('s1', 'a.mkv', null, { transcode: true }), '/api/storages/s1/files/hls/a.mkv/index.m3u8?transcode=1')
+  assert.equal(API.files.hlsPlaylistAuthUrl('s1', 'a.mkv', 2, { transcode: true }), '/api/storages/s1/files/hls/a.mkv/index.m3u8?access_token=tok&audio=2&transcode=1')
 
   const seen = []
   globalThis.fetch = async (url, opts) => {

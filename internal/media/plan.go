@@ -125,6 +125,14 @@ func BuildPlan(info *Info, audioTrackNumber uint64) (Plan, error) {
 	return plan, nil
 }
 
+// WithVideoTranscode returns the plan with the video re-encoded even when a
+// browser could in principle take it as is: Chrome's macOS hardware decoder
+// (VideoToolbox) rejects some Blu-ray H.264 that software decoders play.
+func (p Plan) WithVideoTranscode() Plan {
+	p.VideoCopy = false
+	return p
+}
+
 // DefaultAudioIndex returns the position of the first audio track flagged as
 // default, or 0 when none is.
 func DefaultAudioIndex(audios []Track) int {

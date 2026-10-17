@@ -70,6 +70,13 @@ function subscribeSSE(url, token, onProgress) {
   return () => { stopped = true; if (currentController) currentController.abort() }
 }
 
+function hlsParams(audio, transcode) {
+  const params = {}
+  if (audio) params.audio = String(audio)
+  if (transcode) params.transcode = '1'
+  return params
+}
+
 function subscribeAuthSSE(path, onProgress) {
   const token = getRawToken()
   if (!token) throw new Error('Not authenticated')
@@ -174,12 +181,15 @@ const API = {
       apiRequest(filesPath(storageId, `/media_info/${encodePath(path)}`)),
 
     // For hls.js, which authenticates with a header (see buildHlsConfig).
-    hlsPlaylistUrl: (storageId, path, audio) =>
-      `${API_BASE}${filesPath(storageId, `/hls/${encodePath(path)}/index.m3u8`)}${audio ? `?audio=${audio}` : ''}`,
+    // transcode asks for the video re-encoded instead of copied.
+    hlsPlaylistUrl: (storageId, path, audio, { transcode = false } = {}) => {
+      const query = new URLSearchParams(hlsParams(audio, transcode)).toString()
+      return `${API_BASE}${filesPath(storageId, `/hls/${encodePath(path)}/index.m3u8`)}${query ? `?${query}` : ''}`
+    },
 
     // For native HLS players (Safari without MSE) that cannot send headers.
-    hlsPlaylistAuthUrl: (storageId, path, audio) =>
-      buildAuthUrl(filesPath(storageId, `/hls/${encodePath(path)}/index.m3u8`), audio ? { audio: String(audio) } : {}),
+    hlsPlaylistAuthUrl: (storageId, path, audio, { transcode = false } = {}) =>
+      buildAuthUrl(filesPath(storageId, `/hls/${encodePath(path)}/index.m3u8`), hlsParams(audio, transcode)),
 
     hlsStop: (storageId, path) =>
       apiRequest(filesPath(storageId, `/hls_stop/${encodePath(path)}`), 'POST'),

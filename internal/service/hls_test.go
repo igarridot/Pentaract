@@ -182,6 +182,16 @@ func TestHLSFFmpegArgs(t *testing.T) {
 	if !strings.Contains(args, "-c:v libx264") || !strings.Contains(args, "-force_key_frames expr:gte(t,30.000+n_forced*6)") {
 		t.Errorf("vp9 must be transcoded with keyframes aligned to segments:\n%s", args)
 	}
+	if !strings.Contains(args, "-vf scale=w='min(iw,1920)':h=-2 -c:v libx264") {
+		t.Errorf("transcodes must be capped at 1080p width:\n%s", args)
+	}
+
+	// The browser fallback re-encodes H.264 that would otherwise be copied.
+	plan, _ = media.BuildPlan(info, 0)
+	args = strings.Join(hlsFFmpegArgs(cfg, "u", plan.WithVideoTranscode(), 0, 0), " ")
+	if !strings.Contains(args, "-c:v libx264") || strings.Contains(args, "-c:v copy") {
+		t.Errorf("forced transcode must re-encode the h264:\n%s", args)
+	}
 }
 
 func TestParseHLSResourceName(t *testing.T) {
@@ -260,7 +270,7 @@ func TestHLSResourceSessionsFollowPlayback(t *testing.T) {
 	user := uuid.New()
 	ctx := context.Background()
 
-	initPath, err := s.Resource(ctx, user, file, 0, "init.mp4")
+	initPath, err := s.Resource(ctx, user, file, HLSVariant{}, "init.mp4")
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -275,7 +285,7 @@ func TestHLSResourceSessionsFollowPlayback(t *testing.T) {
 
 	// Sequential segments are served from the same process.
 	for i := 0; i < 3; i++ {
-		path, err := s.Resource(ctx, user, file, 0, hlsSegmentName(i))
+		path, err := s.Resource(ctx, user, file, HLSVariant{}, hlsSegmentName(i))
 		if err != nil {
 			t.Fatalf("segment %d: %v", i, err)
 		}
@@ -285,7 +295,7 @@ func TestHLSResourceSessionsFollowPlayback(t *testing.T) {
 	}
 
 	// A far seek restarts ffmpeg at that position.
-	path, err := s.Resource(ctx, user, file, 0, hlsSegmentName(12))
+	path, err := s.Resource(ctx, user, file, HLSVariant{}, hlsSegmentName(12))
 	if err != nil {
 		t.Fatalf("seek: %v", err)
 	}
@@ -300,7 +310,7 @@ func TestHLSResourceSessionsFollowPlayback(t *testing.T) {
 	waitForGone(t, firstDir)
 
 	// Seeking back before the session start restarts as well.
-	path, err = s.Resource(ctx, user, file, 0, hlsSegmentName(11))
+	path, err = s.Resource(ctx, user, file, HLSVariant{}, hlsSegmentName(11))
 	if err != nil {
 		t.Fatalf("seek back: %v", err)
 	}
@@ -309,7 +319,7 @@ func TestHLSResourceSessionsFollowPlayback(t *testing.T) {
 	}
 
 	// The init segment follows the active session.
-	initPath, err = s.Resource(ctx, user, file, 0, "init.mp4")
+	initPath, err = s.Resource(ctx, user, file, HLSVariant{}, "init.mp4")
 	if err != nil {
 		t.Fatalf("init again: %v", err)
 	}
@@ -317,12 +327,12 @@ func TestHLSResourceSessionsFollowPlayback(t *testing.T) {
 		t.Fatalf("init must come from the active session")
 	}
 
-	if _, err := s.Resource(ctx, user, file, 0, hlsSegmentName(17)); err == nil {
+	if _, err := s.Resource(ctx, user, file, HLSVariant{}, hlsSegmentName(17)); err == nil {
 		t.Fatalf("segment past the end must fail (100 s / 6 s = 17 segments)")
 	}
 
 	// Another audio track is its own session.
-	other, err := s.Resource(ctx, user, file, 3, hlsSegmentName(0))
+	other, err := s.Resource(ctx, user, file, HLSVariant{Audio: 3}, hlsSegmentName(0))
 	if err != nil {
 		t.Fatalf("other audio: %v", err)
 	}
@@ -330,9 +340,23 @@ func TestHLSResourceSessionsFollowPlayback(t *testing.T) {
 		t.Fatalf("audio track 3 must map the second audio stream")
 	}
 
+	// The transcode fallback is its own session too, re-encoding the H.264
+	// the copy session passes through, from where playback broke.
+	transcoded, err := s.Resource(ctx, user, file, HLSVariant{Audio: 3, TranscodeVideo: true}, hlsSegmentName(2))
+	if err != nil {
+		t.Fatalf("transcode variant: %v", err)
+	}
+	if filepath.Dir(transcoded) == filepath.Dir(other) {
+		t.Fatalf("the transcode variant must not reuse the copy session")
+	}
+	if args := readArgs(t, filepath.Dir(transcoded)); !strings.Contains(args, "-c:v libx264") || !strings.Contains(args, "-ss 12.000") {
+		t.Fatalf("transcode session must re-encode from segment 2: %s", args)
+	}
+
 	s.Stop(user, file.ID)
 	waitForGone(t, filepath.Dir(path))
 	waitForGone(t, filepath.Dir(other))
+	waitForGone(t, filepath.Dir(transcoded))
 	s.mu.Lock()
 	remaining := len(s.sessions) + len(s.sources)
 	s.mu.Unlock()
@@ -346,7 +370,7 @@ func TestHLSInitSegmentWaitsForFirstSegment(t *testing.T) {
 	file := &domain.File{ID: uuid.New(), Path: "movie.mkv", Size: 1}
 	primeInfo(s, file, testMKVInfo())
 
-	initPath, err := s.Resource(context.Background(), uuid.New(), file, 0, "init.mp4")
+	initPath, err := s.Resource(context.Background(), uuid.New(), file, HLSVariant{}, "init.mp4")
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -365,7 +389,7 @@ func TestHLSResourceReportsFFmpegFailure(t *testing.T) {
 	file := &domain.File{ID: uuid.New(), Path: "movie.mkv", Size: 1}
 	primeInfo(s, file, testMKVInfo())
 
-	_, err := s.Resource(context.Background(), uuid.New(), file, 0, hlsSegmentName(0))
+	_, err := s.Resource(context.Background(), uuid.New(), file, HLSVariant{}, hlsSegmentName(0))
 	if err == nil || !strings.Contains(err.Error(), "cannot open input") {
 		t.Fatalf("ffmpeg failure must surface its stderr, got %v", err)
 	}
@@ -376,13 +400,13 @@ func TestHLSResourceRejectsBadAudioTrackAndUnknownResource(t *testing.T) {
 	file := &domain.File{ID: uuid.New(), Path: "movie.mkv", Size: 1}
 	primeInfo(s, file, testMKVInfo())
 
-	if _, err := s.Resource(context.Background(), uuid.New(), file, 9, hlsSegmentName(0)); !errors.Is(err, media.ErrAudioTrackNotFound) {
+	if _, err := s.Resource(context.Background(), uuid.New(), file, HLSVariant{Audio: 9}, hlsSegmentName(0)); !errors.Is(err, media.ErrAudioTrackNotFound) {
 		t.Fatalf("bad audio: err = %v", err)
 	}
-	if _, err := s.Resource(context.Background(), uuid.New(), file, 0, "../../etc/passwd"); err == nil {
+	if _, err := s.Resource(context.Background(), uuid.New(), file, HLSVariant{}, "../../etc/passwd"); err == nil {
 		t.Fatalf("path traversal must be rejected")
 	}
-	if _, err := s.Playlist(context.Background(), file, 9, ""); !errors.Is(err, media.ErrAudioTrackNotFound) {
+	if _, err := s.Playlist(context.Background(), file, HLSVariant{Audio: 9}, ""); !errors.Is(err, media.ErrAudioTrackNotFound) {
 		t.Fatalf("playlist bad audio: err = %v", err)
 	}
 }
@@ -393,7 +417,7 @@ func TestHLSSourceTokenResolvesWhileSessionRuns(t *testing.T) {
 	primeInfo(s, file, testMKVInfo())
 	user := uuid.New()
 
-	if _, err := s.Resource(context.Background(), user, file, 0, hlsSegmentName(0)); err != nil {
+	if _, err := s.Resource(context.Background(), user, file, HLSVariant{}, hlsSegmentName(0)); err != nil {
 		t.Fatalf("segment: %v", err)
 	}
 	s.mu.Lock()
@@ -421,7 +445,7 @@ func TestHLSReapIdleSessions(t *testing.T) {
 	file := &domain.File{ID: uuid.New(), Path: "movie.mkv", Size: 1}
 	primeInfo(s, file, testMKVInfo())
 
-	path, err := s.Resource(context.Background(), uuid.New(), file, 0, hlsSegmentName(0))
+	path, err := s.Resource(context.Background(), uuid.New(), file, HLSVariant{}, hlsSegmentName(0))
 	if err != nil {
 		t.Fatalf("segment: %v", err)
 	}
@@ -442,10 +466,10 @@ func TestHLSUnavailableWithoutFFmpeg(t *testing.T) {
 	}
 	file := &domain.File{ID: uuid.New(), Path: "movie.mkv", Size: 1}
 	primeInfo(s, file, testMKVInfo())
-	if _, err := s.Playlist(context.Background(), file, 0, ""); !errors.Is(err, ErrHLSUnavailable) {
+	if _, err := s.Playlist(context.Background(), file, HLSVariant{}, ""); !errors.Is(err, ErrHLSUnavailable) {
 		t.Fatalf("playlist: err = %v", err)
 	}
-	if _, err := s.Resource(context.Background(), uuid.New(), file, 0, "init.mp4"); !errors.Is(err, ErrHLSUnavailable) {
+	if _, err := s.Resource(context.Background(), uuid.New(), file, HLSVariant{}, "init.mp4"); !errors.Is(err, ErrHLSUnavailable) {
 		t.Fatalf("resource: err = %v", err)
 	}
 }

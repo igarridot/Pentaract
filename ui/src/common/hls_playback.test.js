@@ -10,6 +10,7 @@ import {
   describePlayback,
   playbackErrorMessage,
   playbackUnavailableReason,
+  shouldFallbackToTranscode,
 } from './hls_playback.js'
 
 const info = {
@@ -52,6 +53,20 @@ test('describePlayback says what is copied and what is converted', () => {
   assert.equal(describePlayback({ tracks: [{ type: 'video', codec: 'vp9' }] }), 'VP9 → H.264')
   assert.equal(describePlayback({ tracks: [] }), '')
   assert.equal(describePlayback(null), '')
+  assert.equal(describePlayback(info, 3, { transcodeVideo: true }), 'HEVC 3840×2160 → H.264 · AAC stereo')
+})
+
+test('shouldFallbackToTranscode retries a decode error once, on copied video only', () => {
+  const MEDIA_ERR_NETWORK = 2
+  const MEDIA_ERR_DECODE = 3
+  // Chrome on macOS: VideoToolbox rejected a Blu-ray H.264 copy.
+  assert.equal(shouldFallbackToTranscode(MEDIA_ERR_DECODE, { videoCopy: true, transcoding: false }), true)
+  // Already re-encoded: a second decode error is the user's to see.
+  assert.equal(shouldFallbackToTranscode(MEDIA_ERR_DECODE, { videoCopy: true, transcoding: true }), false)
+  // The server already transcodes this codec; nothing else to try.
+  assert.equal(shouldFallbackToTranscode(MEDIA_ERR_DECODE, { videoCopy: false, transcoding: false }), false)
+  assert.equal(shouldFallbackToTranscode(MEDIA_ERR_NETWORK, { videoCopy: true, transcoding: false }), false)
+  assert.equal(shouldFallbackToTranscode(undefined, { videoCopy: true, transcoding: false }), false)
 })
 
 test('playbackUnavailableReason explains server answers', () => {

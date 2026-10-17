@@ -25,8 +25,8 @@ type fakeHLS struct {
 	available   bool
 	reason      string
 	infoFn      func(ctx context.Context, file *domain.File) (*media.Info, error)
-	playlistFn  func(ctx context.Context, file *domain.File, audio uint64, query string) ([]byte, error)
-	resourceFn  func(ctx context.Context, userID uuid.UUID, file *domain.File, audio uint64, name string) (string, error)
+	playlistFn  func(ctx context.Context, file *domain.File, variant service.HLSVariant, query string) ([]byte, error)
+	resourceFn  func(ctx context.Context, userID uuid.UUID, file *domain.File, variant service.HLSVariant, name string) (string, error)
 	stopped     []uuid.UUID
 	stoppedBy   uuid.UUID
 	sourceToken string
@@ -38,11 +38,11 @@ func (f *fakeHLS) SegmentSeconds() int       { return 6 }
 func (f *fakeHLS) MediaInfo(ctx context.Context, file *domain.File) (*media.Info, error) {
 	return f.infoFn(ctx, file)
 }
-func (f *fakeHLS) Playlist(ctx context.Context, file *domain.File, audio uint64, query string) ([]byte, error) {
-	return f.playlistFn(ctx, file, audio, query)
+func (f *fakeHLS) Playlist(ctx context.Context, file *domain.File, variant service.HLSVariant, query string) ([]byte, error) {
+	return f.playlistFn(ctx, file, variant, query)
 }
-func (f *fakeHLS) Resource(ctx context.Context, userID uuid.UUID, file *domain.File, audio uint64, name string) (string, error) {
-	return f.resourceFn(ctx, userID, file, audio, name)
+func (f *fakeHLS) Resource(ctx context.Context, userID uuid.UUID, file *domain.File, variant service.HLSVariant, name string) (string, error) {
+	return f.resourceFn(ctx, userID, file, variant, name)
 }
 func (f *fakeHLS) Stop(userID, fileID uuid.UUID) {
 	f.stoppedBy = userID
@@ -196,10 +196,10 @@ func TestMediaInfoRequiresExistingFile(t *testing.T) {
 
 func TestHLSPlaylistEchoesQueryAndAudioTrack(t *testing.T) {
 	file := &domain.File{ID: uuid.New(), Path: "dir/movie.mkv", Size: 10}
-	var gotAudio uint64
+	var gotVariant service.HLSVariant
 	var gotQuery string
-	hls := &fakeHLS{available: true, playlistFn: func(_ context.Context, _ *domain.File, audio uint64, query string) ([]byte, error) {
-		gotAudio, gotQuery = audio, query
+	hls := &fakeHLS{available: true, playlistFn: func(_ context.Context, _ *domain.File, variant service.HLSVariant, query string) ([]byte, error) {
+		gotVariant, gotQuery = variant, query
 		return []byte("#EXTM3U\n"), nil
 	}}
 	router, _ := mediaTestRouter(mediaFileService(file), hls)
@@ -216,8 +216,17 @@ func TestHLSPlaylistEchoesQueryAndAudioTrack(t *testing.T) {
 	if w.Header().Get("Cache-Control") != "no-store" {
 		t.Fatalf("playlists must not be cached")
 	}
-	if gotAudio != 2 || gotQuery != "audio=2&access_token=tok" || w.Body.String() != "#EXTM3U\n" {
-		t.Fatalf("audio=%d query=%q body=%q", gotAudio, gotQuery, w.Body.String())
+	if gotVariant != (service.HLSVariant{Audio: 2}) || gotQuery != "audio=2&access_token=tok" || w.Body.String() != "#EXTM3U\n" {
+		t.Fatalf("variant=%+v query=%q body=%q", gotVariant, gotQuery, w.Body.String())
+	}
+
+	// The fallback the UI asks for when the browser cannot decode the copy:
+	// transcode=1 selects the variant and stays in every segment URI.
+	req = httptest.NewRequest(http.MethodGet, "/storages/"+uuid.NewString()+"/files/hls/dir/movie.mkv/index.m3u8?audio=2&transcode=1", nil)
+	w = httptest.NewRecorder()
+	router.ServeHTTP(w, req)
+	if w.Code != http.StatusOK || gotVariant != (service.HLSVariant{Audio: 2, TranscodeVideo: true}) || gotQuery != "audio=2&transcode=1" {
+		t.Fatalf("transcode: status=%d variant=%+v query=%q", w.Code, gotVariant, gotQuery)
 	}
 }
 
@@ -232,7 +241,7 @@ func TestHLSServesSegmentsFromThePipeline(t *testing.T) {
 	}
 	var gotUser uuid.UUID
 	var gotName string
-	hls := &fakeHLS{available: true, resourceFn: func(_ context.Context, userID uuid.UUID, _ *domain.File, _ uint64, name string) (string, error) {
+	hls := &fakeHLS{available: true, resourceFn: func(_ context.Context, userID uuid.UUID, _ *domain.File, _ service.HLSVariant, name string) (string, error) {
 		gotUser, gotName = userID, name
 		return filepath.Join(dir, name), nil
 	}}
@@ -271,7 +280,7 @@ func TestHLSMapsPipelineErrors(t *testing.T) {
 	}
 	for name, tc := range cases {
 		t.Run(name, func(t *testing.T) {
-			hls := &fakeHLS{available: true, resourceFn: func(context.Context, uuid.UUID, *domain.File, uint64, string) (string, error) {
+			hls := &fakeHLS{available: true, resourceFn: func(context.Context, uuid.UUID, *domain.File, service.HLSVariant, string) (string, error) {
 				return "", tc.err
 			}}
 			router, _ := mediaTestRouter(mediaFileService(file), hls)
