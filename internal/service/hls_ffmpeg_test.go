@@ -60,7 +60,7 @@ func TestHLSWithRealFFmpeg(t *testing.T) {
 		t.Fatalf("duration = %v", info.DurationSeconds)
 	}
 
-	playlist, err := s.Playlist(ctx, file, 0, "")
+	playlist, err := s.Playlist(ctx, file, HLSVariant{}, "")
 	if err != nil {
 		t.Fatalf("playlist: %v", err)
 	}
@@ -68,7 +68,7 @@ func TestHLSWithRealFFmpeg(t *testing.T) {
 		t.Fatalf("20 s / 4 s must give 5 segments:\n%s", playlist)
 	}
 
-	initPath, err := s.Resource(ctx, user, file, 0, "init.mp4")
+	initPath, err := s.Resource(ctx, user, file, HLSVariant{}, "init.mp4")
 	if err != nil {
 		t.Fatalf("init: %v", err)
 	}
@@ -78,7 +78,7 @@ func TestHLSWithRealFFmpeg(t *testing.T) {
 	}
 
 	for i := 0; i < 3; i++ {
-		segPath, err := s.Resource(ctx, user, file, 0, hlsSegmentName(i))
+		segPath, err := s.Resource(ctx, user, file, HLSVariant{}, hlsSegmentName(i))
 		if err != nil {
 			t.Fatalf("segment %d: %v", i, err)
 		}
@@ -91,7 +91,7 @@ func TestHLSWithRealFFmpeg(t *testing.T) {
 	// A fresh session starting at the last segment exercises the seek path
 	// (-ss 16 with -copyts and -start_number 4) against the real binary.
 	s.Stop(user, file.ID)
-	segPath, err := s.Resource(ctx, user, file, 0, hlsSegmentName(4))
+	segPath, err := s.Resource(ctx, user, file, HLSVariant{}, hlsSegmentName(4))
 	if err != nil {
 		t.Fatalf("seek segment: %v", err)
 	}
@@ -104,6 +104,18 @@ func TestHLSWithRealFFmpeg(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(filepath.Dir(segPath), hlsSegmentName(3))); !os.IsNotExist(err) {
 		t.Fatalf("a session started at segment 4 must not produce segment 3")
+	}
+	s.Stop(user, file.ID)
+
+	// The browser fallback: the same H.264 re-encoded with libx264 (and the
+	// 1080p scale cap), resuming mid-file as the UI does after a decode error.
+	transcoded, err := s.Resource(ctx, user, file, HLSVariant{TranscodeVideo: true}, hlsSegmentName(2))
+	if err != nil {
+		t.Fatalf("transcoded segment: %v", err)
+	}
+	seg, _ = os.ReadFile(transcoded)
+	if !bytes.Contains(seg, []byte("moof")) {
+		t.Fatalf("transcoded segment is not a fragmented MP4 segment")
 	}
 	s.Stop(user, file.ID)
 }

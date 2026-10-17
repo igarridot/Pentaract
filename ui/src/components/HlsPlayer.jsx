@@ -11,6 +11,7 @@ import {
   describePlayback,
   playbackErrorMessage,
   playbackUnavailableReason,
+  shouldFallbackToTranscode,
 } from '../common/hls_playback'
 
 // HlsPlayer plays a Matroska file through the server's on-the-fly HLS
@@ -26,6 +27,9 @@ export default function HlsPlayer({ storageId, file }) {
   const [infoError, setInfoError] = useState(null)
   const [audioTrack, setAudioTrack] = useState(null)
   const [playbackError, setPlaybackError] = useState(null)
+  // Set when the browser could not decode the copied video: the server then
+  // re-encodes it, from where playback stopped.
+  const [transcodeVideo, setTranscodeVideo] = useState(false)
 
   const path = file?.path
 
@@ -36,6 +40,7 @@ export default function HlsPlayer({ storageId, file }) {
     setInfoError(null)
     setAudioTrack(null)
     setPlaybackError(null)
+    setTranscodeVideo(false)
     positionRef.current = 0
     if (!storageId || !path) return undefined
     API.files.mediaInfo(storageId, path)
@@ -49,16 +54,19 @@ export default function HlsPlayer({ storageId, file }) {
   }, [storageId, path])
 
   const playable = !!info?.hls?.available
+  const videoCopy = !!info?.hls?.video_copy
   const unavailableReason = infoError || playbackUnavailableReason(info)
 
   // Attach the player once the file is known to be playable, and again when
-  // the audio track changes (each track is its own server session).
+  // the audio track changes or the video falls back to transcoding (each is
+  // its own server session).
   useEffect(() => {
     const video = videoRef.current
     if (!playable || !video || !storageId || !path) return undefined
     setPlaybackError(null)
 
     const resumeAt = positionRef.current
+    const urlOptions = { transcode: transcodeVideo }
     let hls = null
     if (Hls.isSupported()) {
       hls = new Hls({ ...buildHlsConfig(getRawToken()), startPosition: resumeAt > 0 ? resumeAt : -1 })
@@ -66,10 +74,10 @@ export default function HlsPlayer({ storageId, file }) {
         const message = playbackErrorMessage(data)
         if (message) setPlaybackError(message)
       })
-      hls.loadSource(API.files.hlsPlaylistUrl(storageId, path, audioTrack))
+      hls.loadSource(API.files.hlsPlaylistUrl(storageId, path, audioTrack, urlOptions))
       hls.attachMedia(video)
     } else if (video.canPlayType('application/vnd.apple.mpegurl')) {
-      video.src = API.files.hlsPlaylistAuthUrl(storageId, path, audioTrack)
+      video.src = API.files.hlsPlaylistAuthUrl(storageId, path, audioTrack, urlOptions)
       if (resumeAt > 0) {
         video.addEventListener('loadedmetadata', () => { video.currentTime = resumeAt }, { once: true })
       }
@@ -78,12 +86,22 @@ export default function HlsPlayer({ storageId, file }) {
       return undefined
     }
 
+    const onVideoError = () => {
+      if (shouldFallbackToTranscode(video.error?.code, { videoCopy, transcoding: transcodeVideo })) {
+        setTranscodeVideo(true)
+      } else if (video.error?.code === video.error?.MEDIA_ERR_DECODE) {
+        setPlaybackError('Your browser could not decode this video.')
+      }
+    }
+    video.addEventListener('error', onVideoError)
+
     return () => {
+      video.removeEventListener('error', onVideoError)
       positionRef.current = video.currentTime || positionRef.current
       if (hls) hls.destroy()
       else video.removeAttribute('src')
     }
-  }, [playable, storageId, path, audioTrack])
+  }, [playable, videoCopy, storageId, path, audioTrack, transcodeVideo])
 
   // Let the server drop its ffmpeg as soon as the preview closes.
   useEffect(() => () => {
@@ -105,8 +123,11 @@ export default function HlsPlayer({ storageId, file }) {
         <>
           <Box component="video" ref={videoRef} controls playsInline sx={{ width: '100%', maxHeight: '65vh', bgcolor: 'black' }} />
           {playbackError && <Alert severity="error">{playbackError}</Alert>}
+          {transcodeVideo && videoCopy && !playbackError && (
+            <Alert severity="info">Your browser could not decode the original video, so the server is converting it.</Alert>
+          )}
           <Box sx={{ display: 'flex', alignItems: 'center', gap: 2, flexWrap: 'wrap' }}>
-            <Typography variant="caption" color="text.secondary">{describePlayback(info, audioTrack)}</Typography>
+            <Typography variant="caption" color="text.secondary">{describePlayback(info, audioTrack, { transcodeVideo })}</Typography>
             {tracks.length > 1 && (
               <FormControl size="small" sx={{ minWidth: 200 }}>
                 <InputLabel id="hls-audio-track-label">Audio</InputLabel>

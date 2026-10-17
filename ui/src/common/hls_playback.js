@@ -64,15 +64,16 @@ export function audioTrackLabel(track) {
 
 // Describes what the player receives: the video codec with its size, the
 // audio codec, and whether each is copied as is or converted to something
-// the browser decodes.
-export function describePlayback(info, audioTrackNumber) {
+// the browser decodes. transcodeVideo marks the fallback where the server
+// re-encodes video it would normally copy.
+export function describePlayback(info, audioTrackNumber, { transcodeVideo = false } = {}) {
   const video = (info?.tracks || []).find((t) => t.type === 'video')
   const tracks = audioTracks(info)
   const audio = tracks.find((t) => t.number === audioTrackNumber) || tracks[0]
   const parts = []
   if (video) {
     const size = video.width && video.height ? ` ${video.width}×${video.height}` : ''
-    const copied = video.codec === 'h264' || video.codec === 'hevc'
+    const copied = !transcodeVideo && (video.codec === 'h264' || video.codec === 'hevc')
     parts.push(`${codecLabel(video.codec)}${size}${copied ? '' : ' → H.264'}`)
   }
   if (audio) {
@@ -90,6 +91,18 @@ export function playbackUnavailableReason(info) {
   if (info.container === 'unsupported') return 'This file is not a Matroska video.'
   if (info.error) return `Could not read the video header: ${info.error}`
   return info.hls?.reason || 'This video cannot be played in the browser.'
+}
+
+// HTMLMediaElement's MEDIA_ERR_DECODE.
+const MEDIA_ERR_DECODE = 3
+
+// Whether a media element error should switch playback to server-side video
+// transcoding. Chrome's macOS hardware decoder rejects some Blu-ray H.264
+// that software decoders (Kodi, ffmpeg) play, so a decode error on copied
+// video gets one retry with the video re-encoded; anything else, or a second
+// failure, is reported to the user.
+export function shouldFallbackToTranscode(mediaErrorCode, { videoCopy, transcoding }) {
+  return mediaErrorCode === MEDIA_ERR_DECODE && !!videoCopy && !transcoding
 }
 
 // Telegram hands a chunk over in seconds to minutes, and every segment

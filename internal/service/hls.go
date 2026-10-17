@@ -53,6 +53,7 @@ const (
 	hlsSegmentPollInterval = 100 * time.Millisecond
 	hlsReaperInterval      = 15 * time.Second
 	hlsStderrLimit         = 8 << 10
+	hlsTranscodeMaxWidth   = 1920
 	hlsInitSegmentName     = "init.mp4"
 	hlsFFmpegPlaylist      = "ffmpeg.m3u8"
 	// HLSSourcePathPrefix is the loopback-only route ffmpeg reads from.
@@ -74,10 +75,26 @@ type hlsFileReader interface {
 	DownloadFileRangeToWriter(ctx context.Context, file *domain.File, w io.Writer, start, end, totalSize int64, progress *DownloadProgress) error
 }
 
+// HLSVariant is what a player asks for: the Matroska audio track (0 for the
+// file's default) and whether the video must be re-encoded instead of copied,
+// which the web UI requests when the browser fails to decode the copy.
+type HLSVariant struct {
+	Audio          uint64
+	TranscodeVideo bool
+}
+
+func (v HLSVariant) plan(info *media.Info) (media.Plan, error) {
+	plan, err := media.BuildPlan(info, v.Audio)
+	if err != nil || !v.TranscodeVideo {
+		return plan, err
+	}
+	return plan.WithVideoTranscode(), nil
+}
+
 type hlsSessionKey struct {
-	userID uuid.UUID
-	fileID uuid.UUID
-	audio  uint64
+	userID  uuid.UUID
+	fileID  uuid.UUID
+	variant HLSVariant
 }
 
 // hlsSession is one running ffmpeg process writing segments from startIndex
@@ -269,7 +286,7 @@ func (s *HLSService) readInfo(ctx context.Context, file *domain.File) (*media.In
 // Playlist returns the VOD playlist for file. query is appended verbatim to
 // every segment URI so the player's credentials (access_token) and audio
 // track choice travel with each request.
-func (s *HLSService) Playlist(ctx context.Context, file *domain.File, audio uint64, query string) ([]byte, error) {
+func (s *HLSService) Playlist(ctx context.Context, file *domain.File, variant HLSVariant, query string) ([]byte, error) {
 	if ok, reason := s.Available(); !ok {
 		return nil, fmt.Errorf("%w: %s", ErrHLSUnavailable, reason)
 	}
@@ -277,7 +294,7 @@ func (s *HLSService) Playlist(ctx context.Context, file *domain.File, audio uint
 	if err != nil {
 		return nil, err
 	}
-	if _, err := media.BuildPlan(info, audio); err != nil {
+	if _, err := variant.plan(info); err != nil {
 		return nil, err
 	}
 	playlist, err := BuildHLSPlaylist(info.DurationSeconds, s.cfg.SegmentSeconds, query)
@@ -289,7 +306,7 @@ func (s *HLSService) Playlist(ctx context.Context, file *domain.File, audio uint
 
 // Resource returns the local path of an init segment or media segment, once
 // ffmpeg has written it. name is "init.mp4" or "segNNNNN.m4s".
-func (s *HLSService) Resource(ctx context.Context, userID uuid.UUID, file *domain.File, audio uint64, name string) (string, error) {
+func (s *HLSService) Resource(ctx context.Context, userID uuid.UUID, file *domain.File, variant HLSVariant, name string) (string, error) {
 	if ok, reason := s.Available(); !ok {
 		return "", fmt.Errorf("%w: %s", ErrHLSUnavailable, reason)
 	}
@@ -308,7 +325,7 @@ func (s *HLSService) Resource(ctx context.Context, userID uuid.UUID, file *domai
 	if err != nil {
 		return "", err
 	}
-	plan, err := media.BuildPlan(info, audio)
+	plan, err := variant.plan(info)
 	if err != nil {
 		return "", err
 	}
@@ -317,7 +334,7 @@ func (s *HLSService) Resource(ctx context.Context, userID uuid.UUID, file *domai
 		return "", err
 	}
 
-	key := hlsSessionKey{userID: userID, fileID: file.ID, audio: audio}
+	key := hlsSessionKey{userID: userID, fileID: file.ID, variant: variant}
 	s.mu.Lock()
 	sess := s.sessions[key]
 	if isInit {
@@ -357,7 +374,7 @@ func (s *HLSService) Resource(ctx context.Context, userID uuid.UUID, file *domai
 	return filepath.Join(sess.dir, fileName), nil
 }
 
-// Stop ends every session of userID on fileID, whatever audio track.
+// Stop ends every session of userID on fileID, whatever variant.
 func (s *HLSService) Stop(userID, fileID uuid.UUID) {
 	s.mu.Lock()
 	defer s.mu.Unlock()
@@ -565,6 +582,9 @@ func hlsFFmpegArgs(cfg HLSConfig, sourceURL string, plan media.Plan, startSecond
 		}
 	} else {
 		args = append(args,
+			// Wider sources (4K) are scaled to 1080p: libx264 cannot keep up
+			// with a 4K transcode in real time on a home server.
+			"-vf", fmt.Sprintf("scale=w='min(iw,%d)':h=-2", hlsTranscodeMaxWidth),
 			"-c:v", "libx264", "-preset", "veryfast", "-crf", "23", "-pix_fmt", "yuv420p",
 			"-force_key_frames", fmt.Sprintf("expr:gte(t,%s+n_forced*%s)", formatSeconds(startSeconds), segment),
 		)
