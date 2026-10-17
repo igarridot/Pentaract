@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -116,6 +117,14 @@ func (d *ChunkDownloader) downloadAndDecryptChunk(ctx context.Context, fileID uu
 	return data, nil
 }
 
+// downloadAndDecryptChunkCached serves a chunk from the stream cache, loading
+// it at most once no matter how many concurrent range requests ask for it.
+//
+// The load runs under the context of whichever request asked first. Media
+// players drop range requests constantly (seeks, probing the tail of an MP4 or
+// MKV, reconnects), and when the dropped request was the one loading, every
+// request still waiting for that chunk used to fail with its cancellation.
+// Such a request retries the load under its own context instead.
 func (d *ChunkDownloader) downloadAndDecryptChunkCached(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
 	cacheKey := streamChunkCacheKey{fileID: fileID, position: chunk.Position}
 	cache := d.cache
@@ -124,29 +133,38 @@ func (d *ChunkDownloader) downloadAndDecryptChunkCached(ctx context.Context, fil
 	}
 
 	loadKey := fmt.Sprintf("%s:%d", fileID.String(), chunk.Position)
-	value, err, _ := d.loads.Do(loadKey, func() (interface{}, error) {
-		if data, ok := cache.get(cacheKey); ok {
-			return data, nil
-		}
+	for {
+		value, err, shared := d.loads.Do(loadKey, func() (interface{}, error) {
+			if data, ok := cache.get(cacheKey); ok {
+				return data, nil
+			}
 
-		data, err := d.downloadAndDecryptChunk(ctx, fileID, storage, chunk)
+			data, err := d.downloadAndDecryptChunk(ctx, fileID, storage, chunk)
+			if err != nil {
+				return nil, err
+			}
+
+			cache.set(cacheKey, data)
+			return data, nil
+		})
 		if err != nil {
+			if shared && isContextError(err) && ctx.Err() == nil {
+				slog.Debug("chunk load cancelled by another request, retrying", "position", chunk.Position)
+				continue
+			}
 			return nil, err
 		}
 
-		cache.set(cacheKey, data)
+		data, ok := value.([]byte)
+		if !ok {
+			return nil, fmt.Errorf("unexpected cached chunk type %T", value)
+		}
 		return data, nil
-	})
-	if err != nil {
-		return nil, err
 	}
+}
 
-	data, ok := value.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("unexpected cached chunk type %T", value)
-	}
-
-	return data, nil
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 type chunkDataLoader func(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error)
@@ -301,24 +319,61 @@ func (d *ChunkDownloader) DownloadRangeToWriter(ctx context.Context, file *domai
 		progress.TotalBytes = end - start + 1
 	}
 
-	startChunkIndex := 0
-	endChunkIndex := len(chunks) - 1
+	window := chunks
 	offset := int64(0)
-	if inferredStart, inferredEnd, inferredOffset, ok := inferRangeChunkWindow(start, end, totalSize, len(chunks)); ok {
-		startChunkIndex = inferredStart
-		endChunkIndex = inferredEnd
+	if startIdx, endIdx, inferredOffset, ok := inferRangeChunkWindow(start, end, totalSize, len(chunks)); ok {
+		window = chunks[startIdx : endIdx+1]
 		offset = inferredOffset
 	}
-
-	rangeChunks := chunks[startChunkIndex : endChunkIndex+1]
 	if progress != nil && progress.TotalChunks == 0 {
-		progress.TotalChunks = int64(len(rangeChunks))
+		progress.TotalChunks = int64(len(window))
 	}
 
-	return d.downloadChunksInOrder(ctx, file, storage, rangeChunks, d.downloadAndDecryptChunkCached, func(chunk domain.FileChunk, data []byte) error {
+	lastPosition := chunks[len(chunks)-1].Position
+	written, err := d.writeRangeWindow(ctx, file, storage, window, offset, lastPosition, start, end, totalSize, w, progress)
+	if errors.Is(err, errChunkLayoutMismatch) && written == 0 && offset > 0 {
+		// Nothing reached the client yet, so replay the file from its first
+		// chunk: accumulating real chunk sizes is correct for any layout.
+		slog.Warn("chunk layout differs from the current chunk size; replaying from the first chunk (re-upload the file to make seeking fast again)", "file", file.Path, "err", err)
+		_, err = d.writeRangeWindow(ctx, file, storage, chunks, 0, lastPosition, start, end, totalSize, w, progress)
+	}
+	return err
+}
+
+// errChunkLayoutMismatch reports a chunk whose size contradicts the fixed
+// plaintext chunk size the range window was derived from.
+var errChunkLayoutMismatch = errors.New("chunk size does not match the current upload chunk size")
+
+// writeRangeWindow streams the bytes of [start, end] that fall inside window,
+// whose first chunk starts at byte offset. It returns how many bytes were
+// written. With offset > 0 the window came from inferRangeChunkWindow, which
+// assumes every non-final chunk holds exactly UploadChunkSize bytes; files
+// uploaded before that size was introduced used 20 MiB chunks, and serving
+// them through the inferred offsets would hand the player bytes from the
+// wrong position. Such chunks fail with errChunkLayoutMismatch instead.
+func (d *ChunkDownloader) writeRangeWindow(
+	ctx context.Context,
+	file *domain.File,
+	storage *domain.Storage,
+	window []domain.FileChunk,
+	offset int64,
+	lastPosition int16,
+	start, end, totalSize int64,
+	w io.Writer,
+	progress *DownloadProgress,
+) (int64, error) {
+	checkLayout := offset > 0
+	var written int64
+	err := d.downloadChunksInOrder(ctx, file, storage, window, d.downloadAndDecryptChunkCached, func(chunk domain.FileChunk, data []byte) error {
 		chunkStart := offset
 		chunkEndExclusive := chunkStart + int64(len(data))
 		offset = chunkEndExclusive
+
+		if checkLayout {
+			if err := checkChunkLayout(chunk, chunkStart, int64(len(data)), lastPosition, totalSize); err != nil {
+				return err
+			}
+		}
 
 		if chunkEndExclusive <= start || chunkStart > end {
 			return nil
@@ -335,7 +390,29 @@ func (d *ChunkDownloader) DownloadRangeToWriter(ctx context.Context, file *domai
 			return fmt.Errorf("writing ranged chunk %d: %w", chunk.Position, err)
 		}
 
+		written += right - left
 		progress.chunkDownloaded(right - left)
 		return nil
 	})
+	return written, err
+}
+
+// checkChunkLayout verifies that a chunk sits where the fixed-size layout
+// says it does. A non-final chunk must hold exactly UploadChunkSize bytes.
+// The final chunk must end at the file size; a stored size can overshoot by
+// the multipart framing of old uploads (a few hundred bytes), while a legacy
+// chunk layout is off by at least UploadChunkSafetyMargin per preceding
+// chunk, so only gaps of that order count as a mismatch.
+func checkChunkLayout(chunk domain.FileChunk, chunkStart, size int64, lastPosition int16, totalSize int64) error {
+	if chunk.Position != lastPosition {
+		if size != UploadChunkSize {
+			return fmt.Errorf("%w: chunk %d holds %d bytes, want %d", errChunkLayoutMismatch, chunk.Position, size, UploadChunkSize)
+		}
+		return nil
+	}
+	chunkEnd := chunkStart + size
+	if chunkEnd > totalSize || totalSize-chunkEnd >= UploadChunkSafetyMargin {
+		return fmt.Errorf("%w: last chunk %d ends at byte %d, file size is %d", errChunkLayoutMismatch, chunk.Position, chunkEnd, totalSize)
+	}
+	return nil
 }
