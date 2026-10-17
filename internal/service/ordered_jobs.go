@@ -2,7 +2,6 @@ package service
 
 import (
 	"context"
-	"errors"
 
 	"golang.org/x/sync/errgroup"
 )
@@ -18,41 +17,20 @@ type orderedJobResult[Job any, Result any] struct {
 	result Result
 }
 
+// runOrderedJobs loads jobs with up to parallelism workers and hands every
+// result to handle strictly in input order. The first load or handle error
+// stops the remaining work and is returned.
 func runOrderedJobs[Job any, Result any](
 	ctx context.Context,
 	parallelism int,
 	jobs []Job,
 	load func(context.Context, Job) (Result, error),
 	handle func(Job, Result) error,
-	cleanup func(Job, Result),
 ) error {
 	if len(jobs) == 0 {
 		return nil
 	}
-	if parallelism > len(jobs) {
-		parallelism = len(jobs)
-	}
-	if parallelism <= 1 {
-		for _, job := range jobs {
-			select {
-			case <-ctx.Done():
-				return ctx.Err()
-			default:
-			}
-
-			result, err := load(ctx, job)
-			if err != nil {
-				return err
-			}
-			if err := handle(job, result); err != nil {
-				if cleanup != nil {
-					cleanup(job, result)
-				}
-				return err
-			}
-		}
-		return nil
-	}
+	parallelism = max(min(parallelism, len(jobs)), 1)
 
 	workCtx, cancel := context.WithCancel(ctx)
 	defer cancel()
@@ -70,15 +48,8 @@ func runOrderedJobs[Job any, Result any](
 				}
 
 				select {
-				case resultCh <- orderedJobResult[Job, Result]{
-					index:  job.index,
-					job:    job.job,
-					result: result,
-				}:
+				case resultCh <- orderedJobResult[Job, Result]{index: job.index, job: job.job, result: result}:
 				case <-gctx.Done():
-					if cleanup != nil {
-						cleanup(job.job, result)
-					}
 					return gctx.Err()
 				}
 			}
@@ -105,6 +76,7 @@ func runOrderedJobs[Job any, Result any](
 		errCh <- err
 	}()
 
+	// Results arrive out of order; park them until their turn comes.
 	pending := make(map[int]orderedJobResult[Job, Result], parallelism)
 	nextIndex := 0
 	var handleErr error
@@ -112,34 +84,25 @@ func runOrderedJobs[Job any, Result any](
 	for result := range resultCh {
 		pending[result.index] = result
 
-		for {
-			next, ok := pending[nextIndex]
-			if !ok {
-				break
-			}
+		for next, ok := pending[nextIndex]; ok; next, ok = pending[nextIndex] {
 			delete(pending, nextIndex)
-
-			if handleErr == nil {
-				if err := handle(next.job, next.result); err != nil {
-					handleErr = err
-					cancel()
-				}
-			} else if cleanup != nil {
-				cleanup(next.job, next.result)
-			}
 			nextIndex++
+			if handleErr != nil {
+				continue
+			}
+			if handleErr = handle(next.job, next.result); handleErr != nil {
+				cancel()
+			}
 		}
 	}
 
 	workerErr := <-errCh
-	if handleErr != nil {
+	switch {
+	case handleErr != nil:
 		return handleErr
-	}
-	if workerErr != nil && !errors.Is(workerErr, context.Canceled) {
+	case workerErr != nil:
 		return workerErr
+	default:
+		return ctx.Err()
 	}
-	if err := ctx.Err(); err != nil {
-		return err
-	}
-	return nil
 }

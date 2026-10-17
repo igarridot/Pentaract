@@ -85,8 +85,7 @@ func (d *ChunkDownloader) downloadChunk(ctx context.Context, storage domain.Stor
 // downloadChunkWithRetry wraps downloadChunk with retry + exponential backoff.
 // All chunk downloads go through the scheduler for rate-limited token acquisition.
 func (d *ChunkDownloader) downloadChunkWithRetry(ctx context.Context, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
-	var lastErr error
-	for attempt := 1; attempt <= DownloadChunkMaxAttempts; attempt++ {
+	for attempt := 1; ; attempt++ {
 		data, err := d.downloadChunk(ctx, storage, chunk)
 		if err == nil {
 			return data, nil
@@ -94,15 +93,14 @@ func (d *ChunkDownloader) downloadChunkWithRetry(ctx context.Context, storage do
 		if contextAborted(ctx) {
 			return nil, ctx.Err()
 		}
-		lastErr = err
-		if attempt < DownloadChunkMaxAttempts {
-			slog.Warn("download chunk failed, retrying", "position", chunk.Position, "attempt", attempt, "max_attempts", DownloadChunkMaxAttempts, "err", err)
-			if backoffErr := sleepBackoff(ctx, attempt); backoffErr != nil {
-				return nil, backoffErr
-			}
+		if attempt == DownloadChunkMaxAttempts {
+			return nil, err
+		}
+		slog.Warn("download chunk failed, retrying", "position", chunk.Position, "attempt", attempt, "max_attempts", DownloadChunkMaxAttempts, "err", err)
+		if backoffErr := sleepBackoff(ctx, attempt); backoffErr != nil {
+			return nil, backoffErr
 		}
 	}
-	return nil, lastErr
 }
 
 func (d *ChunkDownloader) downloadAndDecryptChunk(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
@@ -127,15 +125,14 @@ func (d *ChunkDownloader) downloadAndDecryptChunk(ctx context.Context, fileID uu
 // Such a request retries the load under its own context instead.
 func (d *ChunkDownloader) downloadAndDecryptChunkCached(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
 	cacheKey := streamChunkCacheKey{fileID: fileID, position: chunk.Position}
-	cache := d.cache
-	if data, ok := cache.get(cacheKey); ok {
+	if data, ok := d.cache.get(cacheKey); ok {
 		return data, nil
 	}
 
 	loadKey := fmt.Sprintf("%s:%d", fileID.String(), chunk.Position)
 	for {
-		value, err, shared := d.loads.Do(loadKey, func() (interface{}, error) {
-			if data, ok := cache.get(cacheKey); ok {
+		value, err, shared := d.loads.Do(loadKey, func() (any, error) {
+			if data, ok := d.cache.get(cacheKey); ok {
 				return data, nil
 			}
 
@@ -144,7 +141,7 @@ func (d *ChunkDownloader) downloadAndDecryptChunkCached(ctx context.Context, fil
 				return nil, err
 			}
 
-			cache.set(cacheKey, data)
+			d.cache.set(cacheKey, data)
 			return data, nil
 		})
 		if err != nil {
@@ -187,27 +184,35 @@ func (d *ChunkDownloader) downloadChunksInOrder(
 			return loadChunk(loadCtx, file.ID, *storage, chunk)
 		},
 		writeChunk,
-		nil,
 	)
+}
+
+// fileChunksAndStorage loads what every read of a file needs: its chunk
+// records, which must exist, and the storage they live in.
+func (d *ChunkDownloader) fileChunksAndStorage(ctx context.Context, file *domain.File) ([]domain.FileChunk, *domain.Storage, error) {
+	chunks, err := d.filesRepo.ListChunks(ctx, file.ID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("listing chunks: %w", err)
+	}
+	if len(chunks) == 0 {
+		return nil, nil, domain.ErrNotFound("file chunks")
+	}
+
+	storage, err := d.storagesRepo.GetByID(ctx, file.StorageID)
+	if err != nil {
+		return nil, nil, fmt.Errorf("getting storage: %w", err)
+	}
+	return chunks, storage, nil
 }
 
 // writeWholeFile streams every chunk of file to w in order, loading chunks
 // with loadChunk. label names the operation in logs.
 func (d *ChunkDownloader) writeWholeFile(ctx context.Context, file *domain.File, w io.Writer, progress *DownloadProgress, loadChunk chunkDataLoader, label string) error {
-	chunks, err := d.filesRepo.ListChunks(ctx, file.ID)
+	chunks, storage, err := d.fileChunksAndStorage(ctx, file)
 	if err != nil {
-		return fmt.Errorf("listing chunks: %w", err)
+		return err
 	}
-	if len(chunks) == 0 {
-		return domain.ErrNotFound("file chunks")
-	}
-
 	progress.setTotalsIfUnset(int64(len(chunks)), file.Size)
-
-	storage, err := d.storagesRepo.GetByID(ctx, file.StorageID)
-	if err != nil {
-		return fmt.Errorf("getting storage: %w", err)
-	}
 
 	slog.Info("starting "+label, "file", file.Path, "chunks", len(chunks), "storage", storage.Name, "chat", storage.Name)
 
@@ -243,31 +248,17 @@ func (d *ChunkDownloader) StreamToWriter(ctx context.Context, file *domain.File,
 // ExactFileSize derives the exact file size from chunk count plus the actual
 // plaintext bytes in the last chunk.
 func (d *ChunkDownloader) ExactFileSize(ctx context.Context, file *domain.File) (int64, error) {
-	chunks, err := d.filesRepo.ListChunks(ctx, file.ID)
-	if err != nil {
-		return 0, fmt.Errorf("listing chunks: %w", err)
-	}
-	if len(chunks) == 0 {
-		return 0, domain.ErrNotFound("file chunks")
-	}
-
-	storage, err := d.storagesRepo.GetByID(ctx, file.StorageID)
-	if err != nil {
-		return 0, fmt.Errorf("getting storage: %w", err)
-	}
-
-	lastChunk := chunks[len(chunks)-1]
-	lastChunkData, err := d.downloadAndDecryptChunkCached(ctx, file.ID, *storage, lastChunk)
+	chunks, storage, err := d.fileChunksAndStorage(ctx, file)
 	if err != nil {
 		return 0, err
 	}
 
-	total := int64(len(lastChunkData))
-	if len(chunks) > 1 {
-		total += int64(len(chunks)-1) * UploadChunkSize
+	lastChunkData, err := d.downloadAndDecryptChunkCached(ctx, file.ID, *storage, chunks[len(chunks)-1])
+	if err != nil {
+		return 0, err
 	}
 
-	return total, nil
+	return int64(len(chunks)-1)*UploadChunkSize + int64(len(lastChunkData)), nil
 }
 
 func inferRangeChunkWindow(start, end, totalSize int64, chunksCount int) (int, int, int64, bool) {
@@ -278,21 +269,13 @@ func inferRangeChunkWindow(start, end, totalSize int64, chunksCount int) (int, i
 		return 0, 0, 0, true
 	}
 
-	fullPrefixSize := int64(chunksCount-1) * UploadChunkSize
-	if totalSize < fullPrefixSize {
-		return 0, chunksCount - 1, 0, false
-	}
-
 	lastChunkIndex := chunksCount - 1
-	startChunkIndex := int(start / UploadChunkSize)
-	endChunkIndex := int(end / UploadChunkSize)
-	if startChunkIndex > lastChunkIndex {
-		startChunkIndex = lastChunkIndex
-	}
-	if endChunkIndex > lastChunkIndex {
-		endChunkIndex = lastChunkIndex
+	if totalSize < int64(lastChunkIndex)*UploadChunkSize {
+		return 0, lastChunkIndex, 0, false
 	}
 
+	startChunkIndex := min(int(start/UploadChunkSize), lastChunkIndex)
+	endChunkIndex := min(int(end/UploadChunkSize), lastChunkIndex)
 	return startChunkIndex, endChunkIndex, int64(startChunkIndex) * UploadChunkSize, true
 }
 
@@ -302,17 +285,9 @@ func (d *ChunkDownloader) DownloadRangeToWriter(ctx context.Context, file *domai
 		return fmt.Errorf("invalid range %d-%d for file size %d", start, end, totalSize)
 	}
 
-	chunks, err := d.filesRepo.ListChunks(ctx, file.ID)
+	chunks, storage, err := d.fileChunksAndStorage(ctx, file)
 	if err != nil {
-		return fmt.Errorf("listing chunks: %w", err)
-	}
-	if len(chunks) == 0 {
-		return domain.ErrNotFound("file chunks")
-	}
-
-	storage, err := d.storagesRepo.GetByID(ctx, file.StorageID)
-	if err != nil {
-		return fmt.Errorf("getting storage: %w", err)
+		return err
 	}
 
 	if progress != nil && progress.TotalBytes == 0 {
@@ -373,10 +348,6 @@ func (d *ChunkDownloader) writeRangeWindow(
 			if err := checkChunkLayout(chunk, chunkStart, int64(len(data)), lastPosition, totalSize); err != nil {
 				return err
 			}
-		}
-
-		if chunkEndExclusive <= start || chunkStart > end {
-			return nil
 		}
 
 		// Clip the chunk to the requested [start, end] window.

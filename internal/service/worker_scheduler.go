@@ -69,6 +69,18 @@ func (s *WorkerScheduler) popBufferedToken(storageID uuid.UUID) *repository.Work
 	return token
 }
 
+// bufferTokens keeps the extra tokens of a batch for later GetToken calls.
+func (s *WorkerScheduler) bufferTokens(storageID uuid.UUID, extras []repository.WorkerToken) {
+	if len(extras) == 0 {
+		return
+	}
+	s.tokenBufMu.Lock()
+	defer s.tokenBufMu.Unlock()
+	for _, t := range extras {
+		s.tokenBuf[storageID] = append(s.tokenBuf[storageID], &t)
+	}
+}
+
 // GetToken blocks until a worker token is available for the given storage.
 // It fetches tokens in batches and buffers the extras to reduce DB queries.
 func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*repository.WorkerToken, error) {
@@ -77,19 +89,18 @@ func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*r
 		return t, nil
 	}
 
-	logged := false
-	markedWaiting := false
+	// waiting is set the first time every worker is at its rate limit, so
+	// the storage reports "waiting" until a token is obtained.
+	waiting := false
 	defer func() {
-		if markedWaiting {
+		if waiting {
 			s.setWaiting(storageID, -1)
 		}
 	}()
 
 	for {
-		select {
-		case <-ctx.Done():
-			return nil, ctx.Err()
-		default:
+		if err := ctx.Err(); err != nil {
+			return nil, err
 		}
 
 		// Try batch fetch
@@ -98,15 +109,7 @@ func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*r
 			return nil, fmt.Errorf("getting worker tokens: %w", err)
 		}
 		if len(tokens) > 0 {
-			// Buffer extras
-			if len(tokens) > 1 {
-				s.tokenBufMu.Lock()
-				for i := 1; i < len(tokens); i++ {
-					t := tokens[i]
-					s.tokenBuf[storageID] = append(s.tokenBuf[storageID], &t)
-				}
-				s.tokenBufMu.Unlock()
-			}
+			s.bufferTokens(storageID, tokens[1:])
 			return &tokens[0], nil
 		}
 
@@ -116,13 +119,10 @@ func (s *WorkerScheduler) GetToken(ctx context.Context, storageID uuid.UUID) (*r
 			waitDur = 2 * time.Second
 		}
 
-		if !logged {
+		if !waiting {
 			slog.Info("all workers at rate limit, waiting", "rate_limit", s.rateLimit, "storage_id", storageID, "wait", waitDur.Round(time.Millisecond))
-			logged = true
-			if !markedWaiting {
-				s.setWaiting(storageID, 1)
-				markedWaiting = true
-			}
+			s.setWaiting(storageID, 1)
+			waiting = true
 		}
 
 		select {

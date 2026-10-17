@@ -184,11 +184,7 @@ func (p *UploadProgress) expectedChunks() {
 	if p == nil || p.TotalBytes <= 0 {
 		return
 	}
-	total := int32(p.TotalBytes / UploadChunkSize)
-	if p.TotalBytes%UploadChunkSize != 0 {
-		total++
-	}
-	p.TotalChunks = total
+	p.TotalChunks = int32((p.TotalBytes + UploadChunkSize - 1) / UploadChunkSize)
 }
 
 func (p *UploadProgress) setTotalChunks(total int32) {
@@ -280,11 +276,5 @@ func (u *ChunkUploader) uploadParallelism(ctx context.Context, storageID uuid.UU
 	// workers * rateLimit / 6 gives a reasonable concurrency:
 	// 2 workers * 18 rpm / 6 = 6;  4 workers * 18 rpm / 6 = 12 (capped at 10)
 	p := len(tokens) * u.scheduler.RateLimit() / 6
-	if p < 2 {
-		p = 2
-	}
-	if p > UploadChunkParallelism {
-		p = UploadChunkParallelism
-	}
-	return p
+	return min(max(p, 2), UploadChunkParallelism)
 }

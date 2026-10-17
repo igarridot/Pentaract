@@ -91,17 +91,11 @@ func (c *ChunkCipher) EncryptChunk(fileID uuid.UUID, position int16, plain []byt
 	}
 
 	needed := len(chunkCipherMagic) + len(nonce) + len(plain) + c.aead.Overhead()
-	var out []byte
-	if v := encryptBufPool.Get(); v != nil {
-		out = v.([]byte)
-		if cap(out) < needed {
-			out = make([]byte, 0, needed)
-		} else {
-			out = out[:0]
-		}
-	} else {
+	out, _ := encryptBufPool.Get().([]byte)
+	if cap(out) < needed {
 		out = make([]byte, 0, needed)
 	}
+	out = out[:0]
 
 	out = append(out, chunkCipherMagic...)
 	out = append(out, nonce...)
