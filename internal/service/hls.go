@@ -297,6 +297,13 @@ func (s *HLSService) Resource(ctx context.Context, userID uuid.UUID, file *domai
 	if err != nil {
 		return "", err
 	}
+	// From here on the file name is rebuilt from the parsed index, never
+	// taken from the request string, so no caller-controlled bytes reach
+	// the filesystem.
+	fileName := hlsInitSegmentName
+	if !isInit {
+		fileName = hlsSegmentName(index)
+	}
 	info, err := s.MediaInfo(ctx, file)
 	if err != nil {
 		return "", err
@@ -337,7 +344,7 @@ func (s *HLSService) Resource(ctx context.Context, userID uuid.UUID, file *domai
 	sess.lastSeen = s.now()
 	s.mu.Unlock()
 
-	return sess.waitFor(ctx, name, hlsSegmentWaitTimeout)
+	return sess.waitFor(ctx, fileName, hlsSegmentWaitTimeout)
 }
 
 // Stop ends every session of userID on fileID, whatever audio track.
