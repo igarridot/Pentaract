@@ -605,6 +605,12 @@ func hlsFFmpegArgs(cfg HLSConfig, sourceURL string, plan media.Plan, startSecond
 		"-hls_segment_type", "fmp4",
 		"-hls_fmp4_init_filename", hlsInitSegmentName,
 		"-hls_flags", "temp_file+independent_segments",
+		// The MP4 muxer would move each track's start offset (audio starting
+		// after the video, or the keyframe a seek lands on) into an edit
+		// list and rebase that track to zero. MSE ignores edit lists in
+		// fragmented MP4, so the audio played up to ~2 s early. Without
+		// them the offset stays in the fragment timestamps.
+		"-hls_segment_options", "use_editlist=0",
 		"-hls_list_size", "0",
 		"-hls_playlist_type", "vod",
 		"-start_number", strconv.Itoa(startIndex),

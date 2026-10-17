@@ -76,6 +76,11 @@ func TestHLSWithRealFFmpeg(t *testing.T) {
 	if len(initData) < 8 || string(initData[4:8]) != "ftyp" {
 		t.Fatalf("init.mp4 is not an MP4 header: %q", initData[:min(len(initData), 16)])
 	}
+	// Browsers (MSE) ignore edit lists in fragmented MP4; one in the init
+	// segment means a track's start offset was lost and audio drifts.
+	if bytes.Contains(initData, []byte("elst")) {
+		t.Fatalf("init.mp4 must not carry an edit list")
+	}
 
 	for i := 0; i < 3; i++ {
 		segPath, err := s.Resource(ctx, user, file, HLSVariant{}, hlsSegmentName(i))

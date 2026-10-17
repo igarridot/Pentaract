@@ -152,6 +152,7 @@ func TestHLSFFmpegArgs(t *testing.T) {
 		"-copyts -avoid_negative_ts disabled",
 		"-hls_segment_type fmp4",
 		"-hls_flags temp_file+independent_segments",
+		"-hls_segment_options use_editlist=0",
 		"-start_number 2",
 		"-hls_segment_filename seg%05d.m4s ffmpeg.m3u8",
 	} {
