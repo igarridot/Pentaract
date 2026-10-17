@@ -23,7 +23,10 @@ sh "$ROOT/scripts/gen-self-signed-cert.sh" "$WORK/certs" other.lan
 after="$(openssl x509 -in "$WORK/certs/fullchain.pem" -noout -fingerprint)"
 [ "$before" = "$after" ]
 
-IMAGE="$(sed -n 's/^ *image: \(.*nginx:.*\)$/\1/p' "$ROOT/docker-compose.yml")"
+# Same official image and tag as docker-compose.yml, pulled from Docker Hub:
+# ECR Public refuses anonymous pulls from GitHub runners ("Data limit exceeded").
+TAG="$(sed -n 's/^ *image: .*nginx:\(.*\)$/\1/p' "$ROOT/docker-compose.yml")"
+IMAGE="docker.io/library/nginx:$TAG"
 docker run --rm --add-host pentaract:127.0.0.1 \
   -v "$ROOT/nginx/pentaract.conf:/etc/nginx/conf.d/default.conf:ro" \
   -v "$WORK/certs:/etc/nginx/certs:ro" \
