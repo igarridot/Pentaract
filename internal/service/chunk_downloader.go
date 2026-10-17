@@ -2,6 +2,7 @@ package service
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -116,6 +117,14 @@ func (d *ChunkDownloader) downloadAndDecryptChunk(ctx context.Context, fileID uu
 	return data, nil
 }
 
+// downloadAndDecryptChunkCached serves a chunk from the stream cache, loading
+// it at most once no matter how many concurrent range requests ask for it.
+//
+// The load runs under the context of whichever request asked first. Media
+// players drop range requests constantly (seeks, probing the tail of an MP4 or
+// MKV, reconnects), and when the dropped request was the one loading, every
+// request still waiting for that chunk used to fail with its cancellation.
+// Such a request retries the load under its own context instead.
 func (d *ChunkDownloader) downloadAndDecryptChunkCached(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error) {
 	cacheKey := streamChunkCacheKey{fileID: fileID, position: chunk.Position}
 	cache := d.cache
@@ -124,29 +133,38 @@ func (d *ChunkDownloader) downloadAndDecryptChunkCached(ctx context.Context, fil
 	}
 
 	loadKey := fmt.Sprintf("%s:%d", fileID.String(), chunk.Position)
-	value, err, _ := d.loads.Do(loadKey, func() (interface{}, error) {
-		if data, ok := cache.get(cacheKey); ok {
-			return data, nil
-		}
+	for {
+		value, err, shared := d.loads.Do(loadKey, func() (interface{}, error) {
+			if data, ok := cache.get(cacheKey); ok {
+				return data, nil
+			}
 
-		data, err := d.downloadAndDecryptChunk(ctx, fileID, storage, chunk)
+			data, err := d.downloadAndDecryptChunk(ctx, fileID, storage, chunk)
+			if err != nil {
+				return nil, err
+			}
+
+			cache.set(cacheKey, data)
+			return data, nil
+		})
 		if err != nil {
+			if shared && isContextError(err) && ctx.Err() == nil {
+				slog.Debug("chunk load cancelled by another request, retrying", "position", chunk.Position)
+				continue
+			}
 			return nil, err
 		}
 
-		cache.set(cacheKey, data)
+		data, ok := value.([]byte)
+		if !ok {
+			return nil, fmt.Errorf("unexpected cached chunk type %T", value)
+		}
 		return data, nil
-	})
-	if err != nil {
-		return nil, err
 	}
+}
 
-	data, ok := value.([]byte)
-	if !ok {
-		return nil, fmt.Errorf("unexpected cached chunk type %T", value)
-	}
-
-	return data, nil
+func isContextError(err error) bool {
+	return errors.Is(err, context.Canceled) || errors.Is(err, context.DeadlineExceeded)
 }
 
 type chunkDataLoader func(ctx context.Context, fileID uuid.UUID, storage domain.Storage, chunk domain.FileChunk) ([]byte, error)
