@@ -344,7 +344,17 @@ func (s *HLSService) Resource(ctx context.Context, userID uuid.UUID, file *domai
 	sess.lastSeen = s.now()
 	s.mu.Unlock()
 
-	return sess.waitFor(ctx, fileName, hlsSegmentWaitTimeout)
+	waitName := fileName
+	if isInit {
+		// ffmpeg creates init.mp4 empty when it starts and only fills it
+		// when it flushes the first fragment, right before the first segment
+		// lands, so that segment is the signal that the init is complete.
+		waitName = hlsSegmentName(sess.startIndex)
+	}
+	if _, err := sess.waitFor(ctx, waitName, hlsSegmentWaitTimeout); err != nil {
+		return "", err
+	}
+	return filepath.Join(sess.dir, fileName), nil
 }
 
 // Stop ends every session of userID on fileID, whatever audio track.

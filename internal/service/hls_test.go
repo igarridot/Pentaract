@@ -19,9 +19,11 @@ import (
 )
 
 // fakeFFmpeg mimics ffmpeg for the session manager: it records its arguments,
-// writes init.mp4 and then one segment every few milliseconds from
-// -start_number onwards, using the same .tmp-then-rename dance as the real
-// hls muxer. FAKE_FFMPEG_FAIL=1 makes it exit with an error instead.
+// creates an empty init.mp4 (the real hls muxer only fills it when the first
+// fragment is flushed, just before the first segment lands) and then writes
+// one segment every few milliseconds from -start_number onwards, using the
+// same .tmp-then-rename dance as the real muxer. FAKE_FFMPEG_FAIL=1 makes it
+// exit with an error instead.
 const fakeFFmpeg = `#!/bin/sh
 echo "$@" > args.txt
 if [ "$FAKE_FFMPEG_FAIL" = "1" ]; then
@@ -33,11 +35,13 @@ while [ $# -gt 0 ]; do
   case "$1" in -start_number) start=$2; shift;; esac
   shift
 done
-echo init > init.mp4
+: > init.mp4
+sleep 0.1
 i=$start
 while [ $i -lt $((start+200)) ]; do
   name=$(printf 'seg%05d.m4s' $i)
   echo "segment $i" > "$name.tmp"
+  [ $i -eq $start ] && echo init > init.mp4
   mv "$name.tmp" "$name"
   i=$((i+1))
   sleep 0.02
@@ -334,6 +338,24 @@ func TestHLSResourceSessionsFollowPlayback(t *testing.T) {
 	s.mu.Unlock()
 	if remaining != 0 {
 		t.Fatalf("stop must drop sessions and source tokens, %d left", remaining)
+	}
+}
+
+func TestHLSInitSegmentWaitsForFirstSegment(t *testing.T) {
+	s := newTestHLSService(t, &fakeHLSFiles{})
+	file := &domain.File{ID: uuid.New(), Path: "movie.mkv", Size: 1}
+	primeInfo(s, file, testMKVInfo())
+
+	initPath, err := s.Resource(context.Background(), uuid.New(), file, 0, "init.mp4")
+	if err != nil {
+		t.Fatalf("init: %v", err)
+	}
+	data, err := os.ReadFile(initPath)
+	if err != nil || len(data) == 0 {
+		t.Fatalf("init.mp4 must not be served while ffmpeg still has it empty (len=%d err=%v)", len(data), err)
+	}
+	if _, err := os.Stat(filepath.Join(filepath.Dir(initPath), hlsSegmentName(0))); err != nil {
+		t.Fatalf("the first segment must exist once the init is served: %v", err)
 	}
 }
 
