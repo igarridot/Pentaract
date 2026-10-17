@@ -243,6 +243,7 @@ export default function Files() {
         file={previewFile}
         mediaType={getMediaType(previewFile?.name)}
         src={previewFile ? API.files.previewFileUrl(storageId, previewFile.path) : ''}
+        storageId={storageId}
         onClose={() => setPreviewFile(null)}
         onDownload={() => {
           if (!previewFile) return

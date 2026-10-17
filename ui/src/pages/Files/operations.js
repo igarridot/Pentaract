@@ -96,6 +96,8 @@ export function getMediaType(name) {
   const ext = getFileExtension(name)
   if (['jpg', 'jpeg', 'png', 'gif', 'webp', 'bmp', 'svg'].includes(ext)) return 'image'
   if (['mp4', 'webm', 'ogg', 'mov', 'm4v'].includes(ext)) return 'video'
+  // Browsers do not open Matroska; the server remuxes it to HLS on the fly.
+  if (ext === 'mkv') return 'hls'
   return null
 }
 
