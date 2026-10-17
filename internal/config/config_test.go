@@ -77,6 +77,7 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("ACCESS_TOKEN_EXPIRE_IN_SECS", "1234")
 	t.Setenv("TELEGRAM_API_BASE_URL", "https://example.test")
 	t.Setenv("TELEGRAM_RATE_LIMIT", "11")
+	t.Setenv("STREAM_CACHE_MB", "1024")
 	t.Setenv("DATABASE_HOST", "localhost")
 	t.Setenv("DATABASE_PORT", "15432")
 
@@ -91,8 +92,21 @@ func TestLoadEnvOverrides(t *testing.T) {
 	if cfg.TelegramAPIBaseURL != "https://example.test" || cfg.TelegramRateLimit != 11 {
 		t.Fatalf("unexpected telegram overrides: %+v", cfg)
 	}
+	if cfg.StreamCacheMB != 1024 || cfg.StreamCacheBytes() != 1024*1024*1024 {
+		t.Fatalf("unexpected stream cache override: mb=%d bytes=%d", cfg.StreamCacheMB, cfg.StreamCacheBytes())
+	}
 	if cfg.DatabaseHost != "localhost" || cfg.DatabasePort != 15432 {
 		t.Fatalf("unexpected db overrides: %+v", cfg)
+	}
+}
+
+func TestStreamCacheBytesFallsBackToDefault(t *testing.T) {
+	setRequiredEnv(t)
+	for _, raw := range []string{"", "0", "-5"} {
+		t.Setenv("STREAM_CACHE_MB", raw)
+		if got := Load().StreamCacheBytes(); got != defaultStreamCacheMB*1024*1024 {
+			t.Fatalf("STREAM_CACHE_MB=%q: got %d bytes, want the default", raw, got)
+		}
 	}
 }
 

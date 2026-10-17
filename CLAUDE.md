@@ -82,6 +82,7 @@ All via environment variables (see `.env.example`). Key ones:
 - `ENCRYPTION_KEY` — Optional dedicated chunk encryption secret. `ChunkCipher` keeps `SECRET_KEY` as a decrypt-only fallback so files uploaded before the switch stay readable (`NewChunkCipherWithFallback`).
 - `TELEGRAM_RATE_LIMIT` — Requests per minute per worker (default 18)
 - `DB_MAX_CONNS` — Postgres pool size (default 32). The legacy `WORKERS` variable is still read as `WORKERS * 8`.
+- `STREAM_CACHE_MB` — Memory budget of the decrypted chunk cache used by inline playback and Range requests (default 96, about 4 chunks). Seeks back into cached chunks skip Telegram; a seek to an uncached chunk must download and decrypt ~20 MB before the first byte, which is what Kodi's 20 s `curllowspeedtime` races against.
 
 ## Testing patterns
 

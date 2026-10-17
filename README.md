@@ -157,6 +157,7 @@ From `.env`:
 | `ENCRYPTION_KEY` | unset | Dedicated chunk encryption secret. Chunks sealed with `SECRET_KEY` before it was set keep decrypting, so never change `SECRET_KEY` while such chunks exist |
 | `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Telegram API |
 | `TELEGRAM_RATE_LIMIT` | `18` | per-worker requests/min guard |
+| `STREAM_CACHE_MB` | `96` | Memory for decrypted chunks kept for inline playback and seeks (~20 MB per chunk). Raise it so players can seek back without re-downloading from Telegram |
 | `DATABASE_USER` | `pentaract` | postgres user |
 | `DATABASE_PASSWORD` | `pentaract` | postgres password |
 | `DATABASE_NAME` | `pentaract` | postgres db |

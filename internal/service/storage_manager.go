@@ -80,6 +80,8 @@ type storageDeps struct {
 	scheduler    *WorkerScheduler
 	tgClient     *telegram.Client
 	chunkCipher  *ChunkCipher
+	// streamCacheBytes caps the decrypted chunk cache; <= 0 uses the default.
+	streamCacheBytes int64
 }
 
 func NewStorageManager(
@@ -89,14 +91,16 @@ func NewStorageManager(
 	scheduler *WorkerScheduler,
 	tgClient *telegram.Client,
 	chunkCipher *ChunkCipher,
+	streamCacheBytes int64,
 ) *StorageManager {
 	return newStorageManager(storageDeps{
-		filesRepo:    filesRepo,
-		storagesRepo: storagesRepo,
-		workersRepo:  workersRepo,
-		scheduler:    scheduler,
-		tgClient:     tgClient,
-		chunkCipher:  chunkCipher,
+		filesRepo:        filesRepo,
+		storagesRepo:     storagesRepo,
+		workersRepo:      workersRepo,
+		streamCacheBytes: streamCacheBytes,
+		scheduler:        scheduler,
+		tgClient:         tgClient,
+		chunkCipher:      chunkCipher,
 	})
 }
 
@@ -112,7 +116,7 @@ func newStorageManager(deps storageDeps) *StorageManager {
 		chunkTransport: transport,
 		filesRepo:      deps.filesRepo,
 		storagesRepo:   deps.storagesRepo,
-		cache:          newStreamChunkCache(defaultStreamChunkCacheMaxEntries, defaultStreamChunkCacheMaxBytes),
+		cache:          newStreamChunkCacheWithBudget(deps.streamCacheBytes),
 	}
 	uploader := &ChunkUploader{
 		chunkTransport: transport,

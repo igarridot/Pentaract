@@ -7,7 +7,10 @@ import (
 	"strconv"
 )
 
-const defaultDBMaxConns = 32
+const (
+	defaultDBMaxConns    = 32
+	defaultStreamCacheMB = 96
+)
 
 type Config struct {
 	Port                   int
@@ -19,11 +22,22 @@ type Config struct {
 	EncryptionKey          string
 	TelegramAPIBaseURL     string
 	TelegramRateLimit      int
+	StreamCacheMB          int
 	DatabaseUser           string
 	DatabasePassword       string
 	DatabaseName           string
 	DatabaseHost           string
 	DatabasePort           int
+}
+
+// StreamCacheBytes is the memory budget of the decrypted chunk cache that
+// serves inline playback and seeks. Each cached chunk is ~20 MB, so the
+// budget decides how far back a player can seek without going to Telegram.
+func (c *Config) StreamCacheBytes() int64 {
+	if c.StreamCacheMB <= 0 {
+		return int64(defaultStreamCacheMB) * 1024 * 1024
+	}
+	return int64(c.StreamCacheMB) * 1024 * 1024
 }
 
 func (c *Config) DatabaseURL() string {
@@ -59,6 +73,7 @@ func Load() *Config {
 		EncryptionKey:          getEnv("ENCRYPTION_KEY", ""),
 		TelegramAPIBaseURL:     getEnv("TELEGRAM_API_BASE_URL", "https://api.telegram.org"),
 		TelegramRateLimit:      getEnvInt("TELEGRAM_RATE_LIMIT", 18),
+		StreamCacheMB:          getEnvInt("STREAM_CACHE_MB", defaultStreamCacheMB),
 		DatabaseUser:           mustGetEnv("DATABASE_USER"),
 		DatabasePassword:       mustGetEnv("DATABASE_PASSWORD"),
 		DatabaseName:           mustGetEnv("DATABASE_NAME"),

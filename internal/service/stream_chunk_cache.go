@@ -48,6 +48,20 @@ func newStreamChunkCache(maxEntries int, maxBytes int64) *streamChunkCache {
 	}
 }
 
+// newStreamChunkCacheWithBudget sizes the cache for a byte budget: as many
+// full chunks as fit, plus one so a short final chunk never evicts a full one
+// needlessly. A budget <= 0 keeps the defaults.
+func newStreamChunkCacheWithBudget(maxBytes int64) *streamChunkCache {
+	if maxBytes <= 0 {
+		return newStreamChunkCache(defaultStreamChunkCacheMaxEntries, defaultStreamChunkCacheMaxBytes)
+	}
+	return newStreamChunkCache(streamChunkCacheEntries(maxBytes), maxBytes)
+}
+
+func streamChunkCacheEntries(maxBytes int64) int {
+	return int(maxBytes/UploadChunkSize) + 1
+}
+
 func (c *streamChunkCache) get(key streamChunkCacheKey) ([]byte, bool) {
 	c.mu.Lock()
 	defer c.mu.Unlock()
