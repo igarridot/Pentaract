@@ -82,3 +82,30 @@ func (r *WatchProgressRepo) ListByPaths(ctx context.Context, userID, storageID u
 	}
 	return progress, rows.Err()
 }
+
+// DeleteAll forgets everything the user has played, in every storage, and
+// returns how many rows went.
+func (r *WatchProgressRepo) DeleteAll(ctx context.Context, userID uuid.UUID) (int64, error) {
+	tag, err := r.pool.Exec(ctx, `DELETE FROM watch_progress WHERE user_id = $1`, userID)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}
+
+// DeleteUnder forgets what the user has played among the files of a storage
+// whose path starts with dirPrefix (a folder ending in "/", every subfolder
+// included), and returns how many rows went. starts_with rather than LIKE so
+// "%" and "_" in folder names are not wildcards.
+func (r *WatchProgressRepo) DeleteUnder(ctx context.Context, userID, storageID uuid.UUID, dirPrefix string) (int64, error) {
+	tag, err := r.pool.Exec(ctx,
+		`DELETE FROM watch_progress w
+		USING files f
+		WHERE f.id = w.file_id AND w.user_id = $1 AND f.storage_id = $2 AND starts_with(f.path, $3)`,
+		userID, storageID, dirPrefix,
+	)
+	if err != nil {
+		return 0, err
+	}
+	return tag.RowsAffected(), nil
+}

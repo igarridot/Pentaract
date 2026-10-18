@@ -1,6 +1,7 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
 import {
+  clearedWatchMessage,
   createWatchReporter,
   formatPlaybackTime,
   readablePosition,
@@ -8,6 +9,9 @@ import {
   watchActions,
   watchState,
   watchSummary,
+  notifyWatchProgressCleared,
+  onWatchProgressCleared,
+  withoutWatch,
   withWatch,
 } from './watch_progress.js'
 
@@ -120,4 +124,39 @@ test('watchState picks the icon state of a listed video', () => {
   assert.equal(watchState({ position_seconds: 42, duration_seconds: 100, watched: false }), 'in_progress')
   assert.equal(watchState({ position_seconds: 0, duration_seconds: 100, watched: true }), 'watched')
   assert.equal(watchState({ position_seconds: 42, duration_seconds: 100, watched: true }), 'watched')
+})
+
+test('withoutWatch drops the progress of files inside the folder only', () => {
+  const watch = { watched: true }
+  const items = [
+    { path: 'tv/a.mkv', is_file: true, watch },
+    { path: 'tv/s1/b.mkv', is_file: true, watch },
+    { path: 'tvshows/c.mkv', is_file: true, watch },
+    { path: 'tv/s1/', is_file: false },
+  ]
+  for (const dir of ['tv', 'tv/']) {
+    const updated = withoutWatch(items, dir)
+    assert.equal(updated[0].watch, undefined)
+    assert.equal(updated[1].watch, undefined)
+    assert.equal(updated[2], items[2])
+    assert.equal(updated[3], items[3])
+  }
+  assert.equal(items[0].watch, watch)
+  assert.ok(withoutWatch(items).every((item) => item.watch === undefined))
+  assert.equal(withoutWatch(null, 'tv'), null)
+})
+
+test('clearedWatchMessage counts the videos', () => {
+  assert.equal(clearedWatchMessage(0), 'No watch progress to clear')
+  assert.equal(clearedWatchMessage(1), 'Watch progress cleared for 1 video')
+  assert.equal(clearedWatchMessage(12), 'Watch progress cleared for 12 videos')
+})
+
+test('notifyWatchProgressCleared reaches listeners until they unsubscribe', () => {
+  let calls = 0
+  const unsubscribe = onWatchProgressCleared(() => { calls += 1 })
+  notifyWatchProgressCleared()
+  unsubscribe()
+  notifyWatchProgressCleared()
+  assert.equal(calls, 1)
 })

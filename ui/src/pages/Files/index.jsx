@@ -27,7 +27,9 @@ import TransferProgressStack from './TransferProgressStack'
 import FileSelectionToolbar from './FileSelectionToolbar'
 import FileList from './FileList'
 import { getItemPath, getMediaType, buildRenamedPath, getBulkOperationMetrics } from './operations'
-import { withWatch } from '../../common/watch_progress'
+import {
+  withWatch, withoutWatch, clearedWatchMessage, onWatchProgressCleared,
+} from '../../common/watch_progress'
 import { useFileNavigation } from './useFileNavigation'
 import { useUploads } from './useUploads'
 import { useDownloads } from './useDownloads'
@@ -46,6 +48,7 @@ export default function Files() {
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [moveTarget, setMoveTarget] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
+  const [clearWatchTarget, setClearWatchTarget] = useState(null)
 
   // Navigation: current path, listing and search.
   const {
@@ -119,6 +122,12 @@ export default function Files() {
     cleanupDelete()
   }, []) // eslint-disable-line react-hooks/exhaustive-deps -- unmount only
 
+  // Clearing everything from the header drops the marks shown here too.
+  useEffect(() => onWatchProgressCleared(() => {
+    setSearchResults((results) => withoutWatch(results))
+    loadTree()
+  }), [loadTree, setSearchResults])
+
   // Compute bulk metrics with actual current transfer states
   const bulkMetrics = getBulkOperationMetrics(bulkOperation, uploadStates, downloadStates)
 
@@ -147,6 +156,21 @@ export default function Files() {
       },
     },
   )
+
+  const handleClearWatchProgress = () => {
+    const folderPath = getItemPath(clearWatchTarget)
+    setClearWatchTarget(null)
+    run(
+      () => API.files.clearWatchProgress(storageId, folderPath),
+      {
+        onSuccess: ({ cleared }) => {
+          addAlert(clearedWatchMessage(cleared), 'success')
+          setSearchResults((results) => withoutWatch(results, folderPath))
+          loadTree()
+        },
+      },
+    )
+  }
 
   const handleMove = (item, newPath) => run(
     () => API.files.move(storageId, getItemPath(item), newPath),
@@ -225,6 +249,7 @@ export default function Files() {
         onMove={setMoveTarget}
         onRename={setRenameTarget}
         onSetWatched={handleSetWatched}
+        onClearWatchProgress={setClearWatchTarget}
         onToggleSelect={toggleFileSelection}
       />
 
@@ -309,6 +334,15 @@ export default function Files() {
         description={`Are you sure you want to delete ${selectedFiles.length} selected file(s)?`}
         onConfirm={() => handleBulkDelete(selectedFiles)}
         onCancel={() => setBulkDeleteOpen(false)}
+      />
+
+      <ActionConfirmDialog
+        open={!!clearWatchTarget}
+        entity="watch progress"
+        action="Clear"
+        description={`This forgets where you stopped and which videos you watched in "${clearWatchTarget?.name}" and all its subfolders. It cannot be undone.`}
+        onConfirm={handleClearWatchProgress}
+        onCancel={() => setClearWatchTarget(null)}
       />
 
       <NavigationBlockDialog

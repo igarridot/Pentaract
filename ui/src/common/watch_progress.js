@@ -90,6 +90,36 @@ export function withWatch(items, path, watch) {
   return items.map((item) => (item.is_file && item.path === path ? { ...item, watch } : item))
 }
 
+// withoutWatch returns items with no progress on the files under dirPath
+// (a folder path, with or without its trailing slash), or on every file
+// when dirPath is omitted.
+export function withoutWatch(items, dirPath) {
+  if (!items) return items
+  const prefix = dirPath === undefined ? '' : `${dirPath.replace(/\/+$/, '')}/`
+  return items.map((item) => (
+    item.is_file && item.watch && item.path.startsWith(prefix) ? { ...item, watch: undefined } : item
+  ))
+}
+
+// clearedWatchMessage reports how many videos a clear forgot.
+export function clearedWatchMessage(cleared) {
+  if (!cleared) return 'No watch progress to clear'
+  return `Watch progress cleared for ${cleared} ${cleared === 1 ? 'video' : 'videos'}`
+}
+
+// The header clears everything while a file listing may be open; listings
+// subscribe here to drop the marks they show.
+const clearedListeners = new Set()
+
+export function onWatchProgressCleared(listener) {
+  clearedListeners.add(listener)
+  return () => { clearedListeners.delete(listener) }
+}
+
+export function notifyWatchProgressCleared() {
+  clearedListeners.forEach((listener) => listener())
+}
+
 // formatPlaybackTime renders seconds as m:ss or h:mm:ss.
 export function formatPlaybackTime(seconds) {
   const total = Math.max(0, Math.floor(Number(seconds) || 0))

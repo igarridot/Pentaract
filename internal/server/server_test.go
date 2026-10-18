@@ -155,6 +155,9 @@ func TestWatchProgressRoutesLeaveExistingFileRoutesIntact(t *testing.T) {
 		{http.MethodPost, files + "/upload", "/api/storages/{storageID}/files/upload"},
 		{http.MethodPut, files + "/watched/movie.mkv", "/api/storages/{storageID}/files/watched/*"},
 		{http.MethodPut, files + "/watch_progress/movie.mkv", "/api/storages/{storageID}/files/watch_progress/*"},
+		{http.MethodDelete, files + "/clear_watch_progress/tv/", "/api/storages/{storageID}/files/*"},
+		{http.MethodPost, files + "/clear_watch_progress/tv/", "/api/storages/{storageID}/files/clear_watch_progress/*"},
+		{http.MethodDelete, "/api/watch_progress", "/api/watch_progress"},
 	}
 	for _, tc := range cases {
 		got := mux.Find(chi.NewRouteContext(), tc.method, tc.path)

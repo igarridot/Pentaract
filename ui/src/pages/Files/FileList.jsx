@@ -16,6 +16,7 @@ export default function FileList({
   onMove,
   onRename,
   onSetWatched,
+  onClearWatchProgress,
   onToggleSelect,
 }) {
   return (
@@ -34,6 +35,7 @@ export default function FileList({
               onMove={onMove}
               onRename={onRename}
               onSetWatched={onSetWatched}
+              onClearWatchProgress={onClearWatchProgress}
               selectionEnabled
               isSelected={selectedFilePaths.includes(item.path)}
               onToggleSelect={onToggleSelect}

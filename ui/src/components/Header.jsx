@@ -7,10 +7,17 @@ import {
   DarkMode as DarkIcon,
   SettingsBrightness as AutoIcon,
   Feedback as FeedbackIcon,
+  PlayCircleOutline as PlaybackIcon,
+  DeleteSweep as ClearIcon,
 } from '@mui/icons-material'
 import { Link, useNavigate } from 'react-router-dom'
+import API from '../api'
 import { logout } from '../common/auth_guard'
 import { useThemeMode } from '../common/theme_context'
+import { useApiAction } from '../common/use_api_action'
+import { clearedWatchMessage, notifyWatchProgressCleared } from '../common/watch_progress'
+import ActionConfirmDialog from './ActionConfirmDialog'
+import { useAlert } from './AlertStack'
 import AppIcon from './AppIcon'
 
 const modeOptions = [
@@ -23,6 +30,20 @@ export default function Header({ onToggleSidebar }) {
   const navigate = useNavigate()
   const { setting, setSetting } = useThemeMode()
   const [anchorEl, setAnchorEl] = useState(null)
+  const [playbackAnchorEl, setPlaybackAnchorEl] = useState(null)
+  const [clearAllOpen, setClearAllOpen] = useState(false)
+  const addAlert = useAlert()
+  const run = useApiAction(addAlert)
+
+  const handleClearAll = () => {
+    setClearAllOpen(false)
+    run(API.watchProgress.clearAll, {
+      onSuccess: ({ cleared }) => {
+        addAlert(clearedWatchMessage(cleared), 'success')
+        notifyWatchProgressCleared()
+      },
+    })
+  }
 
   const currentIcon = setting === 'dark' ? <DarkIcon fontSize="small" />
     : setting === 'light' ? <LightIcon fontSize="small" />
@@ -58,6 +79,22 @@ export default function Header({ onToggleSidebar }) {
           </Typography>
         </Link>
         <Box sx={{ flexGrow: 1 }} />
+        <IconButton
+          onClick={(e) => setPlaybackAnchorEl(e.currentTarget)}
+          sx={{ color: 'text.secondary', mr: 0.5 }}
+          title="Playback"
+        >
+          <PlaybackIcon fontSize="small" />
+        </IconButton>
+        <Menu anchorEl={playbackAnchorEl} open={Boolean(playbackAnchorEl)} onClose={() => setPlaybackAnchorEl(null)}>
+          <MenuItem
+            onClick={() => { setPlaybackAnchorEl(null); setClearAllOpen(true) }}
+            sx={{ color: 'error.main' }}
+          >
+            <ListItemIcon><ClearIcon fontSize="small" color="error" /></ListItemIcon>
+            <ListItemText>Clear all watch progress</ListItemText>
+          </MenuItem>
+        </Menu>
         <IconButton onClick={(e) => setAnchorEl(e.currentTarget)} sx={{ color: 'text.secondary', mr: 0.5 }}>
           {currentIcon}
         </IconButton>
@@ -87,6 +124,15 @@ export default function Header({ onToggleSidebar }) {
           <LogoutIcon fontSize="small" />
         </IconButton>
       </Toolbar>
+      <ActionConfirmDialog
+        open={clearAllOpen}
+        entity="all watch progress"
+        action="Clear"
+        description="This forgets where you stopped and which videos you watched, in every storage, for the web and Kodi alike. It cannot be undone."
+        confirmLabel="Clear all"
+        onConfirm={handleClearAll}
+        onCancel={() => setClearAllOpen(false)}
+      />
     </AppBar>
   )
 }

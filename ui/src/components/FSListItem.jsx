@@ -53,6 +53,7 @@ export default function FSListItem({
   onMove,
   onRename,
   onSetWatched,
+  onClearWatchProgress,
   selectionEnabled = false,
   isSelected = false,
   onToggleSelect,
@@ -144,6 +145,11 @@ export default function FSListItem({
         <MenuItem onClick={handleDownload}>
           {item.is_file ? 'Download' : 'Download as ZIP'}
         </MenuItem>
+        {!item.is_file && onClearWatchProgress && (
+          <MenuItem onClick={() => { setAnchorEl(null); onClearWatchProgress(item) }}>
+            Clear watch progress
+          </MenuItem>
+        )}
         {!item.is_file && onRename && (
           <MenuItem onClick={() => { setAnchorEl(null); onRename(item) }}>
             Rename

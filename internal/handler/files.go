@@ -55,6 +55,8 @@ type (
 	watchProgressService interface {
 		Save(ctx context.Context, userID, storageID uuid.UUID, path string, position, duration float64) (*domain.WatchProgress, error)
 		SetWatched(ctx context.Context, userID, storageID uuid.UUID, path string, watched bool) (*domain.WatchProgress, error)
+		ClearAll(ctx context.Context, userID uuid.UUID) (int64, error)
+		ClearFolder(ctx context.Context, userID, storageID uuid.UUID, path string) (int64, error)
 		Annotate(ctx context.Context, userID, storageID uuid.UUID, elements []domain.FSElement) error
 	}
 )

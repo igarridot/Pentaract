@@ -126,6 +126,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Post("/storages/{storageID}/files/hls_stop/*", mediaH.HLSStop)
 			r.Put("/storages/{storageID}/files/watch_progress/*", filesH.SaveWatchProgress)
 			r.Put("/storages/{storageID}/files/watched/*", filesH.SetWatched)
+			// POST, not DELETE: DELETE files/* would read it as a folder path.
+			r.Post("/storages/{storageID}/files/clear_watch_progress/*", filesH.ClearFolderWatchProgress)
+			r.Delete("/watch_progress", filesH.ClearAllWatchProgress)
 			r.Delete("/storages/{storageID}/files/*", filesH.DeleteFile)
 
 			r.Get("/upload_progress", filesH.UploadProgress)

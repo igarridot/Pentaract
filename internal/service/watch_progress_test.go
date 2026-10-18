@@ -17,7 +17,26 @@ type fakeWatchProgressRepo struct {
 	listed      []string
 	progress    map[string]domain.WatchProgress
 	marked      []bool
+	clearedUser uuid.UUID
+	clearedDir  []string
 	err         error
+}
+
+func (f *fakeWatchProgressRepo) DeleteAll(ctx context.Context, userID uuid.UUID) (int64, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.clearedUser = userID
+	return 5, nil
+}
+
+func (f *fakeWatchProgressRepo) DeleteUnder(ctx context.Context, userID, storageID uuid.UUID, dirPrefix string) (int64, error) {
+	if f.err != nil {
+		return 0, f.err
+	}
+	f.clearedUser = userID
+	f.clearedDir = append(f.clearedDir, dirPrefix)
+	return 2, nil
 }
 
 func (f *fakeWatchProgressRepo) SetWatched(ctx context.Context, userID, fileID uuid.UUID, watched bool) (*domain.WatchProgress, error) {
@@ -196,5 +215,65 @@ func TestWatchProgressSetWatchedMarksByFileID(t *testing.T) {
 	}
 	if len(repo.marked) != 2 {
 		t.Fatalf("a refused mark must not reach the repository, got %v", repo.marked)
+	}
+}
+
+func TestWatchProgressClearAllIsPerUser(t *testing.T) {
+	repo := &fakeWatchProgressRepo{}
+	svc, _ := newTestWatchProgressService(repo, false)
+	uid := uuid.New()
+
+	n, err := svc.ClearAll(context.Background(), uid)
+	if err != nil || n != 5 || repo.clearedUser != uid {
+		t.Fatalf("unexpected clear: n=%d err=%v user=%v", n, err, repo.clearedUser)
+	}
+
+	failing, _ := newTestWatchProgressService(&fakeWatchProgressRepo{err: errors.New("db down")}, true)
+	if _, err := failing.ClearAll(context.Background(), uid); err == nil {
+		t.Fatalf("expected the repository error")
+	}
+}
+
+func TestWatchProgressClearFolderMatchesTheFolderOnly(t *testing.T) {
+	ctx := context.Background()
+	repo := &fakeWatchProgressRepo{}
+	svc, _ := newTestWatchProgressService(repo, true)
+	uid := uuid.New()
+
+	// The trailing slash keeps "series/b" from also clearing "series/bb".
+	for _, path := range []string{"series/b", "series/b/", "series/b//"} {
+		n, err := svc.ClearFolder(ctx, uid, uuid.New(), path)
+		if err != nil || n != 2 {
+			t.Fatalf("%q: n=%d err=%v", path, n, err)
+		}
+	}
+	for _, dir := range repo.clearedDir {
+		if dir != "series/b/" {
+			t.Fatalf("expected the folder prefix, got %v", repo.clearedDir)
+		}
+	}
+	if repo.clearedUser != uid {
+		t.Fatalf("expected the caller's progress only, got user %v", repo.clearedUser)
+	}
+}
+
+func TestWatchProgressClearFolderRejects(t *testing.T) {
+	ctx := context.Background()
+	repo := &fakeWatchProgressRepo{}
+	svc, _ := newTestWatchProgressService(repo, true)
+
+	// An empty path would be every folder of the storage.
+	_, err := svc.ClearFolder(ctx, uuid.New(), uuid.New(), "")
+	var appErr *domain.AppError
+	if !errors.As(err, &appErr) || appErr.Code != 400 {
+		t.Fatalf("expected 400 for an empty path, got %v", err)
+	}
+
+	denied, _ := newTestWatchProgressService(repo, false)
+	if _, err := denied.ClearFolder(ctx, uuid.New(), uuid.New(), "series"); err == nil {
+		t.Fatalf("expected forbidden without access")
+	}
+	if len(repo.clearedDir) != 0 {
+		t.Fatalf("a refused clear must not reach the repository, got %v", repo.clearedDir)
 	}
 }

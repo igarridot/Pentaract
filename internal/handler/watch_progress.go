@@ -64,6 +64,44 @@ func (h *FilesHandler) SetWatched(w http.ResponseWriter, r *http.Request) {
 	writeJSON(w, http.StatusOK, progress)
 }
 
+type clearWatchProgressResponse struct {
+	Cleared int64 `json:"cleared"`
+}
+
+// ClearAllWatchProgress answers DELETE /watch_progress: the user forgetting
+// everything they have played, in every storage.
+func (h *FilesHandler) ClearAllWatchProgress(w http.ResponseWriter, r *http.Request) {
+	cleared, err := h.watch.ClearAll(r.Context(), GetAuthUser(r.Context()).ID)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, clearWatchProgressResponse{Cleared: cleared})
+}
+
+// ClearFolderWatchProgress answers POST
+// /storages/{storageID}/files/clear_watch_progress/{path}: the user forgetting
+// what they have played inside a folder and its subfolders.
+func (h *FilesHandler) ClearFolderWatchProgress(w http.ResponseWriter, r *http.Request) {
+	user, storageID, err := storageRequest(r)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	path := extractWildcardPath(r)
+	if path == "" {
+		writeError(w, domain.ErrBadRequest("folder path is required"))
+		return
+	}
+
+	cleared, err := h.watch.ClearFolder(r.Context(), user.ID, storageID, path)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
+	writeJSON(w, http.StatusOK, clearWatchProgressResponse{Cleared: cleared})
+}
+
 // annotateWatchProgress adds the user's progress to listed files. A listing
 // is still useful without it, so a failure is logged rather than returned.
 func (h *FilesHandler) annotateWatchProgress(r *http.Request, userID, storageID uuid.UUID, elements []domain.FSElement) {
