@@ -14,6 +14,7 @@ import {
 import { useNavigate } from 'react-router-dom'
 import { getMediaType } from '../pages/Files/operations'
 import { watchActions, watchState, watchSummary } from '../common/watch_progress'
+import { isPlayableVideo } from '../common/play_queue'
 
 const WATCH_STATE_ICONS = {
   unplayed: { Icon: UnplayedIcon, title: 'Not played', color: 'text.secondary' },
@@ -61,7 +62,7 @@ export default function FSListItem({
   const navigate = useNavigate()
   const [anchorEl, setAnchorEl] = useState(null)
   const isPreviewable = item.is_file && getMediaType(item.name) !== null
-  const isVideo = item.is_file && ['video', 'hls'].includes(getMediaType(item.name))
+  const isVideo = isPlayableVideo(item)
   const markActions = isVideo && onSetWatched ? watchActions(item.watch) : []
 
   const handleClick = () => {
