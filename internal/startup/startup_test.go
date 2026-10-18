@@ -53,7 +53,7 @@ func TestInitDBAndCreateSuperuser(t *testing.T) {
 
 	// InitDB starts tx, executes many statements, commits.
 	mock.ExpectBegin()
-	for i := 0; i < 15; i++ {
+	for i := 0; i < 16; i++ {
 		mock.ExpectExec(".*").WillReturnResult(pgxmock.NewResult("EXEC", 1))
 	}
 	mock.ExpectCommit()

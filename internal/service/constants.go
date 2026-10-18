@@ -35,4 +35,8 @@ const (
 	// same download_id (the browser resuming a download it had blocked or lost)
 	// can pick the progress stream back up.
 	DownloadInterruptedGracePeriod = 2 * time.Minute
+
+	// Watch progress, shared by every player (web UI and Kodi)
+	WatchResumeMinSeconds = 30  // stopping earlier than this leaves nothing to resume
+	WatchedFraction       = 0.9 // once less than 10% is left a video counts as watched (credits)
 )

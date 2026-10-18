@@ -134,7 +134,7 @@ func TestMain(m *testing.M) {
 }
 
 func newTestFilesHandler(svc filesService) *FilesHandler {
-	return NewFilesHandler(svc, NewDeleteTrackers())
+	return NewFilesHandler(svc, &mockWatchProgressService{}, NewDeleteTrackers())
 }
 
 func makeFilesReq(method, target, body, storageID, wildcard string) *http.Request {
@@ -152,8 +152,8 @@ func makeFilesReq(method, target, body, storageID, wildcard string) *http.Reques
 }
 
 func TestNewFilesHandler(t *testing.T) {
-	h := NewFilesHandler(&mockFilesService{}, NewDeleteTrackers())
-	if h == nil || h.svc == nil || h.uploads == nil || h.downloads == nil || h.deletes == nil {
+	h := NewFilesHandler(&mockFilesService{}, &mockWatchProgressService{}, NewDeleteTrackers())
+	if h == nil || h.svc == nil || h.watch == nil || h.uploads == nil || h.downloads == nil || h.deletes == nil {
 		t.Fatalf("expected initialized files handler")
 	}
 }

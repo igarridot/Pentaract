@@ -3,6 +3,8 @@ import { Alert, Box, CircularProgress, FormControl, InputLabel, MenuItem, Select
 import Hls from 'hls.js'
 import API from '../api'
 import { getRawToken } from '../api/request'
+import { useWatchProgress } from '../common/use_watch_progress'
+import ResumeNotice from './ResumeNotice'
 import {
   audioTrackLabel,
   audioTracks,
@@ -17,8 +19,9 @@ import {
 // HlsPlayer plays a Matroska file through the server's on-the-fly HLS
 // pipeline. It first asks what the file contains (codecs, audio tracks),
 // then feeds the playlist to hls.js, or to the browser's own HLS support
-// when Media Source Extensions are missing (iOS Safari).
-export default function HlsPlayer({ storageId, file }) {
+// when Media Source Extensions are missing (iOS Safari). Playback starts at
+// startAt, where the user last stopped.
+export default function HlsPlayer({ storageId, file, startAt = 0, onWatchSaved }) {
   const videoRef = useRef(null)
   // Where playback was when the player was last torn down, so switching
   // audio track resumes at the same point instead of from the start.
@@ -41,7 +44,7 @@ export default function HlsPlayer({ storageId, file }) {
     setAudioTrack(null)
     setPlaybackError(null)
     setTranscodeVideo(false)
-    positionRef.current = 0
+    positionRef.current = startAt
     if (!storageId || !path) return undefined
     API.files.mediaInfo(storageId, path)
       .then((result) => {
@@ -51,11 +54,13 @@ export default function HlsPlayer({ storageId, file }) {
       })
       .catch((err) => { if (!cancelled) setInfoError(err.message || 'Could not read the video') })
     return () => { cancelled = true }
-  }, [storageId, path])
+  }, [storageId, path, startAt])
 
   const playable = !!info?.hls?.available
   const videoCopy = !!info?.hls?.video_copy
   const unavailableReason = infoError || playbackUnavailableReason(info)
+
+  useWatchProgress(videoRef, { storageId, path, enabled: playable, onSaved: onWatchSaved })
 
   // Attach the player once the file is known to be playable, and again when
   // the audio track changes or the video falls back to transcoding (each is
@@ -122,6 +127,7 @@ export default function HlsPlayer({ storageId, file }) {
       {playable && (
         <>
           <Box component="video" ref={videoRef} controls playsInline sx={{ width: '100%', maxHeight: '65vh', bgcolor: 'black' }} />
+          <ResumeNotice startAt={startAt} videoRef={videoRef} />
           {playbackError && <Alert severity="error">{playbackError}</Alert>}
           {transcodeVideo && videoCopy && !playbackError && (
             <Alert severity="info">Your browser could not decode the original video, so the server is converting it.</Alert>

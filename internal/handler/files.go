@@ -23,6 +23,7 @@ type FilesHandler struct {
 	*DownloadHandler
 
 	svc     filesService
+	watch   watchProgressService
 	deletes *DeleteTrackers
 }
 
@@ -51,15 +52,21 @@ type (
 		ListDir(ctx context.Context, userID, storageID uuid.UUID, path string) ([]domain.FSElement, error)
 		Search(ctx context.Context, userID, storageID uuid.UUID, basePath, searchPath string) ([]domain.FSElement, error)
 	}
+	watchProgressService interface {
+		Save(ctx context.Context, userID, storageID uuid.UUID, path string, position, duration float64) (*domain.WatchProgress, error)
+		SetWatched(ctx context.Context, userID, storageID uuid.UUID, path string, watched bool) (*domain.WatchProgress, error)
+		Annotate(ctx context.Context, userID, storageID uuid.UUID, elements []domain.FSElement) error
+	}
 )
 
 // NewFilesHandler builds the files handler. deletes is shared with the
 // storages handler so both report through the same delete progress stream.
-func NewFilesHandler(svc filesService, deletes *DeleteTrackers) *FilesHandler {
+func NewFilesHandler(svc filesService, watch watchProgressService, deletes *DeleteTrackers) *FilesHandler {
 	return &FilesHandler{
 		UploadHandler:   NewUploadHandler(svc),
 		DownloadHandler: NewDownloadHandler(svc),
 		svc:             svc,
+		watch:           watch,
 		deletes:         deletes,
 	}
 }
@@ -129,6 +136,7 @@ func (h *FilesHandler) Tree(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.annotateWatchProgress(r, user.ID, storageID, elements)
 	writeJSON(w, http.StatusOK, nonNilSlice(elements))
 }
 
@@ -145,6 +153,7 @@ func (h *FilesHandler) Search(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	h.annotateWatchProgress(r, user.ID, storageID, results)
 	writeJSON(w, http.StatusOK, nonNilSlice(results))
 }
 
