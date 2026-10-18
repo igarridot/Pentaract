@@ -2,6 +2,7 @@ import { useRef } from 'react'
 import { Box } from '@mui/material'
 import { useWatchProgress } from '../common/use_watch_progress'
 import ResumeNotice from './ResumeNotice'
+import PlayerFrame from './PlayerFrame'
 
 // NativeVideoPlayer plays the formats browsers handle themselves (MP4,
 // WebM...) straight from the inline download, resuming at startAt.
@@ -16,9 +17,11 @@ export default function NativeVideoPlayer({ storageId, file, src, type, startAt 
 
   return (
     <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <Box component="video" ref={videoRef} controls preload="metadata" onLoadedMetadata={resume} sx={{ width: '100%', maxHeight: '70vh' }}>
-        <source src={src} type={type} />
-      </Box>
+      <PlayerFrame>
+        <Box component="video" slot="media" ref={videoRef} preload="metadata" onLoadedMetadata={resume} sx={{ width: '100%', maxHeight: '70vh' }}>
+          <source src={src} type={type} />
+        </Box>
+      </PlayerFrame>
       <ResumeNotice startAt={startAt} videoRef={videoRef} />
     </Box>
   )

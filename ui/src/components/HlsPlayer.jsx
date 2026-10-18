@@ -5,6 +5,7 @@ import API from '../api'
 import { getRawToken } from '../api/request'
 import { useWatchProgress } from '../common/use_watch_progress'
 import ResumeNotice from './ResumeNotice'
+import PlayerFrame from './PlayerFrame'
 import {
   audioTrackLabel,
   audioTracks,
@@ -126,7 +127,9 @@ export default function HlsPlayer({ storageId, file, startAt = 0, onWatchSaved }
       {unavailableReason && <Alert severity="warning">{unavailableReason}</Alert>}
       {playable && (
         <>
-          <Box component="video" ref={videoRef} controls playsInline sx={{ width: '100%', maxHeight: '65vh', bgcolor: 'black' }} />
+          <PlayerFrame>
+            <Box component="video" slot="media" ref={videoRef} playsInline sx={{ width: '100%', maxHeight: '65vh', bgcolor: 'black' }} />
+          </PlayerFrame>
           <ResumeNotice startAt={startAt} videoRef={videoRef} />
           {playbackError && <Alert severity="error">{playbackError}</Alert>}
           {transcodeVideo && videoCopy && !playbackError && (

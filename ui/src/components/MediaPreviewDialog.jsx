@@ -2,10 +2,11 @@ import { lazy, Suspense } from 'react'
 import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, CircularProgress } from '@mui/material'
 import { getVideoMime } from '../pages/Files/operations'
 import { resumePosition } from '../common/watch_progress'
-import NativeVideoPlayer from './NativeVideoPlayer'
 
-// hls.js is only needed for Matroska files, so it stays out of the main bundle.
+// The players (hls.js, Media Chrome controls) are only needed once a video
+// is opened, so they stay out of the main bundle.
 const HlsPlayer = lazy(() => import('./HlsPlayer'))
+const NativeVideoPlayer = lazy(() => import('./NativeVideoPlayer'))
 
 // onWatchSaved runs after a video player saved where the user stopped.
 export default function MediaPreviewDialog({ open, file, mediaType, src, storageId, onClose, onDownload, onWatchSaved }) {
@@ -21,7 +22,9 @@ export default function MediaPreviewDialog({ open, file, mediaType, src, storage
             <Box component="img" src={src} alt={file?.name || 'Image'} sx={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }} />
           )}
           {mediaType === 'video' && src && (
-            <NativeVideoPlayer storageId={storageId} file={file} src={src} type={videoMime} startAt={startAt} onWatchSaved={onWatchSaved} />
+            <Suspense fallback={<CircularProgress size={24} />}>
+              <NativeVideoPlayer storageId={storageId} file={file} src={src} type={videoMime} startAt={startAt} onWatchSaved={onWatchSaved} />
+            </Suspense>
           )}
           {mediaType === 'hls' && open && file && (
             <Suspense fallback={<CircularProgress size={24} />}>
