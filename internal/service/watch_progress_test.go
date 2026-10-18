@@ -71,7 +71,8 @@ func TestWatchProgressAtAppliesResumeRules(t *testing.T) {
 		{"middle keeps the position", 1800, 3600, 1800, false},
 		{"barely started leaves nothing to resume", WatchResumeMinSeconds - 1, 3600, 0, false},
 		{"exactly the minimum is kept", WatchResumeMinSeconds, 3600, WatchResumeMinSeconds, false},
-		{"credits count as watched", 3600 * WatchedFraction, 3600, 0, true},
+		{"exactly 10% left is not watched yet", 3600 * WatchedFraction, 3600, 3600 * WatchedFraction, false},
+		{"less than 10% left counts as watched", 3600*WatchedFraction + 1, 3600, 0, true},
 		{"past the end is clamped and watched", 4000, 3600, 0, true},
 		{"short clip near its end is watched", 19, 20, 0, true},
 	}

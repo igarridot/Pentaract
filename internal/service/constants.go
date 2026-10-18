@@ -38,5 +38,5 @@ const (
 
 	// Watch progress, shared by every player (web UI and Kodi)
 	WatchResumeMinSeconds = 30  // stopping earlier than this leaves nothing to resume
-	WatchedFraction       = 0.9 // past this share of the duration a video counts as watched (credits)
+	WatchedFraction       = 0.9 // once less than 10% is left a video counts as watched (credits)
 )

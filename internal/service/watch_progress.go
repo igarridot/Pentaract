@@ -94,13 +94,13 @@ func (s *WatchProgressService) Annotate(ctx context.Context, userID, storageID u
 }
 
 // watchProgressAt applies the resume rules to a position a player reported:
-// near the end counts as watched and leaves nothing to resume (credits), and
-// so does barely starting.
+// with less than 10% left it counts as watched and leaves nothing to resume
+// (credits); barely starting leaves nothing to resume either.
 func watchProgressAt(position, duration float64) domain.WatchProgress {
 	position = math.Min(position, duration)
 	p := domain.WatchProgress{PositionSeconds: position, DurationSeconds: duration}
 	switch {
-	case position >= duration*WatchedFraction:
+	case position > duration*WatchedFraction:
 		p.Watched = true
 		p.PositionSeconds = 0
 	case position < WatchResumeMinSeconds:
