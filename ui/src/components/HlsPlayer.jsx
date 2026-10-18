@@ -127,8 +127,8 @@ export default function HlsPlayer({ storageId, file, startAt = 0, onWatchSaved }
       {unavailableReason && <Alert severity="warning">{unavailableReason}</Alert>}
       {playable && (
         <>
-          <PlayerFrame>
-            <Box component="video" slot="media" ref={videoRef} playsInline sx={{ width: '100%', maxHeight: '65vh', bgcolor: 'black' }} />
+          <PlayerFrame maxHeight="65vh">
+            <Box component="video" slot="media" ref={videoRef} playsInline sx={{ width: '100%', bgcolor: 'black' }} />
           </PlayerFrame>
           <ResumeNotice startAt={startAt} videoRef={videoRef} />
           {playbackError && <Alert severity="error">{playbackError}</Alert>}
