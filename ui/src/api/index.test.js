@@ -357,3 +357,34 @@ test('hls url builders and media endpoints encode the storage path', async () =>
     ['/api/storages/s1/files/hls_stop/tv/ep%20%231.mkv', 'POST'],
   ])
 })
+
+test('saveWatchProgress PUTs the position with keepalive', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  let seen = null
+  globalThis.fetch = async (url, opts) => {
+    seen = { url, opts }
+    return { ok: true, status: 200, headers: { get: () => null }, async text() { return '{"watched":false}' } }
+  }
+  const result = await API.files.saveWatchProgress('s1', 'tv/ep #1.mkv', 42.5, 1800)
+  assert.equal(seen.url, '/api/storages/s1/files/watch_progress/tv/ep%20%231.mkv')
+  assert.equal(seen.opts.method, 'PUT')
+  assert.equal(seen.opts.keepalive, true)
+  assert.equal(seen.opts.headers.Authorization, 'Bearer tok')
+  assert.deepEqual(JSON.parse(seen.opts.body), { position_seconds: 42.5, duration_seconds: 1800 })
+  assert.deepEqual(result, { watched: false })
+})
+
+test('setWatched PUTs the hand mark', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  const seen = []
+  globalThis.fetch = async (url, opts) => {
+    seen.push([url, opts.method, JSON.parse(opts.body)])
+    return { ok: true, status: 200, headers: { get: () => null }, async text() { return '{"watched":true}' } }
+  }
+  await API.files.setWatched('s1', 'tv/ep #1.mkv', true)
+  await API.files.setWatched('s1', 'a.mkv', false)
+  assert.deepEqual(seen, [
+    ['/api/storages/s1/files/watched/tv/ep%20%231.mkv', 'PUT', { watched: true }],
+    ['/api/storages/s1/files/watched/a.mkv', 'PUT', { watched: false }],
+  ])
+})

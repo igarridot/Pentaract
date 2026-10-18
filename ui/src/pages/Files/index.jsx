@@ -27,6 +27,7 @@ import TransferProgressStack from './TransferProgressStack'
 import FileSelectionToolbar from './FileSelectionToolbar'
 import FileList from './FileList'
 import { getItemPath, getMediaType, buildRenamedPath, getBulkOperationMetrics } from './operations'
+import { withWatch } from '../../common/watch_progress'
 import { useFileNavigation } from './useFileNavigation'
 import { useUploads } from './useUploads'
 import { useDownloads } from './useDownloads'
@@ -135,6 +136,18 @@ export default function Files() {
     setPreviewFile(item)
   }
 
+  // The folder listing reloads; search results are patched in place.
+  const handleSetWatched = (item, watched) => run(
+    () => API.files.setWatched(storageId, item.path, watched),
+    {
+      success: watched ? 'Marked as watched' : 'Marked as unwatched',
+      onSuccess: (watch) => {
+        setSearchResults((results) => withWatch(results, item.path, watch))
+        loadTree()
+      },
+    },
+  )
+
   const handleMove = (item, newPath) => run(
     () => API.files.move(storageId, getItemPath(item), newPath),
     { success: 'Moved successfully', onSuccess: () => { setMoveTarget(null); loadTree() } },
@@ -211,6 +224,7 @@ export default function Files() {
         onDownload={startDownload}
         onMove={setMoveTarget}
         onRename={setRenameTarget}
+        onSetWatched={handleSetWatched}
         onToggleSelect={toggleFileSelection}
       />
 
@@ -245,6 +259,7 @@ export default function Files() {
         src={previewFile ? API.files.previewFileUrl(storageId, previewFile.path) : ''}
         storageId={storageId}
         onClose={() => setPreviewFile(null)}
+        onWatchSaved={loadTree}
         onDownload={() => {
           if (!previewFile) return
           const file = previewFile

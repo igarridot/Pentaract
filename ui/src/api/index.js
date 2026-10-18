@@ -194,6 +194,20 @@ const API = {
     hlsStop: (storageId, path) =>
       apiRequest(filesPath(storageId, `/hls_stop/${encodePath(path)}`), 'POST'),
 
+    // Marks a video as watched (true) or pending (false) by hand.
+    setWatched: (storageId, path, watched) =>
+      apiRequest(filesPath(storageId, `/watched/${encodePath(path)}`), 'PUT', { watched }),
+
+    // keepalive lets the last report of a closing player (or tab) finish.
+    saveWatchProgress: (storageId, path, positionSeconds, durationSeconds) =>
+      apiRequest(
+        filesPath(storageId, `/watch_progress/${encodePath(path)}`),
+        'PUT',
+        { position_seconds: positionSeconds, duration_seconds: durationSeconds },
+        true,
+        { keepalive: true },
+      ),
+
     downloadDirUrl: (storageId, path, downloadId) =>
       filesDownloadAuthUrl(storageId, 'download_dir', path, { download_id: downloadId }),
 
