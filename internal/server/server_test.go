@@ -5,6 +5,7 @@ import (
 	"net/http/httptest"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/go-chi/chi/v5"
@@ -164,5 +165,49 @@ func TestWatchProgressRoutesLeaveExistingFileRoutesIntact(t *testing.T) {
 		if got != tc.want {
 			t.Errorf("%s %s routed to %q, want %q", tc.method, tc.path, got, tc.want)
 		}
+	}
+}
+
+func TestUserRoutesSplitRegistrationFromManagement(t *testing.T) {
+	cfg := &config.Config{
+		SecretKey:              "secret",
+		AccessTokenExpireInSec: 3600,
+		SuperuserEmail:         "admin@example.com",
+		TelegramAPIBaseURL:     "http://localhost",
+		TelegramRateLimit:      10,
+	}
+	mux, ok := New(cfg, nil).(*chi.Mux)
+	if !ok {
+		t.Fatalf("expected the router to be a *chi.Mux")
+	}
+
+	cases := []struct{ method, path, want string }{
+		{http.MethodPost, "/api/users", "/api/users"},
+		{http.MethodGet, "/api/users/registration", "/api/users/registration"},
+		{http.MethodPost, "/api/users/manage", "/api/users/manage"},
+		{http.MethodGet, "/api/users/manage", "/api/users/manage"},
+	}
+	for _, tc := range cases {
+		if got := mux.Find(chi.NewRouteContext(), tc.method, tc.path); got != tc.want {
+			t.Errorf("%s %s routed to %q, want %q", tc.method, tc.path, got, tc.want)
+		}
+	}
+
+	// Creating an account from User Management needs a token; the public
+	// status endpoint does not.
+	rr := httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/users/manage", strings.NewReader(`{}`)))
+	if rr.Code != http.StatusUnauthorized {
+		t.Fatalf("expected 401 without a token, got %d", rr.Code)
+	}
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodGet, "/api/users/registration", nil))
+	if rr.Code != http.StatusOK || !strings.Contains(rr.Body.String(), `"enabled":false`) {
+		t.Fatalf("expected registration closed by default, got %d %s", rr.Code, rr.Body.String())
+	}
+	rr = httptest.NewRecorder()
+	mux.ServeHTTP(rr, httptest.NewRequest(http.MethodPost, "/api/users", strings.NewReader(`{"email":"a@b.c","password":"x"}`)))
+	if rr.Code != http.StatusForbidden {
+		t.Fatalf("expected self sign-up refused, got %d %s", rr.Code, rr.Body.String())
 	}
 }

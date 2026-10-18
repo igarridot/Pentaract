@@ -4,11 +4,12 @@ import {
   Box, Typography, Table, TableHead, TableRow, TableCell, TableBody,
   IconButton, Dialog, DialogTitle, DialogContent, DialogActions, Button, TextField,
 } from '@mui/material'
-import { Delete as DeleteIcon, Key as KeyIcon } from '@mui/icons-material'
+import { Delete as DeleteIcon, Key as KeyIcon, PersonAdd as PersonAddIcon } from '@mui/icons-material'
 import API from '../../api'
 import { useAlert } from '../../components/AlertStack'
 import { useApiAction } from '../../common/use_api_action'
 import ActionConfirmDialog from '../../components/ActionConfirmDialog'
+import CreateUserDialog from '../../components/CreateUserDialog'
 import Panel from '../../components/Panel'
 
 export default function Users() {
@@ -20,6 +21,9 @@ export default function Users() {
   const [passwordTarget, setPasswordTarget] = useState(null)
   const [newPassword, setNewPassword] = useState('')
   const [confirmPassword, setConfirmPassword] = useState('')
+  const [createOpen, setCreateOpen] = useState(false)
+  // Bumped on every open so the dialog starts empty.
+  const [createKey, setCreateKey] = useState(0)
 
   const load = useCallback(() => run(() => API.users.listManaged(), {
     onSuccess: (data) => setUsers(data || []),
@@ -38,6 +42,16 @@ export default function Users() {
     setNewPassword('')
     setConfirmPassword('')
   }
+
+  const openCreate = () => {
+    setCreateKey((k) => k + 1)
+    setCreateOpen(true)
+  }
+
+  const handleCreate = (email, password) => run(() => API.users.createManaged(email, password), {
+    success: `User ${email} created`,
+    onSuccess: () => { setCreateOpen(false); load() },
+  })
 
   const handleDelete = () => {
     if (!deleteTarget) return
@@ -65,7 +79,12 @@ export default function Users() {
 
   return (
     <Box>
-      <Typography variant="h5" sx={{ mb: 3 }}>User Management</Typography>
+      <Box sx={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', mb: 3 }}>
+        <Typography variant="h5">User Management</Typography>
+        <Button variant="contained" startIcon={<PersonAddIcon />} onClick={openCreate}>
+          Add user
+        </Button>
+      </Box>
       <Panel>
         <Table size="small">
           <TableHead>
@@ -98,6 +117,13 @@ export default function Users() {
           </TableBody>
         </Table>
       </Panel>
+
+      <CreateUserDialog
+        key={createKey}
+        open={createOpen}
+        onCreate={handleCreate}
+        onClose={() => setCreateOpen(false)}
+      />
 
       <ActionConfirmDialog
         open={!!deleteTarget}

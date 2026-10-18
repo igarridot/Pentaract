@@ -89,6 +89,7 @@ All via environment variables (see `.env.example`). Key ones:
 - `ENCRYPTION_KEY` — Optional dedicated chunk encryption secret. `ChunkCipher` keeps `SECRET_KEY` as a decrypt-only fallback so files uploaded before the switch stay readable (`NewChunkCipherWithFallback`).
 - `TELEGRAM_RATE_LIMIT` — Requests per minute per worker (default 18)
 - `FFMPEG_PATH`, `HLS_CACHE_DIR`, `HLS_SEGMENT_SECONDS`, `HLS_IDLE_TIMEOUT_SECS` — MKV playback pipeline. ffmpeg is in the Docker images; without it the UI reports MKV playback unavailable instead of failing
+- `ALLOW_REGISTRATION` — `true` opens self sign-up (`/register`, `POST /api/users`). Off by default: the superuser (`SUPERUSER_EMAIL`, created on startup) adds accounts from User Management (`POST /api/users/manage`). `GET /api/users/registration` (no auth) tells the login page whether to show the sign-up link
 - `DB_MAX_CONNS` — Postgres pool size (default 32). The legacy `WORKERS` variable is still read as `WORKERS * 8`.
 
 ## Testing patterns

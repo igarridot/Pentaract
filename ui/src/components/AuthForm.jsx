@@ -6,7 +6,8 @@ import AuthLayout from './AuthLayout'
 
 // Email + password form shared by the login and register pages. onSubmit
 // receives the credentials and resolves with the login response, whose
-// access token is stored before redirecting into the app.
+// access token is stored before redirecting into the app. Without
+// footerLinkTo there is no footer link.
 export default function AuthForm({ subtitle, submitLabel, footerText, footerLinkTo, footerLinkLabel, onSubmit }) {
   const navigate = useNavigate()
   const [email, setEmail] = useState('')
@@ -32,14 +33,14 @@ export default function AuthForm({ subtitle, submitLabel, footerText, footerLink
   return (
     <AuthLayout
       subtitle={subtitle}
-      footer={
+      footer={footerLinkTo && (
         <Typography variant="body2" color="text.secondary" sx={{ mt: 3 }}>
           {footerText}{' '}
           <MuiLink component={Link} to={footerLinkTo} sx={{ color: 'primary.main', textDecoration: 'none', fontWeight: 500 }}>
             {footerLinkLabel}
           </MuiLink>
         </Typography>
-      }
+      )}
     >
       <form onSubmit={handleSubmit}>
         <Stack spacing={2.5}>

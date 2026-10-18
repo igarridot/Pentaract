@@ -117,6 +117,9 @@ const API = {
 
   users: {
     register: (email, password) => apiRequest('/users', 'POST', { email, password }, false),
+    // { enabled }: whether anyone may sign up from /register.
+    registrationStatus: () => apiRequest('/users/registration', 'GET', null, false),
+    createManaged: (email, password) => apiRequest('/users/manage', 'POST', { email, password }),
     adminStatus: () => apiRequest('/users/admin'),
     listManaged: () => apiRequest('/users/manage'),
     updatePassword: (userId, password) => apiRequest(`/users/${userId}/password`, 'PUT', { password }),

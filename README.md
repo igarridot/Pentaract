@@ -157,6 +157,7 @@ From `.env`:
 | `DB_MAX_CONNS` | `32` | Postgres connection pool size (`WORKERS` is still read as `WORKERS * 8`) |
 | `SUPERUSER_EMAIL` | required | bootstrap admin |
 | `SUPERUSER_PASS` | required | bootstrap admin password |
+| `ALLOW_REGISTRATION` | `false` | `true` lets anyone sign up from the login page; otherwise the admin adds users from User Management |
 | `ACCESS_TOKEN_EXPIRE_IN_SECS` | `1800` | JWT TTL |
 | `SECRET_KEY` | required | JWT signing secret; also the chunk encryption secret unless `ENCRYPTION_KEY` is set |
 | `ENCRYPTION_KEY` | unset | Dedicated chunk encryption secret. Chunks sealed with `SECRET_KEY` before it was set keep decrypting, so never change `SECRET_KEY` while such chunks exist |
