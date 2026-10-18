@@ -1,36 +1,44 @@
 import { useState } from 'react'
 import {
   ListItem, ListItemButton, ListItemIcon, ListItemText,
-  IconButton, Menu, MenuItem, Checkbox, Box, LinearProgress, Typography,
+  IconButton, Menu, MenuItem, Checkbox, Box, LinearProgress, Typography, Tooltip,
 } from '@mui/material'
 import {
   InsertDriveFile as FileIcon,
   Folder as FolderIcon,
   MoreHoriz as MoreIcon,
-  CheckCircle as WatchedIcon,
+  Stop as UnplayedIcon,
+  PlayArrow as InProgressIcon,
+  Check as WatchedIcon,
 } from '@mui/icons-material'
 import { useNavigate } from 'react-router-dom'
 import { getMediaType } from '../pages/Files/operations'
-import { watchActions, watchSummary } from '../common/watch_progress'
+import { watchActions, watchState, watchSummary } from '../common/watch_progress'
 
-// WatchStatus shows whether a video was watched and where it was left.
-function WatchStatus({ watch }) {
+const WATCH_STATE_ICONS = {
+  unplayed: { Icon: UnplayedIcon, title: 'Not played', color: 'text.secondary' },
+  in_progress: { Icon: InProgressIcon, title: 'Started, not finished', color: 'primary.main' },
+  watched: { Icon: WatchedIcon, title: 'Watched', color: 'success.main' },
+}
+
+// WatchStateIcon stands in for the file icon of a playable video.
+function WatchStateIcon({ watch }) {
+  const { Icon, title, color } = WATCH_STATE_ICONS[watchState(watch)]
+  return (
+    <Tooltip title={title}>
+      <Icon aria-label={title} sx={{ color, fontSize: 20 }} />
+    </Tooltip>
+  )
+}
+
+// WatchProgressBar shows where a started video was left.
+function WatchProgressBar({ watch }) {
   const summary = watchSummary(watch)
-  if (!summary || (!summary.watched && !summary.inProgress)) return null
+  if (!summary?.inProgress) return null
   return (
     <Box component="span" sx={{ display: 'flex', alignItems: 'center', gap: 1, mt: 0.5 }}>
-      {summary.watched && (
-        <Box component="span" sx={{ display: 'inline-flex', alignItems: 'center', gap: 0.5, color: 'success.main' }}>
-          <WatchedIcon sx={{ fontSize: 14 }} />
-          <Typography component="span" variant="caption">Watched</Typography>
-        </Box>
-      )}
-      {summary.inProgress && (
-        <>
-          <LinearProgress variant="determinate" value={summary.percent} sx={{ width: 80, borderRadius: 1 }} />
-          <Typography component="span" variant="caption" color="text.secondary">{summary.label}</Typography>
-        </>
-      )}
+      <LinearProgress variant="determinate" value={summary.percent} sx={{ width: 80, borderRadius: 1 }} />
+      <Typography component="span" variant="caption" color="text.secondary">{summary.label}</Typography>
     </Box>
   )
 }
@@ -97,14 +105,13 @@ export default function FSListItem({
     >
       <ListItemButton onClick={handleClick} sx={{ py: 1 }}>
         <ListItemIcon sx={{ minWidth: 40 }}>
-          {item.is_file
-            ? <FileIcon sx={{ color: 'text.secondary', fontSize: 20 }} />
-            : <FolderIcon sx={{ color: 'primary.main', fontSize: 20 }} />
-          }
+          {!item.is_file && <FolderIcon sx={{ color: 'primary.main', fontSize: 20 }} />}
+          {item.is_file && isVideo && <WatchStateIcon watch={item.watch} />}
+          {item.is_file && !isVideo && <FileIcon sx={{ color: 'text.secondary', fontSize: 20 }} />}
         </ListItemIcon>
         <ListItemText
           primary={item.name}
-          secondary={item.is_file ? <WatchStatus watch={item.watch} /> : null}
+          secondary={isVideo ? <WatchProgressBar watch={item.watch} /> : null}
           secondaryTypographyProps={{ component: 'span' }}
           primaryTypographyProps={{
             fontSize: '0.875rem',

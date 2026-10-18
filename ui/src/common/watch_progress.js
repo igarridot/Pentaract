@@ -63,6 +63,16 @@ export function watchSummary(watch) {
   }
 }
 
+// watchState is the playback state a listed video shows as an icon:
+// 'watched' once finished (even if started again), 'in_progress' with a
+// resume point, 'unplayed' otherwise.
+export function watchState(watch) {
+  const summary = watchSummary(watch)
+  if (summary?.watched) return 'watched'
+  if (summary?.inProgress) return 'in_progress'
+  return 'unplayed'
+}
+
 // watchActions lists the hand marks that make sense for a listed video:
 // "watched" unless it already is, "pending" when it is watched or has a
 // resume point to forget.

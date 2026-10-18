@@ -6,6 +6,7 @@ import {
   readablePosition,
   resumePosition,
   watchActions,
+  watchState,
   watchSummary,
   withWatch,
 } from './watch_progress.js'
@@ -111,4 +112,12 @@ test('withWatch replaces the progress of one file only', () => {
   assert.equal(updated[2], items[2])
   assert.equal(items[0].watch, undefined)
   assert.equal(withWatch(null, 'a.mkv', watch), null)
+})
+
+test('watchState picks the icon state of a listed video', () => {
+  assert.equal(watchState(undefined), 'unplayed')
+  assert.equal(watchState({ position_seconds: 0, duration_seconds: 100, watched: false }), 'unplayed')
+  assert.equal(watchState({ position_seconds: 42, duration_seconds: 100, watched: false }), 'in_progress')
+  assert.equal(watchState({ position_seconds: 0, duration_seconds: 100, watched: true }), 'watched')
+  assert.equal(watchState({ position_seconds: 42, duration_seconds: 100, watched: true }), 'watched')
 })
