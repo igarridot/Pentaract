@@ -125,3 +125,41 @@ func TestNewProtectedRoutesRequireValidBearerToken(t *testing.T) {
 		t.Fatalf("expected unauthorized with invalid token, got %d", rr.Code)
 	}
 }
+
+// The watch progress routes share the /files/ prefix with the catch-all
+// DELETE /files/*. A user's own file or folder named "watched" or
+// "watch_progress" must still be deletable, and the existing transfer
+// routes must resolve exactly as before.
+func TestWatchProgressRoutesLeaveExistingFileRoutesIntact(t *testing.T) {
+	cfg := &config.Config{
+		SecretKey:              "secret",
+		AccessTokenExpireInSec: 3600,
+		SuperuserEmail:         "admin@example.com",
+		TelegramAPIBaseURL:     "http://localhost",
+		TelegramRateLimit:      10,
+	}
+	mux, ok := New(cfg, nil).(*chi.Mux)
+	if !ok {
+		t.Fatalf("expected the router to be a *chi.Mux")
+	}
+
+	const files = "/api/storages/s1/files"
+	cases := []struct{ method, path, want string }{
+		{http.MethodDelete, files + "/watched", "/api/storages/{storageID}/files/*"},
+		{http.MethodDelete, files + "/watched/movie.mkv", "/api/storages/{storageID}/files/*"},
+		{http.MethodDelete, files + "/watch_progress/movie.mkv", "/api/storages/{storageID}/files/*"},
+		{http.MethodDelete, files + "/movies/movie.mkv", "/api/storages/{storageID}/files/*"},
+		{http.MethodGet, files + "/download/watched/movie.mkv", "/api/storages/{storageID}/files/download/*"},
+		{http.MethodGet, files + "/tree/watched/", "/api/storages/{storageID}/files/tree/*"},
+		{http.MethodGet, files + "/hls/watched/movie.mkv/index.m3u8", "/api/storages/{storageID}/files/hls/*"},
+		{http.MethodPost, files + "/upload", "/api/storages/{storageID}/files/upload"},
+		{http.MethodPut, files + "/watched/movie.mkv", "/api/storages/{storageID}/files/watched/*"},
+		{http.MethodPut, files + "/watch_progress/movie.mkv", "/api/storages/{storageID}/files/watch_progress/*"},
+	}
+	for _, tc := range cases {
+		got := mux.Find(chi.NewRouteContext(), tc.method, tc.path)
+		if got != tc.want {
+			t.Errorf("%s %s routed to %q, want %q", tc.method, tc.path, got, tc.want)
+		}
+	}
+}
