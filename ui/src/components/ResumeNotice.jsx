@@ -18,7 +18,7 @@ export default function ResumeNotice({ startAt, videoRef }) {
       <Typography variant="caption" color="text.secondary">
         Resumed at {formatPlaybackTime(startAt)}
       </Typography>
-      <Button size="small" onClick={startOver}>Start over</Button>
+      <Button size="small" variant="contained" onClick={startOver}>Start over</Button>
     </Box>
   )
 }
