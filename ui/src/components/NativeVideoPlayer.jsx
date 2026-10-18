@@ -5,8 +5,10 @@ import ResumeNotice from './ResumeNotice'
 import PlayerFrame from './PlayerFrame'
 
 // NativeVideoPlayer plays the formats browsers handle themselves (MP4,
-// WebM...) straight from the inline download, resuming at startAt.
-export default function NativeVideoPlayer({ storageId, file, src, type, startAt = 0, onWatchSaved }) {
+// WebM...) straight from the inline download, resuming at startAt. autoPlay
+// starts it on its own (next video in the play queue); onEnded runs when it
+// played to the end.
+export default function NativeVideoPlayer({ storageId, file, src, type, startAt = 0, autoPlay = false, onEnded, onWatchSaved }) {
   const videoRef = useRef(null)
   useWatchProgress(videoRef, { storageId, path: file?.path, onSaved: onWatchSaved })
 
@@ -18,7 +20,7 @@ export default function NativeVideoPlayer({ storageId, file, src, type, startAt 
   return (
     <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
       <PlayerFrame maxHeight="70vh">
-        <Box component="video" slot="media" ref={videoRef} preload="metadata" onLoadedMetadata={resume} sx={{ width: '100%' }}>
+        <Box component="video" slot="media" ref={videoRef} preload="metadata" autoPlay={autoPlay} onLoadedMetadata={resume} onEnded={onEnded} sx={{ width: '100%' }}>
           <source src={src} type={type} />
         </Box>
       </PlayerFrame>

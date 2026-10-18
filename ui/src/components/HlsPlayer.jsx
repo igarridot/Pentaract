@@ -21,8 +21,9 @@ import {
 // pipeline. It first asks what the file contains (codecs, audio tracks),
 // then feeds the playlist to hls.js, or to the browser's own HLS support
 // when Media Source Extensions are missing (iOS Safari). Playback starts at
-// startAt, where the user last stopped.
-export default function HlsPlayer({ storageId, file, startAt = 0, onWatchSaved }) {
+// startAt, where the user last stopped, and on its own if autoPlay (next
+// video in the play queue). onEnded runs when it played to the end.
+export default function HlsPlayer({ storageId, file, startAt = 0, autoPlay = false, onEnded, onWatchSaved }) {
   const videoRef = useRef(null)
   // Where playback was when the player was last torn down, so switching
   // audio track resumes at the same point instead of from the start.
@@ -128,7 +129,7 @@ export default function HlsPlayer({ storageId, file, startAt = 0, onWatchSaved }
       {playable && (
         <>
           <PlayerFrame maxHeight="65vh">
-            <Box component="video" slot="media" ref={videoRef} playsInline sx={{ width: '100%', bgcolor: 'black' }} />
+            <Box component="video" slot="media" ref={videoRef} playsInline autoPlay={autoPlay} onEnded={onEnded} sx={{ width: '100%', bgcolor: 'black' }} />
           </PlayerFrame>
           <ResumeNotice startAt={startAt} videoRef={videoRef} />
           {playbackError && <Alert severity="error">{playbackError}</Alert>}

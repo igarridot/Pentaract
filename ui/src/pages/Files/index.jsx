@@ -27,6 +27,7 @@ import TransferProgressStack from './TransferProgressStack'
 import FileSelectionToolbar from './FileSelectionToolbar'
 import FileList from './FileList'
 import { getItemPath, getMediaType, buildRenamedPath, getBulkOperationMetrics } from './operations'
+import { nextVideo } from '../../common/play_queue'
 import {
   withWatch, withoutWatch, clearedWatchMessage, onWatchProgressCleared,
 } from '../../common/watch_progress'
@@ -45,6 +46,9 @@ export default function Files() {
 
   const [infoFile, setInfoFile] = useState(null)
   const [previewFile, setPreviewFile] = useState(null)
+  // Set when the preview moved on to the next video by itself, so that one
+  // starts playing without a click.
+  const [previewAutoPlay, setPreviewAutoPlay] = useState(false)
   const [folderDialogOpen, setFolderDialogOpen] = useState(false)
   const [moveTarget, setMoveTarget] = useState(null)
   const [renameTarget, setRenameTarget] = useState(null)
@@ -142,6 +146,12 @@ export default function Files() {
       startDownload(item)
       return
     }
+    setPreviewAutoPlay(false)
+    setPreviewFile(item)
+  }
+
+  const handlePlayNext = (item) => {
+    setPreviewAutoPlay(true)
     setPreviewFile(item)
   }
 
@@ -283,6 +293,9 @@ export default function Files() {
         mediaType={getMediaType(previewFile?.name)}
         src={previewFile ? API.files.previewFileUrl(storageId, previewFile.path) : ''}
         storageId={storageId}
+        autoPlay={previewAutoPlay}
+        nextFile={nextVideo(displayItems, previewFile)}
+        onPlayNext={handlePlayNext}
         onClose={() => setPreviewFile(null)}
         onWatchSaved={loadTree}
         onDownload={() => {
