@@ -1,6 +1,8 @@
 package domain
 
 import (
+	"time"
+
 	"github.com/google/uuid"
 )
 
@@ -74,4 +76,16 @@ type FSElement struct {
 	Name   string `json:"name"`
 	Size   int64  `json:"size"`
 	IsFile bool   `json:"is_file"`
+	// Watch is the requesting user's progress on this file, when they have
+	// played it.
+	Watch *WatchProgress `json:"watch,omitempty"`
+}
+
+// WatchProgress is where a user is in a video. PositionSeconds is 0 when
+// there is nothing to resume: barely started, or finished (Watched).
+type WatchProgress struct {
+	PositionSeconds float64   `json:"position_seconds"`
+	DurationSeconds float64   `json:"duration_seconds"`
+	Watched         bool      `json:"watched"`
+	UpdatedAt       time.Time `json:"updated_at"`
 }

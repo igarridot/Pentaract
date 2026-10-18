@@ -30,6 +30,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	accessRepo := repository.NewAccessRepo(pool)
 	workersRepo := repository.NewStorageWorkersRepo(pool)
 	filesRepo := repository.NewFilesRepo(pool)
+	watchRepo := repository.NewWatchProgressRepo(pool)
 
 	// Telegram client
 	tgClient := telegram.NewClient(cfg.TelegramAPIBaseURL)
@@ -45,6 +46,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	accessSvc := service.NewAccessService(accessRepo, usersRepo)
 	workersSvc := service.NewStorageWorkersService(workersRepo)
 	filesSvc := service.NewFilesService(filesRepo, accessRepo, storageManager, storagesRepo, scheduler)
+	watchSvc := service.NewWatchProgressService(watchRepo, filesRepo, accessRepo)
 	// ffmpeg reads the Matroska source back from this very server over
 	// loopback, through the same ranged inline download Kodi uses.
 	hlsSvc := service.NewHLSService(service.HLSConfig{
@@ -62,7 +64,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	storagesH := handler.NewStoragesHandler(storagesSvc, deletes)
 	accessH := handler.NewAccessHandler(accessSvc)
 	workersH := handler.NewStorageWorkersHandler(workersSvc)
-	filesH := handler.NewFilesHandler(filesSvc, deletes)
+	filesH := handler.NewFilesHandler(filesSvc, watchSvc, deletes)
 	mediaH := handler.NewMediaHandler(filesSvc, hlsSvc, filesH.DownloadHandler)
 
 	// Router
@@ -122,6 +124,8 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Get("/storages/{storageID}/files/media_info/*", mediaH.MediaInfo)
 			r.Get("/storages/{storageID}/files/hls/*", mediaH.HLS)
 			r.Post("/storages/{storageID}/files/hls_stop/*", mediaH.HLSStop)
+			r.Put("/storages/{storageID}/files/watch_progress/*", filesH.SaveWatchProgress)
+			r.Put("/storages/{storageID}/files/watched/*", filesH.SetWatched)
 			r.Delete("/storages/{storageID}/files/*", filesH.DeleteFile)
 
 			r.Get("/upload_progress", filesH.UploadProgress)

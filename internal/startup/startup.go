@@ -137,6 +137,19 @@ func InitDB(ctx context.Context, pool StartupPool) error {
 		`CREATE INDEX IF NOT EXISTS files_storage_id_path_idx ON files (storage_id, path)`,
 		`CREATE INDEX IF NOT EXISTS files_storage_id_pending_idx ON files (storage_id) WHERE is_uploaded = false`,
 
+		// One row per (file, user), updated in place rather than appended,
+		// so it stays as small as the number of videos ever started. The
+		// file comes first in the key so deleting files uses the index.
+		`CREATE TABLE IF NOT EXISTS watch_progress (
+			file_id UUID NOT NULL REFERENCES files(id) ON DELETE CASCADE,
+			user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+			position_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+			duration_seconds DOUBLE PRECISION NOT NULL DEFAULT 0,
+			watched BOOLEAN NOT NULL DEFAULT false,
+			updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+			PRIMARY KEY (file_id, user_id)
+		)`,
+
 		// Fix double slashes in file paths from previous bug
 		`UPDATE files SET path = regexp_replace(path, '//', '/', 'g') WHERE path LIKE '%//%'`,
 	}
