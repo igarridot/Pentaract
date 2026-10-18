@@ -9,7 +9,7 @@ The API and UI provide file management, access control, progress tracking, and w
 
 ## Current Project Status
 
-- Backend: Go 1.25 (`chi`, `pgx`)
+- Backend: Go 1.26 (`chi`, `pgx`)
 - Frontend: React 19 + Vite + MUI 7
 - Database: PostgreSQL
 
@@ -27,6 +27,8 @@ The API and UI provide file management, access control, progress tracking, and w
 - Upload/download cancellation
 - Downloads survive browser "insecure download" blocks (plain HTTP): allow the file in the browser and the same progress card resumes
 - File browser: upload, download, move, create folders, search, preview
+- Video playback in the browser, MKV included (see [Video Playback in the Web UI](#video-playback-in-the-web-ui))
+- Watch progress shared by the web UI and the Kodi addon: resume where you stopped, watched / started / unplayed marks per video, mark by hand, and clear the marks of a folder (recursively) or all of them from the play icon in the top bar
 - Directory download as a streamed ZIP archive
 - Multi-worker support (shared or storage-scoped bots)
 - Worker-aware chunk recovery when a different bot needs to download an existing chunk
@@ -35,6 +37,7 @@ The API and UI provide file management, access control, progress tracking, and w
   - `write`: browse/download/upload/move/create folder
   - `admin`: full management including delete and access grants
 - Admin-only user management:
+  - add users (self sign-up is off unless `ALLOW_REGISTRATION=true`)
   - list managed users
   - update non-admin passwords
   - delete non-admin users
@@ -78,6 +81,10 @@ Use the HTTPS URL in the browser. Over plain HTTP the browser uses HTTP/1.1 with
 6. In UI:
    - Create storage with `chat_id`
    - Create workers with bot tokens
+
+### 4. Add users
+
+Sign in with `SUPERUSER_EMAIL` / `SUPERUSER_PASS` and add accounts from **User Management** in the sidebar, then grant them access per storage. To let people sign up on their own from the login page instead, set `ALLOW_REGISTRATION=true`.
 
 Stop stack:
 
@@ -136,12 +143,12 @@ make test
 
 ### GitHub Actions
 
-- PR validation lives in `.github/workflows/tests.yml`
-  - Go job: `go test ./...`
-  - UI job: `pnpm test`
-- Merge-to-`master` release automation lives in `.github/workflows/release.yml`
-  - reruns Go and UI tests
-  - creates or reuses the release tag
+- PR validation lives in `.github/workflows/tests.yml` (runs on pull requests)
+  - Go job: `go test ./...` (with ffmpeg installed)
+  - UI job: `pnpm lint` and `pnpm test`
+  - nginx job: `scripts/test-nginx-config.sh`
+- Release automation lives in `.github/workflows/release.yml`, on every push to `master` or by hand from the Actions tab (master only)
+  - creates the next patch tag, or reuses the one already on the commit
   - publishes the GitHub release
   - builds and pushes Docker images to Docker Hub as `<tag>` and `latest`
 - `.github/workflows/docker-publish-tag.yml` remains available as a manual backfill workflow for publishing Docker images from an existing tag
@@ -157,14 +164,15 @@ From `.env`:
 | `DB_MAX_CONNS` | `32` | Postgres connection pool size (`WORKERS` is still read as `WORKERS * 8`) |
 | `SUPERUSER_EMAIL` | required | bootstrap admin |
 | `SUPERUSER_PASS` | required | bootstrap admin password |
-| `ACCESS_TOKEN_EXPIRE_IN_SECS` | `1800` | JWT TTL |
+| `ALLOW_REGISTRATION` | `false` | `true` lets anyone sign up from the login page; otherwise the admin adds users from User Management |
+| `ACCESS_TOKEN_EXPIRE_IN_SECS` | `31536000` (1 year) | JWT TTL (`.env.example` sets `1800`) |
 | `SECRET_KEY` | required | JWT signing secret; also the chunk encryption secret unless `ENCRYPTION_KEY` is set |
 | `ENCRYPTION_KEY` | unset | Dedicated chunk encryption secret. Chunks sealed with `SECRET_KEY` before it was set keep decrypting, so never change `SECRET_KEY` while such chunks exist |
 | `TELEGRAM_API_BASE_URL` | `https://api.telegram.org` | Telegram API |
 | `TELEGRAM_RATE_LIMIT` | `18` | per-worker requests/min guard |
-| `DATABASE_USER` | `pentaract` | postgres user |
-| `DATABASE_PASSWORD` | `pentaract` | postgres password |
-| `DATABASE_NAME` | `pentaract` | postgres db |
+| `DATABASE_USER` | required | postgres user (`.env.example`: `pentaract`) |
+| `DATABASE_PASSWORD` | required | postgres password |
+| `DATABASE_NAME` | required | postgres db (`.env.example`: `pentaract`) |
 | `DATABASE_HOST` | `db` | db host in compose |
 | `DATABASE_PORT` | `5432` | db port |
 | `LOCAL_UPLOAD_BASE_PATH` | _(empty)_ | Host directory to expose for local filesystem uploads. Mounted read-only at `/mnt/data` inside the container. |
@@ -251,6 +259,7 @@ Persistent data lives in `persistent_data/`:
 
 - `persistent_data/db` - PostgreSQL data
 - `persistent_data/backups` - Database backups (`.sql.gz`)
+- `persistent_data/certs` - TLS certificate for the nginx front
 - `persistent_data/go-mod-cache` - Go module cache (dev)
 - `persistent_data/go-build-cache` - Go build cache (dev)
 
@@ -280,7 +289,8 @@ Main route groups:
 - `/api/storages/*`
 - `/api/storages/{storageID}/access*`
 - `/api/storage_workers/*`
-- `/api/storages/{storageID}/files/*`
+- `/api/storages/{storageID}/files/*` (includes media info, HLS playback and watch progress)
+- `/api/watch_progress` (clear all of a user's watch progress)
 - `/api/local_fs/*` (local filesystem browsing)
 - `/api/*_progress` and cancel endpoints
 
@@ -294,6 +304,8 @@ internal/
   config/               env config
   domain/               core models/errors
   handler/              HTTP handlers + middleware
+  media/                Matroska header parser + HLS plan
+  pathutil/             storage path helpers
   repository/           postgres access
   service/              business logic (storage/workers/permissions)
   server/               router + static UI serving
@@ -301,6 +313,9 @@ internal/
   telegram/             Telegram Bot API client
   jwt/                  JWT logic
   password/             password hashing
+nginx/                  HTTPS + HTTP/2 front config
+scripts/                backup/restore, certificate and nginx check scripts
+docs/plans/             plans for upcoming features
 ui/
   src/api/              frontend API + SSE clients
   src/common/           shared frontend utilities

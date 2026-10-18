@@ -388,3 +388,33 @@ test('setWatched PUTs the hand mark', async () => {
     ['/api/storages/s1/files/watched/a.mkv', 'PUT', { watched: false }],
   ])
 })
+
+test('clearWatchProgress POSTs the folder and clearAll DELETEs everything', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  const seen = []
+  globalThis.fetch = async (url, opts) => {
+    seen.push([url, opts.method])
+    return { ok: true, status: 200, headers: { get: () => null }, async text() { return '{"cleared":3}' } }
+  }
+  assert.deepEqual(await API.files.clearWatchProgress('s1', 'tv/season #1/'), { cleared: 3 })
+  await API.watchProgress.clearAll()
+  assert.deepEqual(seen, [
+    ['/api/storages/s1/files/clear_watch_progress/tv/season%20%231/', 'POST'],
+    ['/api/watch_progress', 'DELETE'],
+  ])
+})
+
+test('registrationStatus asks without a token and createManaged sends it', async () => {
+  globalThis.localStorage = makeStorage('tok')
+  const seen = []
+  globalThis.fetch = async (url, opts) => {
+    seen.push([url, opts.method, opts.headers.Authorization, opts.body && JSON.parse(opts.body)])
+    return { ok: true, status: 200, headers: { get: () => null }, async text() { return '{"enabled":false}' } }
+  }
+  assert.deepEqual(await API.users.registrationStatus(), { enabled: false })
+  await API.users.createManaged('new@example.com', 'pw')
+  assert.deepEqual(seen, [
+    ['/api/users/registration', 'GET', undefined, undefined],
+    ['/api/users/manage', 'POST', 'Bearer tok', { email: 'new@example.com', password: 'pw' }],
+  ])
+})

@@ -14,9 +14,25 @@ import (
 )
 
 type mockWatchProgressService struct {
-	saveFn     func(ctx context.Context, userID, storageID uuid.UUID, path string, position, duration float64) (*domain.WatchProgress, error)
-	setWatchedFn func(ctx context.Context, userID, storageID uuid.UUID, path string, watched bool) (*domain.WatchProgress, error)
-	annotateFn   func(ctx context.Context, userID, storageID uuid.UUID, elements []domain.FSElement) error
+	saveFn        func(ctx context.Context, userID, storageID uuid.UUID, path string, position, duration float64) (*domain.WatchProgress, error)
+	setWatchedFn  func(ctx context.Context, userID, storageID uuid.UUID, path string, watched bool) (*domain.WatchProgress, error)
+	annotateFn    func(ctx context.Context, userID, storageID uuid.UUID, elements []domain.FSElement) error
+	clearAllFn    func(ctx context.Context, userID uuid.UUID) (int64, error)
+	clearFolderFn func(ctx context.Context, userID, storageID uuid.UUID, path string) (int64, error)
+}
+
+func (m *mockWatchProgressService) ClearAll(ctx context.Context, userID uuid.UUID) (int64, error) {
+	if m.clearAllFn == nil {
+		return 0, nil
+	}
+	return m.clearAllFn(ctx, userID)
+}
+
+func (m *mockWatchProgressService) ClearFolder(ctx context.Context, userID, storageID uuid.UUID, path string) (int64, error) {
+	if m.clearFolderFn == nil {
+		return 0, nil
+	}
+	return m.clearFolderFn(ctx, userID, storageID, path)
 }
 
 func (m *mockWatchProgressService) SetWatched(ctx context.Context, userID, storageID uuid.UUID, path string, watched bool) (*domain.WatchProgress, error) {
@@ -213,6 +229,91 @@ func TestSetWatchedRejectsBadRequests(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	h.SetWatched(w, makeFilesReq(http.MethodPut, "/", `{"watched": true}`, storageID, "a.mkv"))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected the service error, got %d", w.Code)
+	}
+}
+
+func TestClearAllWatchProgressAnswersTheCount(t *testing.T) {
+	var gotUser uuid.UUID
+	watch := &mockWatchProgressService{
+		clearAllFn: func(ctx context.Context, userID uuid.UUID) (int64, error) {
+			gotUser = userID
+			return 4, nil
+		},
+	}
+	h := NewFilesHandler(&mockFilesService{}, watch, NewDeleteTrackers())
+
+	w := httptest.NewRecorder()
+	req := makeFilesReq(http.MethodDelete, "/", "", "", "")
+	h.ClearAllWatchProgress(w, req)
+	if w.Code != http.StatusOK || w.Body.String() == "" {
+		t.Fatalf("expected 200, got %d body=%s", w.Code, w.Body.String())
+	}
+	if gotUser != GetAuthUser(req.Context()).ID {
+		t.Fatalf("expected the caller's progress, got user %v", gotUser)
+	}
+	var resp clearWatchProgressResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp.Cleared != 4 {
+		t.Fatalf("unexpected body %s (err %v)", w.Body.String(), err)
+	}
+
+	watch.clearAllFn = func(ctx context.Context, userID uuid.UUID) (int64, error) {
+		return 0, errors.New("db down")
+	}
+	w = httptest.NewRecorder()
+	h.ClearAllWatchProgress(w, makeFilesReq(http.MethodDelete, "/", "", "", ""))
+	if w.Code != http.StatusInternalServerError {
+		t.Fatalf("expected 500, got %d", w.Code)
+	}
+}
+
+func TestClearFolderWatchProgressPassesTheFolder(t *testing.T) {
+	var gotPath string
+	watch := &mockWatchProgressService{
+		clearFolderFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (int64, error) {
+			gotPath = path
+			return 2, nil
+		},
+	}
+	h := NewFilesHandler(&mockFilesService{}, watch, NewDeleteTrackers())
+	storageID := uuid.New().String()
+
+	w := httptest.NewRecorder()
+	h.ClearFolderWatchProgress(w, makeFilesReq(http.MethodPost, "/", "", storageID, "tv/season%201/"))
+	if w.Code != http.StatusOK || gotPath != "tv/season 1/" {
+		t.Fatalf("code %d path %q body %s", w.Code, gotPath, w.Body.String())
+	}
+	var resp clearWatchProgressResponse
+	if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || resp.Cleared != 2 {
+		t.Fatalf("unexpected body %s (err %v)", w.Body.String(), err)
+	}
+}
+
+func TestClearFolderWatchProgressRejects(t *testing.T) {
+	called := false
+	watch := &mockWatchProgressService{
+		clearFolderFn: func(ctx context.Context, userID, storageID uuid.UUID, path string) (int64, error) {
+			called = true
+			return 0, domain.ErrForbidden()
+		},
+	}
+	h := NewFilesHandler(&mockFilesService{}, watch, NewDeleteTrackers())
+
+	w := httptest.NewRecorder()
+	h.ClearFolderWatchProgress(w, makeFilesReq(http.MethodPost, "/", "", uuid.New().String(), ""))
+	if w.Code != http.StatusBadRequest || called {
+		t.Fatalf("no path: expected 400 without reaching the service, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.ClearFolderWatchProgress(w, makeFilesReq(http.MethodPost, "/", "", "not-a-uuid", "tv/"))
+	if w.Code != http.StatusBadRequest || called {
+		t.Fatalf("bad storage: expected 400 without reaching the service, got %d", w.Code)
+	}
+
+	w = httptest.NewRecorder()
+	h.ClearFolderWatchProgress(w, makeFilesReq(http.MethodPost, "/", "", uuid.New().String(), "tv/"))
 	if w.Code != http.StatusForbidden {
 		t.Fatalf("expected the service error, got %d", w.Code)
 	}

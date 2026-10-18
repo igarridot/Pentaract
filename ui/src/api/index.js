@@ -117,10 +117,18 @@ const API = {
 
   users: {
     register: (email, password) => apiRequest('/users', 'POST', { email, password }, false),
+    // { enabled }: whether anyone may sign up from /register.
+    registrationStatus: () => apiRequest('/users/registration', 'GET', null, false),
+    createManaged: (email, password) => apiRequest('/users/manage', 'POST', { email, password }),
     adminStatus: () => apiRequest('/users/admin'),
     listManaged: () => apiRequest('/users/manage'),
     updatePassword: (userId, password) => apiRequest(`/users/${userId}/password`, 'PUT', { password }),
     deleteManaged: (userId) => apiRequest(`/users/manage?user_id=${encodeURIComponent(userId)}`, 'DELETE'),
+  },
+
+  // The user's watch progress across every storage.
+  watchProgress: {
+    clearAll: () => apiRequest('/watch_progress', 'DELETE'),
   },
 
   storages: {
@@ -197,6 +205,10 @@ const API = {
     // Marks a video as watched (true) or pending (false) by hand.
     setWatched: (storageId, path, watched) =>
       apiRequest(filesPath(storageId, `/watched/${encodePath(path)}`), 'PUT', { watched }),
+
+    // Forgets the user's watch progress inside a folder and its subfolders.
+    clearWatchProgress: (storageId, path) =>
+      apiRequest(filesPath(storageId, `/clear_watch_progress/${encodePath(path)}`), 'POST'),
 
     // keepalive lets the last report of a closing player (or tab) finish.
     saveWatchProgress: (storageId, path, positionSeconds, durationSeconds) =>

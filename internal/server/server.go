@@ -41,7 +41,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	storageManager := service.NewStorageManager(filesRepo, storagesRepo, workersRepo, scheduler, tgClient, chunkCipher)
 
 	authSvc := service.NewAuthService(usersRepo, cfg.SecretKey, cfg.AccessTokenExpireInSec)
-	usersSvc := service.NewUsersService(usersRepo, cfg.SuperuserEmail)
+	usersSvc := service.NewUsersService(usersRepo, cfg.SuperuserEmail, cfg.AllowRegistration)
 	storagesSvc := service.NewStoragesService(storagesRepo, accessRepo, filesRepo, storageManager)
 	accessSvc := service.NewAccessService(accessRepo, usersRepo)
 	workersSvc := service.NewStorageWorkersService(workersRepo)
@@ -84,6 +84,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 	r.Route("/api", func(r chi.Router) {
 		r.Post("/auth/login", authH.Login)
 		r.Post("/users", usersH.Register)
+		r.Get("/users/registration", usersH.RegistrationStatus)
 		// Loopback-only: ffmpeg's view of a Matroska file during HLS playback.
 		r.Get("/internal/hls_source/{token}", mediaH.HLSSource)
 
@@ -102,6 +103,7 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 
 			r.Get("/users/admin", usersH.AdminStatus)
 			r.Get("/users/manage", usersH.ListManaged)
+			r.Post("/users/manage", usersH.CreateManaged)
 			r.Put("/users/{userID}/password", usersH.UpdatePassword)
 			r.Delete("/users/manage", usersH.DeleteManaged)
 
@@ -126,6 +128,9 @@ func New(cfg *config.Config, pool *pgxpool.Pool) http.Handler {
 			r.Post("/storages/{storageID}/files/hls_stop/*", mediaH.HLSStop)
 			r.Put("/storages/{storageID}/files/watch_progress/*", filesH.SaveWatchProgress)
 			r.Put("/storages/{storageID}/files/watched/*", filesH.SetWatched)
+			// POST, not DELETE: DELETE files/* would read it as a folder path.
+			r.Post("/storages/{storageID}/files/clear_watch_progress/*", filesH.ClearFolderWatchProgress)
+			r.Delete("/watch_progress", filesH.ClearAllWatchProgress)
 			r.Delete("/storages/{storageID}/files/*", filesH.DeleteFile)
 
 			r.Get("/upload_progress", filesH.UploadProgress)

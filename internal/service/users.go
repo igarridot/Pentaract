@@ -11,8 +11,9 @@ import (
 )
 
 type UsersService struct {
-	usersRepo      usersRepository
-	superuserEmail string
+	usersRepo         usersRepository
+	superuserEmail    string
+	allowRegistration bool
 }
 
 type usersRepository interface {
@@ -23,14 +24,40 @@ type usersRepository interface {
 	DeleteManaged(ctx context.Context, id uuid.UUID) error
 }
 
-func NewUsersService(usersRepo usersRepository, superuserEmail string) *UsersService {
+// NewUsersService builds the users service. allowRegistration opens
+// Register to anyone; otherwise only the superuser adds accounts.
+func NewUsersService(usersRepo usersRepository, superuserEmail string, allowRegistration bool) *UsersService {
 	return &UsersService{
-		usersRepo:      usersRepo,
-		superuserEmail: superuserEmail,
+		usersRepo:         usersRepo,
+		superuserEmail:    superuserEmail,
+		allowRegistration: allowRegistration,
 	}
 }
 
+// RegistrationEnabled tells whether anyone may create an account.
+func (s *UsersService) RegistrationEnabled() bool {
+	return s.allowRegistration
+}
+
+// Register is self sign-up from the /register page, refused unless
+// registration is open.
 func (s *UsersService) Register(ctx context.Context, email, pass string) (*domain.User, error) {
+	if !s.allowRegistration {
+		return nil, domain.ErrRegistrationDisabled()
+	}
+	return s.create(ctx, email, pass)
+}
+
+// CreateManaged is the superuser adding an account from User Management,
+// whether or not registration is open.
+func (s *UsersService) CreateManaged(ctx context.Context, caller *appjwt.AuthUser, email, pass string) (*domain.User, error) {
+	if err := s.requireAdmin(caller); err != nil {
+		return nil, err
+	}
+	return s.create(ctx, strings.TrimSpace(email), pass)
+}
+
+func (s *UsersService) create(ctx context.Context, email, pass string) (*domain.User, error) {
 	if email == "" || pass == "" {
 		return nil, domain.ErrBadRequest("email and password are required")
 	}

@@ -46,6 +46,9 @@ func TestLoadDefaultsAndURLs(t *testing.T) {
 
 	cfg := Load()
 
+	if cfg.AllowRegistration {
+		t.Fatalf("registration must be closed unless ALLOW_REGISTRATION says otherwise")
+	}
 	if cfg.Port != 8000 || cfg.DBMaxConns != 32 {
 		t.Fatalf("unexpected defaults: port=%d db_max_conns=%d", cfg.Port, cfg.DBMaxConns)
 	}
@@ -86,8 +89,13 @@ func TestLoadEnvOverrides(t *testing.T) {
 	t.Setenv("HLS_CACHE_DIR", "/var/cache/hls")
 	t.Setenv("HLS_SEGMENT_SECONDS", "4")
 	t.Setenv("HLS_IDLE_TIMEOUT_SECS", "30")
+	t.Setenv("ALLOW_REGISTRATION", "true")
 
 	cfg := Load()
+
+	if !cfg.AllowRegistration {
+		t.Fatalf("ALLOW_REGISTRATION=true must open registration")
+	}
 
 	if cfg.Port != 9001 || cfg.DBMaxConns != 12 || cfg.AccessTokenExpireInSec != 1234 {
 		t.Fatalf("unexpected env overrides: %+v", cfg)
@@ -116,6 +124,12 @@ func TestLoadPanicsOnInvalidInteger(t *testing.T) {
 	setRequiredEnv(t)
 	t.Setenv("PORT", "not-an-int")
 	mustPanicContains(t, func() { Load() }, "environment variable PORT must be an integer")
+}
+
+func TestLoadPanicsOnInvalidBoolean(t *testing.T) {
+	setRequiredEnv(t)
+	t.Setenv("ALLOW_REGISTRATION", "maybe")
+	mustPanicContains(t, func() { Load() }, "environment variable ALLOW_REGISTRATION must be a boolean")
 }
 
 func TestLoadHonoursDeprecatedWorkersForPoolSize(t *testing.T) {

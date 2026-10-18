@@ -37,7 +37,7 @@ func (f *fakeUsersRepo) DeleteManaged(ctx context.Context, id uuid.UUID) error {
 }
 
 func TestUsersServiceIsAdmin(t *testing.T) {
-	svc := NewUsersService(&fakeUsersRepo{}, "admin@example.com")
+	svc := NewUsersService(&fakeUsersRepo{}, "admin@example.com", true)
 	if !svc.IsAdmin(&appjwt.AuthUser{Email: "ADMIN@example.com"}) {
 		t.Fatalf("expected admin to be recognized case-insensitively")
 	}
@@ -63,7 +63,7 @@ func TestUsersServiceRegister(t *testing.T) {
 			return &domain.User{Email: email}, nil
 		},
 	}
-	svc := NewUsersService(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com", true)
 
 	if _, err := svc.Register(context.Background(), "", "x"); err == nil {
 		t.Fatalf("expected bad request for empty email")
@@ -84,7 +84,7 @@ func TestUsersServiceListManaged(t *testing.T) {
 			return []domain.User{{Email: "u@example.com"}}, nil
 		},
 	}
-	svc := NewUsersService(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com", true)
 
 	if _, err := svc.ListManaged(context.Background(), &appjwt.AuthUser{Email: "u@example.com"}); err == nil {
 		t.Fatalf("expected forbidden for non-admin")
@@ -107,7 +107,7 @@ func TestUsersServiceUpdatePassword(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewUsersService(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com", true)
 
 	if err := svc.UpdatePassword(context.Background(), &appjwt.AuthUser{Email: "u@example.com"}, targetID, "x"); err == nil {
 		t.Fatalf("expected forbidden for non-admin")
@@ -135,7 +135,7 @@ func TestUsersServiceDeleteManaged(t *testing.T) {
 			return nil
 		},
 	}
-	svc := NewUsersService(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com", true)
 
 	if err := svc.DeleteManaged(context.Background(), &appjwt.AuthUser{Email: "u@example.com"}, targetID); err == nil {
 		t.Fatalf("expected forbidden for non-admin")
@@ -163,7 +163,7 @@ func TestUsersServiceAdminTargetForbiddenAndRepoErrors(t *testing.T) {
 			return nil, errors.New("list fail")
 		},
 	}
-	svc := NewUsersService(repo, "admin@example.com")
+	svc := NewUsersService(repo, "admin@example.com", true)
 
 	if _, err := svc.Register(context.Background(), "u@example.com", "x"); err == nil {
 		t.Fatalf("expected register repo error")
@@ -176,5 +176,65 @@ func TestUsersServiceAdminTargetForbiddenAndRepoErrors(t *testing.T) {
 	}
 	if err := svc.DeleteManaged(context.Background(), &appjwt.AuthUser{Email: "admin@example.com"}, targetID); err == nil {
 		t.Fatalf("expected forbidden deleting superuser")
+	}
+}
+
+func TestUsersServiceRegisterRefusedWhenClosed(t *testing.T) {
+	repo := &fakeUsersRepo{
+		createFn: func(ctx context.Context, email, passwordHash string) (*domain.User, error) {
+			t.Fatalf("a closed registration must not create the user")
+			return nil, nil
+		},
+	}
+	svc := NewUsersService(repo, "admin@example.com", false)
+
+	if svc.RegistrationEnabled() {
+		t.Fatalf("expected registration closed")
+	}
+	_, err := svc.Register(context.Background(), "u@example.com", "secret")
+	var appErr *domain.AppError
+	if !errors.As(err, &appErr) || appErr.Code != 403 {
+		t.Fatalf("expected 403, got %v", err)
+	}
+}
+
+func TestUsersServiceCreateManaged(t *testing.T) {
+	var created []string
+	repo := &fakeUsersRepo{
+		createFn: func(ctx context.Context, email, passwordHash string) (*domain.User, error) {
+			if passwordHash == "" || strings.Contains(passwordHash, "secret") {
+				t.Fatalf("password must be hashed")
+			}
+			created = append(created, email)
+			return &domain.User{Email: email}, nil
+		},
+	}
+	// Closed registration does not stop the superuser.
+	svc := NewUsersService(repo, "admin@example.com", false)
+	admin := &appjwt.AuthUser{Email: "admin@example.com"}
+
+	u, err := svc.CreateManaged(context.Background(), admin, "  new@example.com ", "secret")
+	if err != nil || u.Email != "new@example.com" {
+		t.Fatalf("create managed: user=%+v err=%v", u, err)
+	}
+
+	if _, err := svc.CreateManaged(context.Background(), &appjwt.AuthUser{Email: "u@example.com"}, "x@example.com", "secret"); err == nil {
+		t.Fatalf("expected forbidden for a non-admin caller")
+	}
+	if _, err := svc.CreateManaged(context.Background(), admin, "   ", "secret"); err == nil {
+		t.Fatalf("expected bad request for an empty email")
+	}
+	if _, err := svc.CreateManaged(context.Background(), admin, "y@example.com", ""); err == nil {
+		t.Fatalf("expected bad request for an empty password")
+	}
+	if len(created) != 1 {
+		t.Fatalf("only the valid admin request may create a user, got %v", created)
+	}
+
+	repo.createFn = func(ctx context.Context, email, passwordHash string) (*domain.User, error) {
+		return nil, domain.ErrAlreadyExists("user")
+	}
+	if _, err := svc.CreateManaged(context.Background(), admin, "new@example.com", "secret"); err == nil {
+		t.Fatalf("expected the duplicate error")
 	}
 }

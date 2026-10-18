@@ -21,6 +21,15 @@ type mockUsersService struct {
 	listManagedFn    func(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error)
 	updatePasswordFn func(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error
 	deleteManagedFn  func(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID) error
+	createManagedFn  func(ctx context.Context, caller *appjwt.AuthUser, email, pass string) (*domain.User, error)
+	registrationOpen bool
+}
+
+func (m *mockUsersService) RegistrationEnabled() bool {
+	return m.registrationOpen
+}
+func (m *mockUsersService) CreateManaged(ctx context.Context, caller *appjwt.AuthUser, email, pass string) (*domain.User, error) {
+	return m.createManagedFn(ctx, caller, email, pass)
 }
 
 func (m *mockUsersService) Register(ctx context.Context, email, pass string) (*domain.User, error) {
@@ -183,5 +192,59 @@ func TestUsersHandlerListManagedError(t *testing.T) {
 	_ = json.Unmarshal(w.Body.Bytes(), &payload)
 	if payload["error"] == "" {
 		t.Fatalf("expected error payload")
+	}
+}
+
+func TestUsersHandlerRegistrationStatus(t *testing.T) {
+	for _, open := range []bool{true, false} {
+		h := NewUsersHandler(&mockUsersService{registrationOpen: open})
+		w := httptest.NewRecorder()
+		h.RegistrationStatus(w, httptest.NewRequest(http.MethodGet, "/users/registration", nil))
+		var resp map[string]bool
+		if err := json.Unmarshal(w.Body.Bytes(), &resp); err != nil || w.Code != http.StatusOK || resp["enabled"] != open {
+			t.Fatalf("open=%v: code %d body %s", open, w.Code, w.Body.String())
+		}
+	}
+}
+
+func TestUsersHandlerCreateManaged(t *testing.T) {
+	var gotCaller *appjwt.AuthUser
+	var gotEmail, gotPass string
+	h := NewUsersHandler(&mockUsersService{
+		createManagedFn: func(ctx context.Context, caller *appjwt.AuthUser, email, pass string) (*domain.User, error) {
+			gotCaller, gotEmail, gotPass = caller, email, pass
+			return &domain.User{ID: uuid.New(), Email: email, PasswordHash: "hash"}, nil
+		},
+	})
+	admin := &appjwt.AuthUser{Email: "admin@example.com"}
+
+	w := httptest.NewRecorder()
+	req := withAuth(httptest.NewRequest(http.MethodPost, "/users/manage", bytes.NewBufferString(`{"email":"new@example.com","password":"pw"}`)), admin)
+	h.CreateManaged(w, req)
+	if w.Code != http.StatusCreated {
+		t.Fatalf("expected 201, got %d body=%s", w.Code, w.Body.String())
+	}
+	if gotCaller != admin || gotEmail != "new@example.com" || gotPass != "pw" {
+		t.Fatalf("unexpected call: caller=%v email=%q pass=%q", gotCaller, gotEmail, gotPass)
+	}
+	if bytes.Contains(w.Body.Bytes(), []byte("hash")) {
+		t.Fatalf("the password hash must not leave the server: %s", w.Body.String())
+	}
+
+	w = httptest.NewRecorder()
+	h.CreateManaged(w, withAuth(httptest.NewRequest(http.MethodPost, "/users/manage", bytes.NewBufferString("{")), admin))
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("expected 400 for an invalid body, got %d", w.Code)
+	}
+
+	h = NewUsersHandler(&mockUsersService{
+		createManagedFn: func(ctx context.Context, caller *appjwt.AuthUser, email, pass string) (*domain.User, error) {
+			return nil, domain.ErrForbidden()
+		},
+	})
+	w = httptest.NewRecorder()
+	h.CreateManaged(w, withAuth(httptest.NewRequest(http.MethodPost, "/users/manage", bytes.NewBufferString(`{"email":"a@b.c","password":"x"}`)), &appjwt.AuthUser{Email: "u@example.com"}))
+	if w.Code != http.StatusForbidden {
+		t.Fatalf("expected the service error, got %d", w.Code)
 	}
 }

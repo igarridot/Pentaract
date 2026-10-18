@@ -106,3 +106,59 @@ func TestWatchProgressRepoSetWatchedOverridesAndClearsResume(t *testing.T) {
 		t.Fatal(err)
 	}
 }
+
+func TestWatchProgressRepoDeleteAll(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	repo := NewWatchProgressRepo(mock)
+	uid := uuid.New()
+
+	mock.ExpectExec(`DELETE FROM watch_progress WHERE user_id = \$1`).
+		WithArgs(uid).
+		WillReturnResult(pgxmock.NewResult("DELETE", 7))
+	n, err := repo.DeleteAll(context.Background(), uid)
+	if err != nil || n != 7 {
+		t.Fatalf("expected 7 rows deleted, got %d (err %v)", n, err)
+	}
+
+	mock.ExpectExec("DELETE FROM watch_progress").WithArgs(uid).WillReturnError(errors.New("boom"))
+	if _, err := repo.DeleteAll(context.Background(), uid); err == nil {
+		t.Fatalf("expected the database error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}
+
+func TestWatchProgressRepoDeleteUnderMatchesThePrefixLiterally(t *testing.T) {
+	mock, err := pgxmock.NewPool()
+	if err != nil {
+		t.Fatalf("new pgxmock pool: %v", err)
+	}
+	defer mock.Close()
+
+	repo := NewWatchProgressRepo(mock)
+	uid, sid := uuid.New(), uuid.New()
+
+	// Scoped to the user and storage, and starts_with keeps "%" and "_" in
+	// folder names literal.
+	mock.ExpectExec(`DELETE FROM watch_progress w\s+USING files f\s+WHERE f.id = w.file_id AND w.user_id = \$1 AND f.storage_id = \$2 AND starts_with\(f.path, \$3\)`).
+		WithArgs(uid, sid, "series/100%_done/").
+		WillReturnResult(pgxmock.NewResult("DELETE", 3))
+	n, err := repo.DeleteUnder(context.Background(), uid, sid, "series/100%_done/")
+	if err != nil || n != 3 {
+		t.Fatalf("expected 3 rows deleted, got %d (err %v)", n, err)
+	}
+
+	mock.ExpectExec("DELETE FROM watch_progress").WithArgs(uid, sid, "a/").WillReturnError(errors.New("boom"))
+	if _, err := repo.DeleteUnder(context.Background(), uid, sid, "a/"); err == nil {
+		t.Fatalf("expected the database error")
+	}
+	if err := mock.ExpectationsWereMet(); err != nil {
+		t.Fatal(err)
+	}
+}

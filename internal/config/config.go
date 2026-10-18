@@ -10,10 +10,13 @@ import (
 const defaultDBMaxConns = 32
 
 type Config struct {
-	Port                   int
-	DBMaxConns             int
-	SuperuserEmail         string
-	SuperuserPass          string
+	Port           int
+	DBMaxConns     int
+	SuperuserEmail string
+	SuperuserPass  string
+	// AllowRegistration opens POST /api/users (the /register page) to anyone.
+	// Off by default: the superuser adds accounts from User Management.
+	AllowRegistration      bool
 	AccessTokenExpireInSec int
 	SecretKey              string
 	EncryptionKey          string
@@ -60,6 +63,7 @@ func Load() *Config {
 		DBMaxConns:             loadDBMaxConns(),
 		SuperuserEmail:         mustGetEnv("SUPERUSER_EMAIL"),
 		SuperuserPass:          mustGetEnv("SUPERUSER_PASS"),
+		AllowRegistration:      getEnvBool("ALLOW_REGISTRATION", false),
 		AccessTokenExpireInSec: getEnvInt("ACCESS_TOKEN_EXPIRE_IN_SECS", 31536000),
 		SecretKey:              mustGetEnv("SECRET_KEY"),
 		EncryptionKey:          getEnv("ENCRYPTION_KEY", ""),
@@ -103,6 +107,18 @@ func getEnv(key, fallback string) string {
 		return val
 	}
 	return fallback
+}
+
+func getEnvBool(key string, fallback bool) bool {
+	val := os.Getenv(key)
+	if val == "" {
+		return fallback
+	}
+	b, err := strconv.ParseBool(val)
+	if err != nil {
+		panic(fmt.Sprintf("environment variable %s must be a boolean", key))
+	}
+	return b
 }
 
 func getEnvInt(key string, fallback int) int {

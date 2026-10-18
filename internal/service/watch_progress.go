@@ -8,6 +8,7 @@ import (
 	"github.com/google/uuid"
 
 	"github.com/Dominux/Pentaract/internal/domain"
+	"github.com/Dominux/Pentaract/internal/pathutil"
 )
 
 // WatchProgressService records where each user is in each video, so the web
@@ -22,6 +23,8 @@ type watchProgressRepository interface {
 	Save(ctx context.Context, userID, fileID uuid.UUID, p domain.WatchProgress) error
 	SetWatched(ctx context.Context, userID, fileID uuid.UUID, watched bool) (*domain.WatchProgress, error)
 	ListByPaths(ctx context.Context, userID, storageID uuid.UUID, paths []string) (map[string]domain.WatchProgress, error)
+	DeleteAll(ctx context.Context, userID uuid.UUID) (int64, error)
+	DeleteUnder(ctx context.Context, userID, storageID uuid.UUID, dirPrefix string) (int64, error)
 }
 
 type watchFilesRepository interface {
@@ -59,6 +62,25 @@ func (s *WatchProgressService) SetWatched(ctx context.Context, userID, storageID
 		return nil, err
 	}
 	return s.repo.SetWatched(ctx, userID, file.ID, watched)
+}
+
+// ClearAll forgets everything the user has played, in every storage, and
+// returns how many files it was about. Only the user's own marks go.
+func (s *WatchProgressService) ClearAll(ctx context.Context, userID uuid.UUID) (int64, error) {
+	return s.repo.DeleteAll(ctx, userID)
+}
+
+// ClearFolder forgets what the user has played inside a folder and all its
+// subfolders, and returns how many files it was about.
+func (s *WatchProgressService) ClearFolder(ctx context.Context, userID, storageID uuid.UUID, path string) (int64, error) {
+	dir := pathutil.DirPrefix(path)
+	if dir == "" {
+		return 0, domain.ErrBadRequest("folder path is required")
+	}
+	if err := requireStorageAccess(ctx, s.accessRepo, userID, storageID, domain.AccessRead); err != nil {
+		return 0, err
+	}
+	return s.repo.DeleteUnder(ctx, userID, storageID, dir)
 }
 
 func (s *WatchProgressService) readableFile(ctx context.Context, userID, storageID uuid.UUID, path string) (*domain.File, error) {

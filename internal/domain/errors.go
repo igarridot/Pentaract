@@ -42,6 +42,10 @@ func ErrForbidden() *AppError {
 	return &AppError{Code: http.StatusForbidden, Message: "forbidden"}
 }
 
+func ErrRegistrationDisabled() *AppError {
+	return &AppError{Code: http.StatusForbidden, Message: "registration is disabled, ask the administrator for an account"}
+}
+
 func ErrBadRequest(msg string) *AppError {
 	return &AppError{Code: http.StatusBadRequest, Message: msg}
 }

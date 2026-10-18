@@ -16,6 +16,8 @@ type UsersHandler struct {
 
 type usersService interface {
 	Register(ctx context.Context, email, pass string) (*domain.User, error)
+	RegistrationEnabled() bool
+	CreateManaged(ctx context.Context, caller *appjwt.AuthUser, email, pass string) (*domain.User, error)
 	IsAdmin(user *appjwt.AuthUser) bool
 	ListManaged(ctx context.Context, caller *appjwt.AuthUser) ([]domain.User, error)
 	UpdatePassword(ctx context.Context, caller *appjwt.AuthUser, targetUserID uuid.UUID, newPassword string) error
@@ -44,6 +46,28 @@ func (h *UsersHandler) Register(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	writeJSON(w, http.StatusCreated, user)
+}
+
+// RegistrationStatus answers GET /users/registration (no auth): whether the
+// login page should offer self sign-up.
+func (h *UsersHandler) RegistrationStatus(w http.ResponseWriter, r *http.Request) {
+	writeJSON(w, http.StatusOK, map[string]bool{"enabled": h.svc.RegistrationEnabled()})
+}
+
+// CreateManaged answers POST /users/manage: the superuser adding an account.
+func (h *UsersHandler) CreateManaged(w http.ResponseWriter, r *http.Request) {
+	var req registerRequest
+	if err := parseBody(r, &req); err != nil {
+		writeError(w, err)
+		return
+	}
+
+	user, err := h.svc.CreateManaged(r.Context(), GetAuthUser(r.Context()), req.Email, req.Password)
+	if err != nil {
+		writeError(w, err)
+		return
+	}
 	writeJSON(w, http.StatusCreated, user)
 }
 
