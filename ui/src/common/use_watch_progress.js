@@ -4,7 +4,7 @@ import { createWatchReporter, readablePosition } from './watch_progress'
 
 // useWatchProgress reports where the user is in the video videoRef points
 // at, while enabled: every few seconds while playing, and on pause, end and
-// close. onSaved runs once the last report landed (player closed or file
+// close (also of the tab). onSaved runs once the last report landed (player closed or file
 // changed), so the listing can show the new progress.
 export function useWatchProgress(videoRef, { storageId, path, enabled = true, onSaved }) {
   const onSavedRef = useRef(onSaved)
@@ -28,13 +28,19 @@ export function useWatchProgress(videoRef, { storageId, path, enabled = true, on
       reporter.flush()
     }
 
+    // Closing the tab unmounts nothing: save there too, or the last few
+    // seconds (maybe the ones crossing into "watched") would be lost.
+    const onPageHide = () => { record(); reporter.flush() }
+
     video.addEventListener('timeupdate', onTimeUpdate)
     video.addEventListener('pause', onPause)
     video.addEventListener('ended', onEnded)
+    window.addEventListener('pagehide', onPageHide)
     return () => {
       video.removeEventListener('timeupdate', onTimeUpdate)
       video.removeEventListener('pause', onPause)
       video.removeEventListener('ended', onEnded)
+      window.removeEventListener('pagehide', onPageHide)
       reporter.flush().then((saved) => { if (saved) onSavedRef.current?.() })
     }
   }, [videoRef, storageId, path, enabled])
