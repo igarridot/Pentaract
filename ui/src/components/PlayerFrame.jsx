@@ -14,6 +14,7 @@ import {
   MediaTimeRange,
   MediaVolumeRange,
 } from 'media-chrome/react'
+import { compactControlsSx } from '../common/player_layout'
 
 // PlayerFrame puts Media Chrome controls around a <video slot="media">.
 // Unlike the browser's own controls, hovering the time bar shows the time a
@@ -21,7 +22,8 @@ import {
 // hls.js and the watch progress hook keep working on it unchanged.
 // maxHeight caps the video in the page only: in fullscreen it fills the
 // screen (a cap set on the video itself would outrank Media Chrome's
-// fullscreen sizing and leave it small at the top).
+// fullscreen sizing and leave it small at the top). On a narrow player the
+// bar goes compact (compactControlsSx) so no button falls off the edge.
 export default function PlayerFrame({ maxHeight, children }) {
   return (
     <Box
@@ -34,6 +36,7 @@ export default function PlayerFrame({ maxHeight, children }) {
         '--media-range-bar-color': (theme) => theme.palette.primary.main,
         '&:not([mediaisfullscreen]) > video': { maxHeight },
         '&[mediaisfullscreen] > video': { width: '100%', height: '100%', maxHeight: 'none', objectFit: 'contain' },
+        ...compactControlsSx(),
       }}
     >
       {children}

@@ -19,8 +19,8 @@ export default function NativeVideoPlayer({ storageId, file, src, type, startAt 
 
   return (
     <Box sx={{ width: '100%', display: 'flex', flexDirection: 'column', gap: 1 }}>
-      <PlayerFrame maxHeight="70vh">
-        <Box component="video" slot="media" ref={videoRef} preload="metadata" autoPlay={autoPlay} onLoadedMetadata={resume} onEnded={onEnded} sx={{ width: '100%' }}>
+      <PlayerFrame maxHeight="60vh">
+        <Box component="video" slot="media" ref={videoRef} preload="metadata" playsInline autoPlay={autoPlay} onLoadedMetadata={resume} onEnded={onEnded} sx={{ width: '100%' }}>
           <source src={src} type={type} />
         </Box>
       </PlayerFrame>
