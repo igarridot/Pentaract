@@ -1,5 +1,7 @@
 import { lazy, Suspense, useState } from 'react'
-import { Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, CircularProgress, Typography } from '@mui/material'
+import {
+  Dialog, DialogTitle, DialogContent, DialogActions, Button, Box, CircularProgress, Typography, useMediaQuery,
+} from '@mui/material'
 import { PlaylistPlay as AutoplayOnIcon, PlaylistRemove as AutoplayOffIcon } from '@mui/icons-material'
 import { getVideoMime } from '../pages/Files/operations'
 import { resumePosition } from '../common/watch_progress'
@@ -30,6 +32,9 @@ export default function MediaPreviewDialog({
   const startAt = resumePosition(file?.watch)
   const isVideo = mediaType === 'video' || mediaType === 'hls'
   const [autoplayNext, setAutoplayNext] = useState(() => readAutoplay(browserStorage()))
+  // On a phone the dialog takes the whole screen: its margins would
+  // otherwise leave the player too narrow for its controls.
+  const phone = useMediaQuery((theme) => theme.breakpoints.down('sm'))
 
   const toggleAutoplay = () => {
     const enabled = !autoplayNext
@@ -53,10 +58,12 @@ export default function MediaPreviewDialog({
   }
 
   return (
-    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth>
-      <DialogTitle>{file?.name || 'Preview'}</DialogTitle>
-      <DialogContent>
-        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: 240 }}>
+    <Dialog open={open} onClose={onClose} maxWidth="md" fullWidth fullScreen={phone}>
+      <DialogTitle noWrap title={file?.name} sx={{ fontSize: '1rem', py: 1.5, px: { xs: 2, sm: 3 } }}>
+        {file?.name || 'Preview'}
+      </DialogTitle>
+      <DialogContent sx={{ px: { xs: 1, sm: 2 }, pb: 1 }}>
+        <Box sx={{ display: 'flex', justifyContent: 'center', alignItems: 'center', minHeight: isVideo ? 0 : 240 }}>
           {mediaType === 'image' && src && (
             <Box component="img" src={src} alt={file?.name || 'Image'} sx={{ maxWidth: '100%', maxHeight: '70vh', objectFit: 'contain' }} />
           )}
@@ -72,10 +79,11 @@ export default function MediaPreviewDialog({
           )}
         </Box>
       </DialogContent>
-      <DialogActions>
+      <DialogActions disableSpacing sx={{ flexWrap: 'wrap', gap: 1, px: { xs: 1, sm: 2 } }}>
         {isVideo && (
-          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mr: 'auto', minWidth: 0 }}>
+          <Box sx={{ display: 'flex', alignItems: 'center', gap: 1, mr: 'auto', minWidth: 0, flexBasis: { xs: '100%', sm: 'auto' } }}>
             <Button
+              size="small"
               variant="contained"
               aria-pressed={autoplayNext}
               startIcon={autoplayNext ? <AutoplayOnIcon /> : <AutoplayOffIcon />}
@@ -90,8 +98,8 @@ export default function MediaPreviewDialog({
             )}
           </Box>
         )}
-        <Button onClick={onClose} color="inherit">Close</Button>
-        <Button onClick={onDownload} variant="contained">Download</Button>
+        <Button size="small" onClick={onClose} color="inherit" sx={{ ml: { xs: 'auto', sm: 0 } }}>Close</Button>
+        <Button size="small" onClick={onDownload} variant="contained">Download</Button>
       </DialogActions>
     </Dialog>
   )
