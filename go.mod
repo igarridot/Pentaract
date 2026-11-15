@@ -10,7 +10,7 @@ require (
 	github.com/jackc/pgx/v5 v5.11.0
 	github.com/pashagolub/pgxmock/v5 v5.2.0
 	golang.org/x/crypto v0.58.0
-	golang.org/x/sync v0.24.0
+	golang.org/x/sync v0.25.0
 )
 
 require (
